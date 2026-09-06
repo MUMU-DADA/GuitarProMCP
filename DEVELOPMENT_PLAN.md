@@ -1,0 +1,135 @@
+# GuitarProMCP Development Plan
+
+Accepted scope: installable native MCP control of Guitar Pro, automatic loading
+with the application, reliable live editing, and completion of the operation
+coverage in `COVERAGE.md`. The scope is not reduced to currently passing tests.
+Implementation mode: ponytail ultra; reuse the C++/Qt runtime and native APIs.
+Commit each completed phase after its acceptance checks pass.
+
+## Status
+
+| Phase | Status | Required acceptance |
+| --- | --- | --- |
+| P0 Automatic loading | Complete | Direct EXE, real Windows shortcut, file-association command arguments, and removing the extension verified in an isolated host copy. See `native/AUTOLOAD.md`. |
+| P1 Installation | In progress | Prebuilt package, installation/update/disable/uninstall, normal visible startup, explicit background mode, persistent local configuration, MCP connection information. |
+| P2 Sessions and documents | Pending | Restart/reconnect, port conflicts, instance identity, multiple clients, asynchronous failure/cancellation, document lifecycle, save-current/overwrite/recovery, explicit save/discard/cancel on close. |
+| P3 Score and tracks | Pending | Missing notation/effects, keyboard/percussion notes, cross-track operations, instrument/tuning/capo/transposition, complex repeats/endings/jumps, verified read/write/undo/persistence/playback. |
+| P4 Selection and clipboard | Pending | Partial track sets, complex voice ranges, batch commands, special/repeated paste, complex cut/replace, tuning/transposition/percussion compatibility, isolated system-clipboard verification. |
+| P5 Playback and audio | Pending | Tempo points/ramps, loop ranges, mixing/effects/sounds/devices, repeat/jump timeline, accurate seeking and multi-document isolation. |
+| P6 Exchange and workspace | Pending | MIDI/MusicXML/other GP import/export, PDF/image/audio output, printing/layout/staff display, document versus global preferences, actual output verification. |
+| P7 Release | Pending | Supported-build matrix, diagnostics/recovery/upgrades, complex scores, long runs, multiple clients/documents, modal states, install/update/uninstall, complete applicable regression on the release binary. |
+
+P0 -> P1 -> P2 precede feature expansion P3-P6. Reliability checks run during
+every phase; P7 is the final release gate, not the first stability check.
+
+## Product Requirements
+
+- Normal application startup should load the installed plugin without a manual
+  PowerShell command. Test direct `GuitarPro.exe`, Windows shortcuts and opening
+  an associated score independently. Shortcut replacement alone does not prove
+  direct executable loading.
+- Normal launches retain the visible application and normal focus behavior.
+  Explicit background launches preserve the existing hidden-mode guarantees.
+- Installation provides compiled binaries; users do not need the compiler or
+  Qt development kit. Keep runtime credentials/configuration out of the source
+  checkout and out of logs. Installation and uninstall are reversible.
+- The host process contains the native MCP server. No external language runtime,
+  input simulation, or foreground window is required for native score work.
+- The initial supported host is Windows x64 Guitar Pro 8.1.1.17. Each additional
+  host build requires independent ABI validation and regression evidence.
+- A running ordinary instance that predates installation must restart to load
+  the plugin. Hot attachment remains separate research, outside the first
+  release prerequisite.
+- Manual editing and MCP share the actual host document. Multiple clients and
+  instances must not silently redirect commands to the wrong score/process.
+
+## Phase Details
+
+### P0: Establish automatic loading
+
+Inspect the host's existing plugin discovery and test an application-local
+extension in an isolated installation copy before touching the installed host.
+Do not replace host executables or Qt DLLs. Record the mechanism, actual loading
+point, startup variants, compatibility checks and uninstall behavior. A loading
+candidate is not accepted based only on metadata discovery or file placement.
+
+### P1: Package and integrate
+
+Separate developer compilation from end-user installation. Provide bounded
+installation detection, staged updates, persistent configuration, status and
+disable controls, credential handling and uninstall recovery. Detect running
+hosts before replacing loaded binaries. Check compatibility before invoking
+private ABI functions. Verify the application remains usable if configuration
+or the local MCP endpoint is unavailable.
+
+### P2: Make everyday work reliable
+
+Provide instance discovery, reconnect, stable identity, collision handling and
+serialized mutations. Complete operation status for open/new/close/save,
+including failure, cancellation and timeout. Cover tab reordering, stale IDs,
+manual edits, save-current, explicit overwrite, failed-save recovery and
+save/discard/cancel on close. Never silently discard user changes.
+
+### P3: Complete musical editing
+
+Use the operation inventory in `COVERAGE.md` to track grace notes, bends, slides,
+remaining effects, long connection chains, advanced tuplets, keyboard and
+percussion notes, track instrument/configuration, tuning/capo/transposition,
+cross-track notes, complex repeats, alternate endings and navigation marks.
+Every supported operation needs structured state and a native edit path.
+
+### P4: Complete ranges and transfer
+
+Handle selected track subsets, complex voice/staff ranges and remaining batch
+commands. Add special/repeated paste and complex cut/replacement. Verify content
+mapping for different tunings, transposing instruments and percussion. Keep
+native system-clipboard operations experimental until isolated tests pass;
+tests must not replace the user's existing clipboard.
+
+### P5: Complete playback
+
+Edit tempo events and ramps, loop ranges, mixers/effect chains, sound selection
+and devices. Validate actual timing and audio where applicable, including
+repeat/jump expansion, seek positions, cancellation and document isolation.
+
+### P6: Complete file and workspace workflows
+
+Add native imports/exports and parameterized layout/printing/settings operations.
+Verify exported musical structure independently, render PDF/image output and
+inspect it, and validate audio duration/content. Settings must read back and
+declare whether their scope is the current document or the whole application.
+
+### P7: Qualify the release
+
+Exercise the supported version matrix, restart/update/uninstall, modal dialogs,
+port failures, concurrent clients, large and complex scores, repeated document
+destruction and long-running sessions. Publish diagnostic instructions and
+version-bound evidence with the compiled package.
+
+## Definition of Done
+
+For each real user operation record implemented, verified, experimental,
+unimplemented, or host-limited status. Distinguish blockers from completed work.
+Exports/menu enumeration/JSON success do not prove a functioning native edit.
+
+For mutations check actual state, target isolation, undo/redo where supported,
+and save/reopen persistence. Test playback for changes that affect sound. For
+asynchronous operations verify completion rather than merely `scheduled`.
+Bind regression evidence to source, plugin and host hashes. Run all applicable
+checks against the final binary before claiming full release completion.
+
+## Existing Evidence
+
+`COVERAGE.md` records thirteen suites with 2195 historical passing checks and an
+eight-suite regression of 1784 checks for the prior DLL. Those results are the
+starting baseline, not proof of the phases above. The system clipboard and
+other explicit gaps in that file remain open.
+
+## Execution Log
+
+- Baseline preserved in commit `2b97686` on `codex/full-development`.
+- P0: `native/test-autoload-probe.ps1` passed direct EXE, Windows shortcut,
+  score-open and uninstall variants. Evidence:
+  `artifacts/autoload-probe-724964da0f7740f991172f092da7b43f/verification.json`.
+- P1: implementing the production bootstrap, visible startup, persistent data,
+  installer and package. This stage has not passed installation acceptance yet.
