@@ -18,6 +18,12 @@ if ($LASTEXITCODE -ne 0) { throw '生成 GPCore 导入库失败。' }
 & lib /nologo /machine:x64 "/def:$PSScriptRoot/gprse.def" "/out:$buildDir/GPRSE.lib"
 if ($LASTEXITCODE -ne 0) { throw '生成 GPRSE 导入库失败。' }
 $includeDirs = @((Join-Path $QtDir 'include'), (Join-Path $QtDir 'include/QtCore'), (Join-Path $QtDir 'include/QtGui'), (Join-Path $QtDir 'include/QtWidgets'), (Join-Path $QtDir 'include/QtNetwork'), $buildDir)
+$qtVersion = & (Join-Path $QtDir 'bin/qmake.exe') -query QT_VERSION
+if ($LASTEXITCODE -ne 0 -or $qtVersion -notmatch '^5\.\d+\.\d+$') { throw 'Cannot determine the Qt 5 private-header version.' }
+foreach ($module in @('QtCore','QtGui')) {
+    $includeDirs += Join-Path $QtDir "include/$module/$qtVersion"
+    $includeDirs += Join-Path $QtDir "include/$module/$qtVersion/$module"
+}
 $mocIncludes = $includeDirs | ForEach-Object { "-I$_" }
 $source = Join-Path $PSScriptRoot 'guitarpro_mcp.cpp'
 & (Join-Path $QtDir 'bin/moc.exe') @mocIncludes $source -o (Join-Path $buildDir 'guitarpro_mcp.moc')

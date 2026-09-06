@@ -64,7 +64,8 @@ MCP 客户端
 | `gp_documents` | 文档 ID、打开路径、保存路径、未保存状态、活动文档 |
 | `gp_templates` / `gp_new` | 枚举内置模板；从模板异步新建无保存路径的独立曲谱 |
 | `gp_open` / `gp_activate` | 运行中异步打开已有 `.gp` 文件；原生切换活动文档 |
-| `gp_close` | 异步关闭指定的已保存文档；拒绝未保存修改，关闭最后文档后仍可重新打开 |
+| `gp_close` | 异步关闭指定文档；明确保存、丢弃、取消或保留原生确认；默认拒绝未保存修改 |
+| `gp_operation` / `gp_cancel` | 按请求 ID 查询或取消文档操作，保留最近 64 条被替换的请求记录 |
 | `gp_playback` | 播放/停止、按原谱小节或反复展开后的绝对 tick 定位、循环、节拍器、倒计时及时间线状态 |
 | `gp_score` | 实时元数据、音轨和小节数量、光标、撤销重做状态 |
 | `gp_read_bars` | 读取实时音符、音高、弦、品位、时值、休止、占位拍和已接入的音符技法，每次最多 16 小节 |
@@ -96,13 +97,15 @@ MCP 客户端
 
 保存工具要求绝对路径、现有父目录以及尚不存在的 `.gp` 目标文件。`gp_set_fret` 当前只修改已有音符，品位范围为 0–36。弦编号使用宿主内部索引，应以 `gp_read_bars` 的返回值为准。
 
-`gp_open` 返回 `scheduled` 后，需要轮询 `gp_documents` 确认文件出现；打开已存在的路径返回对应文档 ID。多文档播放前先调用 `gp_activate`，再调用 `gp_playback`。播放和停止可能异步完成，应轮询状态确认。
+`gp_open` 返回 `scheduled` 和 `request` 后，轮询 `gp_operation` 的 `operation` 或 `gp_documents.opening`，核对相同请求的 `opened` 状态及文档 ID。打开已存在的路径返回对应文档 ID。ZIP/GPIF 校验失败返回该请求的明确错误；原生结果无法确认时返回 `outcome_unknown=true` 并阻止后续写入，不能据此认为操作已取消。多文档播放前先调用 `gp_activate`，再调用 `gp_playback`。播放和停止可能异步完成，应轮询状态确认。
 
-`gp_new` 的模板名来自 `gp_templates`。返回 `scheduled` 后，轮询 `gp_documents.creation`，核对相同 `request` 的 `status` 为 `created`；最多等待 10 秒，同一时间只接受一次创建。重复使用同一模板会生成独立文档。
+`gp_new` 的模板名来自 `gp_templates`。返回 `scheduled` 后，轮询 `gp_documents.creation`，核对相同 `request` 的 `status` 为 `created`。`requested` 和 `cancelling` 仍需继续等待；超过观察时限的 `outcome_unknown=true` 不代表已取消，仍会观察迟到结果。同一时间只接受一次文档操作。重复使用同一模板会生成独立文档。
 
-`gp_close` 接受文档 ID，返回 `scheduled` 后轮询 `gp_documents.closing`，匹配请求 ID 并确认 `closed`。有未保存修改时先保存；此工具不会丢弃修改或代答保存对话框。后台关闭最后一份文档后，MCP 服务仍保持运行。关闭软件主窗口的 `gp_close_window` 则会退出宿主并断开连接。
+`gp_close` 接受文档 ID，返回 `scheduled` 后轮询 `gp_operation` 或 `gp_documents.closing`，匹配请求 ID 并确认 `closed`。`unsaved` 默认为 `reject`；`save` 保存后关闭，可传 `path` 和 `overwrite` 完成另存为；`discard` 通过宿主明确的丢弃按钮关闭；`cancel` 保留文档；`prompt` 保留原生确认流程。`gp_cancel request=...` 可取消尚未调度的操作或当前识别到的原生对话框，应继续读回最终状态。后台关闭最后一份文档后，MCP 服务仍保持运行。
 
 文档 ID 是独立 UUID，在同一文档生命周期内稳定，关闭重开或宿主重启后失效。保存拒绝覆盖其他已打开文档；覆盖前备份原文件，写入失败时尝试恢复并返回恢复状态。已验证锁定文件和无效路径的拒绝及内容保留，原生写入中途失败的恢复仍待专项验证。
+
+打开前与保存后使用宿主 Qt 的 ZIP 读取器及 XML 解析器检查 `Content/score.gpif`，该入口限 64 MiB，拒绝重复入口、符号链接、错误 XML 根节点和 DTD。这些检查不等于完整 GPIF 语义验证；未知原生结果、所有模态窗口和长时间运行仍在开发计划中。
 
 指定文档的编辑、光标、撤销重做和另存为操作会先原生切换软件内的活动文档，以确保宿主把未保存标记归到正确曲谱。这个切换无需将软件窗口放到前台。
 

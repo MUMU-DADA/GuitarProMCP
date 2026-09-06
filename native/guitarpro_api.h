@@ -11,12 +11,40 @@
 #include <QtCore/QUuid>
 #include <QtCore/QSaveFile>
 #include <QtCore/QTemporaryDir>
+#include <QtCore/QXmlStreamReader>
+#include <QtGui/private/qzipreader_p.h>
 #include <QtWidgets/QApplication>
 #include <QtWidgets/QStackedWidget>
 #include <QtGui/QColor>
 #include <cmath>
 
 namespace guitarpro {
+inline QString validateGpFile(const QString &path) {
+    QZipReader archive(path);
+    if (!archive.isReadable()) return "Cannot read the Guitar Pro archive";
+    const auto entries = archive.fileInfoList();
+    int matching = 0;
+    for (const auto &entry : entries) if (entry.filePath == "Content/score.gpif") {
+        if (!entry.isFile || entry.isSymLink || entry.size < 1 || entry.size > 64 * 1024 * 1024)
+            return "GPIF must be a regular archive entry of at most 64 MiB";
+        ++matching;
+    }
+    if (archive.status() != QZipReader::NoError || matching != 1) return "Expected one Content/score.gpif entry in a readable Guitar Pro archive";
+    const QByteArray content = archive.fileData("Content/score.gpif");
+    if (archive.status() != QZipReader::NoError || content.isEmpty() || content.size() > 64 * 1024 * 1024) return "Cannot decompress the GPIF entry";
+    QXmlStreamReader xml(content);
+    bool root = false;
+    while (!xml.atEnd()) {
+        const auto token = xml.readNext();
+        if (token == QXmlStreamReader::DTD) return "GPIF document type declarations are not supported";
+        if (!root && token == QXmlStreamReader::StartElement) {
+            if (xml.name() != "GPIF") return "Expected a GPIF XML root";
+            root = true;
+        }
+    }
+    if (!root) return "Expected a GPIF XML root";
+    return xml.hasError() ? "Invalid GPIF XML: " + xml.errorString() : QString();
+}
 struct Document {
     QPointer<QWidget> view;
     QPointer<QObject> object;
@@ -112,10 +140,10 @@ inline QJsonObject activate(const QJsonObject &args, const QList<QPointer<QObjec
     }
     return {{"error", "Native document navigation did not reach the requested document; read gp_documents before retrying"}};
 }
-inline QJsonObject closeDocument(const QJsonObject &args, const QList<QPointer<QObject>> &objects) {
+inline QJsonObject closeDocument(const QJsonObject &args, const QList<QPointer<QObject>> &objects, bool allowPrompt = false) {
     const Document target = choose(args);
     if (!target.object || !target.view) return {{"error", "Choose an existing document id"}};
-    if (target.object->property("isDirty").toBool()) return {{"error", "Document has unsaved changes; save it before closing"}};
+    if (target.object->property("isDirty").toBool() && !allowPrompt) return {{"error", "Document has unsaved changes; save it before closing"}};
     if (QApplication::activeModalWidget()) return {{"error", "Close the active modal dialog before closing a document"}};
     const QJsonObject activated = activate(args, objects);
     if (activated.contains("error")) return activated;
@@ -1272,7 +1300,10 @@ inline QJsonObject save(const QJsonObject &args, bool adopt = false, bool curren
         const bool pathRestored = chosen.object &&
             (chosen.object->property("saveFilePath").toString() == oldPath ||
              (QMetaObject::invokeMethod(chosen.object, "setSaveFilePath", Qt::DirectConnection, Q_ARG(QString, oldPath)) && chosen.object->property("saveFilePath").toString() == oldPath));
+        if (dirtyBefore && chosen.object && !chosen.object->property("isDirty").toBool())
+            QMetaObject::invokeMethod(chosen.object, "setIsDirty", Qt::DirectConnection, Q_ARG(bool, true));
         QJsonObject result{{"error", message}, {"file_restored", restored}, {"save_path_restored", pathRestored}, {"dirty_before", dirtyBefore},
+            {"dirty_state_restored", chosen.object && chosen.object->property("isDirty").toBool() == dirtyBefore},
             {"dirty", chosen.object ? QJsonValue(chosen.object->property("isDirty").toBool()) : QJsonValue()}};
         if (!restored && existed) { recovery.setAutoRemove(false); result["recovery_path"] = backup; }
         return result;
@@ -1289,6 +1320,8 @@ inline QJsonObject save(const QJsonObject &args, bool adopt = false, bool curren
     }
     const QFileInfo output(absolute);
     if (!output.isFile() || !output.size()) return recover("Native save returned without a completed file");
+    const QString validation = validateGpFile(absolute);
+    if (!validation.isEmpty()) return recover("Native output validation failed: " + validation);
     return {{"path", absolute}, {"bytes", double(output.size())}, {"document", chosen.id()},
         {"copy_only", !adopt}, {"overwrote", existed}, {"dirty", chosen.object->property("isDirty").toBool()},
         {"native_method", adopt ? "IDocument::saveToFile, setSaveFilePath, save" : "IDocument::saveToFile(QString)"}};

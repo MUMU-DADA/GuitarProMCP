@@ -80,7 +80,9 @@ try {
 | --- | --- | --- |
 | `gp_templates` / `gp_new` | 无 / `template` | 枚举内置模板；新建返回请求 ID，通过 `gp_documents.creation` 读回完成状态 |
 | `gp_open` | `path` | 绝对路径的已有 `.gp` 文件；通过 `QFileOpenEvent` 异步打开，已有文档返回 `already_open` |
-| `gp_close` | `document` | 关闭无未保存修改的文档，返回请求 ID，通过 `gp_documents.closing` 读回 `closed` / `error` |
+| `gp_close` | `document`, `unsaved?`, `path?`, `overwrite?` | 明确保存、丢弃或取消后关闭；默认拒绝未保存修改；返回请求 ID |
+| `gp_operation` | `request` | 返回 `operation` 状态，查询当前新建/打开/关闭及最近 64 条被替换的请求记录 |
+| `gp_cancel` | `request` | 取消未调度的操作或识别到的原生对话框；返回 `cancelling` 时须继续确认结果 |
 | `gp_activate` | `document` | 调用原生 `activateNextDocumentView` 导航至目标，并读回文档管理器确认 |
 | `gp_score` | `document?` | 读取元数据、音轨摘要、光标、未保存和撤销重做状态 |
 | `gp_read_bars` | `document?`, `track?=0`, `staff?=0`, `bar?=0`, `count?=1` | 每次读取 1–16 个完整存在的小节，音符包括 `effects`；单次节拍/音符读取量有上限 |
@@ -113,7 +115,7 @@ try {
 
 原生撤销能够恢复内容，但宿主的未保存标记不一定随之清零。插件如实报告这个状态。`gp_save` 也不会清零该标记；`gp_save_as` 使用宿主真正的保存流程更新状态，不直接伪造 `isDirty=false`。
 
-`gp_save` 和 `gp_save_as` 覆盖已有文件必须设置 `overwrite=true`，所有保存均拒绝覆盖其他已打开文档。复制到自身打开/保存路径会被拒绝，应使用 `gp_save_current`。覆盖前在目标目录创建临时备份，并预检文件可写性；原生保存失败后恢复原文件和保存路径，返回 `file_restored`、`save_path_restored`、`dirty_before` 和 `dirty`。文件恢复失败时保留备份并返回 `recovery_path`。不得仅根据 HTTP 成功判断保存成功。
+`gp_save` 和 `gp_save_as` 覆盖已有文件必须设置 `overwrite=true`，所有保存均拒绝覆盖其他已打开文档。复制到自身打开/保存路径会被拒绝，应使用 `gp_save_current`。覆盖前在目标目录创建临时备份，并预检文件可写性；原生保存失败后恢复原文件、保存路径和原本为真的未保存标记，返回 `file_restored`、`save_path_restored`、`dirty_state_restored`、`dirty_before` 和 `dirty`。失败恢复不会把未保存标记清零。文件恢复失败时保留备份并返回 `recovery_path`。不得仅根据 HTTP 成功判断保存成功。
 
 `test-saving.ps1` 的 30 项检查覆盖当前路径保存、显式覆盖、复制和另存为、跨文档保护、锁定目标和缺失目录、GPIF 与原生重开、未命名文档拒绝及临时文件清理。锁定文件的拒绝发生在原生写入之前，不能代替写入中途失败后的恢复验证。保存后撤销再重做恢复内容，当前宿主仍可能报告未保存；再次保存会恢复其原生已保存状态。
 
@@ -305,11 +307,15 @@ Invoke-McpTool $connection gp_undo_redo @{operation='undo';document=$target}
 
 ## 原生播放与文档生命周期
 
-`gp_new` 通过 `:/GPBase/MainWindow/Templates/` 中列出的模板创建独立文档，随后调用宿主方法清空打开和保存路径。返回 `scheduled` 不代表成功，必须轮询并匹配 `gp_documents.creation.request`；成功为 `created`，超时为 `error`。创建最多等待 10 秒，同一时刻只允许一个待完成请求。模板的文件名保持宿主原始名称。
+`gp_new` 通过 `:/GPBase/MainWindow/Templates/` 中列出的模板创建独立文档，随后调用宿主方法清空打开和保存路径。返回 `scheduled` 不代表成功，必须轮询并匹配 `gp_documents.creation.request`；成功为 `created`。`requested` 和 `cancelling` 是中间状态，必须继续观察。原生调用返回后，未观察到文档且已超过 10 秒时报告 `error`、`outcome_unknown=true`，继续观察迟到结果并阻止新的写入；这不是原生调用的强制截止时间，也不代表已经取消。同一时刻只允许一个待完成请求。模板的文件名保持宿主原始名称。
 
-`gp_open` 返回 `scheduled` 仅表示事件已投递。应轮询 `gp_documents` 的路径确认打开成功；当前没有异步失败通知，格式错误或宿主对话框仍需另行处理。重复打开已识别路径返回 `already_open`，不会自动切换到该文档。
+`gp_open` 返回 `scheduled` 和独立 `request`。通过 `gp_operation` 返回的 `operation` 或 `gp_documents.opening` 核对同一请求的 `opened` 及文档 ID。ZIP/GPIF 校验错误返回 `status=error` 和 `failure_stage=validation`，不会进入原生打开。未观察到结果且超过 10 秒时返回 `error`、`outcome_unknown=true`，继续观察迟到的文档并阻止新的写入；该状态不代表确认失败或取消。未知原生结果的完整恢复仍待完成。重复打开已识别路径返回 `already_open`。
 
-`gp_close` 通过 `TabWidgetProxy::tabCloseRequested(int)` 进入宿主文档关闭流程。执行前原生激活目标，校验文档页容器、活动页和实际索引，并在异步回调中再次确认对象身份及未保存状态。它不调用曲谱视图的 `QWidget::close()`，也不模拟输入。`gp_documents.closing` 的状态为 `scheduled`、`requested`、`closed` 或 `error`，须匹配 `request`；10 秒后仍未销毁目标视图则报告错误。只记录最近一次关闭请求，仍在进行时拒绝第二次请求。手工重排标签、未保存内容的丢弃及所有模态上下文尚未验证。
+`gp_close` 通过 `TabWidgetProxy::tabCloseRequested(int)` 进入宿主关闭流程。执行前激活目标，校验页面与索引，异步回调再次确认对象身份。`unsaved=save` 先通过原生保存更新状态，未命名文档需要 `path`；保存失败保留文档。`discard` 只在本次关闭栈内、目标主窗口所属的保存/丢弃/取消对话框中，按标准按钮枚举选择丢弃。`cancel` 不关闭文档；`prompt` 保留原生对话框，可使用 `gp_cancel` 取消。它不伪造已保存状态，不调用曲谱视图的 `QWidget::close()`，不模拟输入。
+
+新建、打开、关闭一次只允许一个待完成操作，期间允许读回和对话框内操作。当前记录也出现在 `gp_documents` 的 `creation/opening/closing` 中。请求 ID 可通过 `gp_operation` 读取，64 条被替换记录之外的旧 ID 明确报错。取消只针对原请求和观察到的对话框；已完成操作不能取消。`cancelling` 必须继续轮询，若原生操作已经成功，结果仍报告真实成功。手工重排标签、所有模态上下文、未知原生结果和保存中途取消仍需进一步验证。
+
+GPIF 预检使用宿主 `Qt5Gui.dll` 的 `QZipReader` 和 Qt XML 流解析器，新增精确 DLL 哈希验证。要求唯一、普通的 `Content/score.gpif`，解压大小最多 64 MiB、根元素为 `GPIF`，拒绝 DTD 和 XML 语法错误；不做文件解压落盘，也不声称完成 GPIF 模型语义验证。保存后的文件也通过同一检查，不合格时进入已有恢复流程。
 
 存在多个文档时先 `gp_activate`，然后调用 `gp_playback`。控制器通过 `Conductor::score()` 与目标文档的 `Score` 对象匹配，避免把播放指令发往其他曲谱。
 
@@ -352,6 +358,7 @@ GuitarPro.exe B233B0F1C87DEB3AECE693D51E8D3C3A841C88FEE78828607B20034737C4C6DF
 GPCore.dll    9425F3E8EB627D328E0CB01146D43045D86D1BA639F73718BBE7FCCF733BD250
 GPRSE.dll     E983122951B94C2513A1F05828DD03DCB11620DDC50F6B497723CAE0EB32BA6A
 Qt5Core.dll   C2F85BD55C31E5380DD99F0D517EE183A54C3852480BC497DC30A5483FD70FF2
+Qt5Gui.dll    BD853BB77296301EA0DBD0C432B5A4268389D4054C15F39DD44F245AF24EB407
 ```
 
 当前已验证关联为：
@@ -387,6 +394,7 @@ IDocumentsManager + 0x10 → 管理器实现对象
 ./native/test-effects.ps1
 ./native/test-selection.ps1
 ./native/test-saving.ps1
+./native/test-document-operations.ps1
 ./native/test-lifecycle.ps1
 ./native/test-session.ps1
 ./native/test-structure.ps1

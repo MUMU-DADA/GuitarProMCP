@@ -18,10 +18,10 @@ function New-Score([string]$template) {
     $deadline = [DateTime]::UtcNow.AddSeconds(12)
     do {
         $documents = Invoke-McpTool $connection gp_documents
-        if ($documents.creation.request -eq $request.request -and $documents.creation.status -ne 'scheduled') { break }
+        if ($documents.creation.request -eq $request.request -and $documents.creation.status -in @('created','error','cancelled')) { break }
         Start-Sleep -Milliseconds 50
     } while ([DateTime]::UtcNow -lt $deadline)
-    Assert ($documents.creation.request -eq $request.request -and $documents.creation.status -eq 'created') 'Template creation did not complete'
+    Assert ($documents.creation.request -eq $request.request -and $documents.creation.status -eq 'created') "Template creation did not complete: $($documents.creation | ConvertTo-Json -Depth 8 -Compress)"
     $document = $documents.documents | Where-Object id -EQ $documents.creation.document
     Assert ($document -and $document.opened_path -eq '' -and $document.save_path -eq '') 'Template still has a file path instead of a new document'
     return $document.id

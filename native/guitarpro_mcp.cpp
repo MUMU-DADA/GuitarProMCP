@@ -4,9 +4,12 @@
 #include <QtWidgets/QApplication>
 #include <QtWidgets/QAction>
 #include <QtWidgets/QAbstractButton>
+#include <QtWidgets/QPushButton>
 #include <QtWidgets/QWidget>
 #include <QtWidgets/QStackedWidget>
 #include <QtWidgets/QDialog>
+#include <QtWidgets/QDialogButtonBox>
+#include <QtWidgets/QMessageBox>
 #include <QtWidgets/QLabel>
 #include <QtCore/QElapsedTimer>
 #include <QtCore/QFileInfo>
@@ -51,8 +54,18 @@ class Bridge : public QObject {
     QList<QPointer<QObject>> creationBefore;
     QElapsedTimer creationElapsed;
     QTimer creationPoll{this};
+    QJsonObject opening;
+    QElapsedTimer openingElapsed;
+    QTimer openingPoll{this};
+    bool loadNativeActive = false;
+    QString loadingKind;
+    QPointer<QDialog> loadModal;
+    QHash<QString, QJsonObject> operationHistory;
+    QStringList operationOrder;
     QJsonObject closing;
     QPointer<QWidget> closingView;
+    QPointer<QWidget> closingModal;
+    bool closingNativeActive = false;
     QElapsedTimer closingElapsed;
     bool hiddenMode = qEnvironmentVariable("GPMCP_BACKGROUND") == "1";
     bool shuttingDown = false;
@@ -63,6 +76,7 @@ class Bridge : public QObject {
         if (shuttingDown) return;
         shuttingDown = true;
         creationPoll.stop();
+        openingPoll.stop();
         if (qApp) {
             qApp->removeEventFilter(this);
             qApp->setProperty("gpmcpBridge", QVariant());
@@ -84,8 +98,15 @@ class Bridge : public QObject {
             if (labels.size() >= 24) break;
             if (!label->text().isEmpty()) labels.append(label->text().left(2048));
         }
-        for (QAbstractButton *button : modal->findChildren<QAbstractButton *>())
-            buttons.append(QJsonObject{{"name", button->objectName()}, {"text", button->text()}, {"enabled", button->isEnabled()}});
+        for (QAbstractButton *button : modal->findChildren<QAbstractButton *>()) {
+            int standard = 0, role = -1;
+            if (auto box = qobject_cast<QMessageBox *>(modal)) {
+                standard = int(box->standardButton(button)); role = int(box->buttonRole(button));
+            } else for (QDialogButtonBox *box : modal->findChildren<QDialogButtonBox *>()) {
+                if (box->buttons().contains(button)) { standard = int(box->standardButton(button)); role = int(box->buttonRole(button)); break; }
+            }
+            buttons.append(QJsonObject{{"name", button->objectName()}, {"text", button->text()}, {"enabled", button->isEnabled()}, {"standard_button", standard}, {"button_role", role}});
+        }
         return {{"blocked", true}, {"class", modal->metaObject()->className()}, {"name", modal->objectName()},
             {"title", modal->windowTitle()}, {"visible", modal->isVisible()}, {"labels", labels}, {"buttons", buttons}};
     }
@@ -102,15 +123,22 @@ class Bridge : public QObject {
     }
 
     void checkClosing() {
-        if (closing.value("status") != "requested") return;
-        if (!closingView) closing["status"] = "closed";
+        if (!pending(closing)) return;
+        if (!closingView) { closing["status"] = "closed"; closing.remove("outcome_unknown"); closing.remove("error"); }
+        else if (closingNativeActive && QApplication::activeModalWidget()) closing["dialog"] = modalState();
         else if (closingElapsed.elapsed() > 10000) {
             closing["status"] = "error";
             closing["error"] = "Document still exists after close request; inspect documents and dialogs";
+            closing["outcome_unknown"] = true;
         }
     }
 
     void checkCreation() {
+        if (!creationPoll.isActive()) return;
+        if (loadNativeActive && loadingKind == "create") {
+            if (QApplication::activeModalWidget()) creation["dialog"] = modalState();
+            return;
+        }
         const QString path = creation.value("template_path").toString();
         for (const auto &document : guitarpro::documents()) {
             if (creationBefore.contains(document.object) || !document.score || document.object->property("saveFilePath").toString() != path) continue;
@@ -120,13 +148,117 @@ class Bridge : public QObject {
             creation["document"] = document.id();
             creation["status"] = adopted && document.object->property("saveFilePath").toString().isEmpty() &&
                 document.object->property("openedFilePath").toString().isEmpty() ? "created" : "error";
+            creation.remove("outcome_unknown"); creation.remove("error");
             creationPoll.stop(); creationBefore.clear(); return;
         }
-        if (creationElapsed.elapsed() > 10000) {
+        if (creation.value("status") == "cancelling") {
+            creation["status"] = "cancelled"; creationPoll.stop(); creationBefore.clear(); return;
+        }
+        if (creationElapsed.elapsed() > 10000 && !creation.contains("error")) {
             creation["status"] = "error";
             creation["error"] = "No new template document observed within 10 seconds; inspect documents and dialogs";
-            creationPoll.stop(); creationBefore.clear();
+            creation["outcome_unknown"] = true;
         }
+    }
+
+    static bool pending(const QJsonObject &operation) {
+        const QString status = operation.value("status").toString();
+        return status == "scheduled" || status == "requested" || status == "cancelling" || operation.value("outcome_unknown").toBool();
+    }
+
+    void archiveOperation(const QJsonObject &operation) {
+        const QString request = operation.value("request").toString();
+        if (request.isEmpty()) return;
+        operationHistory.insert(request, operation); operationOrder.append(request);
+        while (operationOrder.size() > 64) operationHistory.remove(operationOrder.takeFirst());
+    }
+
+    void checkOpening() {
+        if (!openingPoll.isActive()) return;
+        if (loadNativeActive && loadingKind == "open") {
+            if (QApplication::activeModalWidget()) opening["dialog"] = modalState();
+            return;
+        }
+        for (const auto &document : guitarpro::documents()) {
+            if (document.score && QFileInfo(document.object->property("openedFilePath").toString()).canonicalFilePath().compare(opening.value("path").toString(), Qt::CaseInsensitive) == 0) {
+                opening["status"] = "opened"; opening["document"] = document.id();
+                opening.remove("error"); opening.remove("outcome_unknown"); openingPoll.stop(); return;
+            }
+        }
+        if (opening.value("status") == "cancelling") { opening["status"] = "cancelled"; openingPoll.stop(); return; }
+        if (openingElapsed.elapsed() > 10000 && !opening.contains("error")) {
+            opening["status"] = "error";
+            opening["error"] = "No document observed within 10 seconds; inspect documents and dialogs before retrying";
+            opening["outcome_unknown"] = true;
+        }
+    }
+
+    void dispatchLoad(const QString &kind, const QString &path) {
+        const QString request = (kind == "open" ? opening : creation).value("request").toString();
+        QTimer::singleShot(0, this, [this, kind, path, request]() {
+            QJsonObject &operation = kind == "open" ? opening : creation;
+            if (operation.value("request") != request || operation.value("status") != "scheduled") return;
+            operation["status"] = "requested";
+            if (kind == "open") {
+                const QString validation = guitarpro::validateGpFile(path);
+                if (!validation.isEmpty()) {
+                    operation["status"] = "error"; operation["error"] = validation; operation["failure_stage"] = "validation";
+                    openingPoll.stop(); return;
+                }
+            }
+            loadingKind = kind; loadModal.clear(); loadNativeActive = true;
+            QFileOpenEvent event(path);
+            QCoreApplication::sendEvent(qApp, &event);
+            loadNativeActive = false;
+            if (kind == "open") checkOpening(); else checkCreation();
+            if (pending(operation) && operation.contains("dialog") && !QApplication::activeModalWidget()) {
+                operation["status"] = "error";
+                operation["error"] = "Native file operation ended after a dialog without the expected document";
+                operation.remove("outcome_unknown");
+                if (kind == "open") openingPoll.stop(); else { creationPoll.stop(); creationBefore.clear(); }
+            }
+        });
+    }
+
+    void refreshOperations() { checkCreation(); checkOpening(); checkClosing(); }
+
+    QJsonObject cancelOperation(const QString &request) {
+        for (auto operation : {&creation, &opening, &closing}) {
+            if (operation->value("request") != request) continue;
+            if (!pending(*operation)) return {{"error", "Operation already completed"}, {"operation", *operation}};
+            if (operation->value("status") == "scheduled") {
+                (*operation)["status"] = "cancelled";
+                if (operation == &creation) { creationPoll.stop(); creationBefore.clear(); }
+                if (operation == &opening) openingPoll.stop();
+                return *operation;
+            }
+            if (operation == &closing && closingNativeActive && closingModal == QApplication::activeModalWidget()) {
+                QPointer<QAbstractButton> cancel;
+                if (auto box = qobject_cast<QMessageBox *>(closingModal)) cancel = box->button(QMessageBox::Cancel);
+                else if (closingModal) for (QDialogButtonBox *box : closingModal->findChildren<QDialogButtonBox *>()) {
+                    if (box->button(QDialogButtonBox::Cancel)) { cancel = box->button(QDialogButtonBox::Cancel); break; }
+                }
+                if (cancel && cancel->isEnabled()) {
+                    (*operation)["status"] = "cancelling";
+                    QTimer::singleShot(0, this, [this, request, cancel]() {
+                        if (closing.value("request") == request && closingNativeActive && closingModal == QApplication::activeModalWidget() && cancel) cancel->click();
+                    });
+                    return *operation;
+                }
+            } else if (loadNativeActive && loadModal == QApplication::activeModalWidget() && loadModal &&
+                       ((operation == &opening && loadingKind == "open") || (operation == &creation && loadingKind == "create"))) {
+                (*operation)["status"] = "cancelling";
+                QPointer<QDialog> dialog = loadModal;
+                const QString kind = loadingKind;
+                QTimer::singleShot(0, this, [this, dialog, kind, request]() {
+                    if ((kind == "open" ? opening : creation).value("request") == request && loadingKind == kind &&
+                        loadNativeActive && dialog && dialog == QApplication::activeModalWidget()) dialog->reject();
+                });
+                return *operation;
+            }
+            return {{"error", "Native operation has no cancellable dialog; inspect its outcome before retrying"}, {"operation", *operation}};
+        }
+        return {{"error", operationHistory.contains(request) ? "Operation already completed" : "Unknown or expired operation request"}};
     }
 
     QJsonObject info() const {
@@ -373,8 +505,10 @@ class Bridge : public QObject {
         add("gp_activate", "通过原生文档导航方法切换指定文档并读回活动文档；无需前台窗口。", {{"document", str}}, {"document"});
         add("gp_playback", "调用原生播放控制器。seek 使用原曲谱 bar 与小节内 tick；seek_tick 使用展开反复后的时间线绝对 tick。另支持 state/play/stop/set_loop/set_metronome/set_countdown。", {{"document", str}, {"operation", str}, {"bar", integer}, {"tick", integer}, {"enabled", boolean}});
         add("gp_open", "通过宿主原生文件打开事件异步打开已有 .gp 文件；用 gp_documents 的路径读回确认完成。", {{"path", str}}, {"path"});
-        add("gp_close", "原生关闭指定的已保存文档，拒绝未保存修改；轮询 gp_documents.closing 并匹配请求 ID 确认 closed。", {{"document", str}}, {"document"});
+        add("gp_close", "异步关闭文档；unsaved: reject（默认）、save、discard、cancel、prompt。save 可指定 path 和 overwrite；轮询 gp_documents.closing 确认结果。", {{"document", str}, {"unsaved", str}, {"path", str}, {"overwrite", boolean}}, {"document"});
         add("gp_documents", "读取实时文档 ID、原始路径、保存路径和未保存状态。", {});
+        add("gp_operation", "Read a new/open/close operation by request ID, including the last 64 replaced records.", {{"request", str}}, {"request"});
+        add("gp_cancel", "Cancel a queued document operation or its observed native dialog; poll gp_operation for the outcome.", {{"request", str}}, {"request"});
         add("gp_save_as", "原生另存为 .gp 文件并更新保存状态；已有目标必须明确 overwrite=true。", {{"document", str}, {"path", str}, {"overwrite", boolean}}, {"path"});
         add("gp_save", "原生保存 .gp 副本并保留文档保存状态；已有目标必须明确 overwrite=true。", {{"document", str}, {"path", str}, {"overwrite", boolean}}, {"path"});
         add("gp_save_current", "原生保存到文档当前 .gp 路径；未命名文档须先 gp_save_as。", {{"document", str}});
@@ -390,11 +524,21 @@ class Bridge : public QObject {
         add("gp_set_property", "原生 Qt 属性设置；需使用观察结果中允许写入的属性。", {{"snapshot", str}, {"id", integer}, {"property", str}, {"value", QJsonObject{}}}, {"snapshot", "id", "property", "value"});
         add("gp_close_window", "调用原生窗口关闭方法，保留未保存文档确认。", {{"snapshot", str}, {"id", integer}}, {"snapshot", "id"});
         if (!server.start(sessionFile, info(), tools, [this](const QString &tool, const QJsonObject &args) {
+            refreshOperations();
             if (tool == "gp_dialogs") return modalState();
+            if (tool == "gp_operation") {
+                const QString request = args.value("request").toString();
+                for (const auto &operation : {creation, opening, closing}) if (operation.value("request") == request) return QJsonObject{{"operation", operation}};
+                if (operationHistory.contains(request)) return QJsonObject{{"operation", operationHistory.value(request)}};
+                return QJsonObject{{"error", "Unknown or expired operation request"}};
+            }
+            if (tool == "gp_cancel") return cancelOperation(args.value("request").toString());
             static const QSet<QString> modalReads{"gp_capabilities", "gp_documents", "gp_score", "gp_read_bars", "gp_read_master_bars", "gp_templates", "gp_objects", "gp_actions", "gp_debug_objects", "gp_debug_resources"};
             static const QSet<QString> dialogActions{"gp_trigger", "gp_set_property", "gp_close_window", "gp_window"};
             if (QApplication::activeModalWidget() && !modalReads.contains(tool) && !dialogActions.contains(tool))
                 return QJsonObject{{"error", "A modal dialog blocks native operations; inspect gp_dialogs"}, {"dialog", modalState()}};
+            if ((loadNativeActive || closingNativeActive || pending(creation) || pending(opening) || pending(closing)) && !modalReads.contains(tool) && !dialogActions.contains(tool))
+                return QJsonObject{{"error", "A document operation is pending; inspect gp_documents or cancel its request before another mutation"}};
             // Host command observers update the active document's dirty state.
             // Bind every model mutation to its document before calling native APIs.
             static const QSet<QString> mutations{"gp_edit_note", "gp_edit_note_effect", "gp_edit_connection", "gp_edit_beat", "gp_edit_bars", "gp_edit_track", "gp_edit_tracks", "gp_insert_track", "gp_edit_tempo", "gp_edit_measure", "gp_set_fret", "gp_edit_metadata", "gp_cursor", "gp_undo_redo", "gp_save_as", "gp_save_current"};
@@ -416,9 +560,10 @@ class Bridge : public QObject {
                 creationBefore.clear();
                 for (const auto &document : guitarpro::documents()) creationBefore.append(document.object);
                 const QString path = templates.filePath(name + ".gpt");
-                creation = {{"request", nonce()}, {"status", "scheduled"}, {"template", name}, {"template_path", path}};
+                archiveOperation(creation);
+                creation = {{"request", nonce()}, {"status", "scheduled"}, {"kind", "create"}, {"template", name}, {"template_path", path}};
                 creationElapsed.restart(); creationPoll.start(50);
-                QCoreApplication::postEvent(qApp, new QFileOpenEvent(path));
+                dispatchLoad("create", path);
                 return creation;
             }
             if (tool == "gp_debug_resources" && qEnvironmentVariableIsSet("GPMCP_DEVELOPMENT")) {
@@ -483,12 +628,16 @@ class Bridge : public QObject {
                         if (QFileInfo(document.object->property(property).toString()).canonicalFilePath().compare(path, Qt::CaseInsensitive) == 0)
                             return QJsonObject{{"status", "already_open"}, {"document", document.id()}, {"path", path}};
                 }
-                QCoreApplication::postEvent(qApp, new QFileOpenEvent(path));
-                return QJsonObject{{"status", "scheduled"}, {"path", path}, {"verify", "Read gp_documents until the path appears; event dispatch is not completion"}};
+                archiveOperation(opening);
+                opening = {{"request", nonce()}, {"status", "scheduled"}, {"kind", "open"}, {"path", path}};
+                openingElapsed.restart(); openingPoll.start(50);
+                dispatchLoad("open", path);
+                return opening;
             }
             if (tool == "gp_documents") {
                 QJsonObject result = guitarpro::list(services());
                 if (!creation.isEmpty()) result["creation"] = creation;
+                if (!opening.isEmpty()) result["opening"] = opening;
                 checkClosing();
                 if (!closing.isEmpty()) result["closing"] = closing;
                 return result;
@@ -499,20 +648,40 @@ class Bridge : public QObject {
                     return QJsonObject{{"error", "A document close is already pending"}, {"closing", closing}};
                 const auto target = guitarpro::choose(args);
                 if (!target.object || !target.view) return QJsonObject{{"error", "Choose an existing document id"}};
-                if (target.object->property("isDirty").toBool())
+                const QString policy = args.value("unsaved").toString("reject");
+                if (!QStringList{"reject", "save", "discard", "cancel", "prompt"}.contains(policy)) return QJsonObject{{"error", "unsaved must be reject, save, discard, cancel or prompt"}};
+                if (policy != "save" && (args.contains("path") || args.contains("overwrite"))) return QJsonObject{{"error", "path and overwrite apply only to unsaved=save"}};
+                if (policy == "save" && args.contains("overwrite") && !args.contains("path")) return QJsonObject{{"error", "overwrite requires a Save As path"}};
+                if (target.object->property("isDirty").toBool() && policy == "reject")
                     return QJsonObject{{"error", "Document has unsaved changes; save it before closing"}};
-                closing = {{"request", nonce()}, {"status", "scheduled"}, {"document", args.value("document")}};
+                archiveOperation(closing);
+                closing = {{"request", nonce()}, {"status", policy == "cancel" ? "cancelled" : "scheduled"}, {"kind", "close"}, {"document", target.id()}, {"unsaved", policy}};
+                if (policy == "cancel") return closing;
                 closingView = target.view;
+                closingModal.clear();
                 closingElapsed.restart();
-                QTimer::singleShot(0, this, [this, args, target]() {
+                const QString request = closing.value("request").toString();
+                QTimer::singleShot(0, this, [this, args, target, policy, request]() {
+                    if (closing.value("request") != request || closing.value("status") != "scheduled") return;
                     if (!target.view || !target.object || guitarpro::choose(args).object != target.object) {
                         closing["status"] = "error";
                         closing["error"] = "Document changed before close request";
                         return;
                     }
-                    const auto result = guitarpro::closeDocument(args, services());
-                    closing["status"] = result.contains("error") ? "error" : "requested";
+                    closing["status"] = "requested";
+                    if (policy == "save") {
+                        auto saved = guitarpro::activate(args, services());
+                        if (!saved.contains("error")) saved = guitarpro::save(args, true, !args.contains("path"));
+                        closing["save"] = saved;
+                        if (saved.contains("error")) { closing["status"] = "error"; closing["error"] = saved.value("error"); return; }
+                    }
+                    closing["status"] = "requested";
+                    closingNativeActive = true;
+                    const auto result = guitarpro::closeDocument(args, services(), policy == "discard" || policy == "prompt");
+                    closingNativeActive = false;
+                    if (result.contains("error")) closing["status"] = "error";
                     if (result.contains("error")) closing["error"] = result.value("error");
+                    if (closingView && closing.value("decision") == "cancel") closing["status"] = "cancelled";
                     checkClosing();
                 });
                 return closing;
@@ -574,6 +743,42 @@ protected:
     bool eventFilter(QObject *object, QEvent *event) override {
         if (event->type() == QEvent::ThreadChange) { registry.forget(object); nativeObjects.remove(object); return false; }
         const QByteArray name = object->metaObject()->className();
+        if (loadNativeActive && event->type() == QEvent::Show) {
+            if (auto modal = qobject_cast<QDialog *>(object)) {
+                if (modal->isModal() && modal->parentWidget() && QByteArray(modal->parentWidget()->metaObject()->className()) == "gp::gui::MainWindow") {
+                    loadModal = modal;
+                    (loadingKind == "open" ? opening : creation)["dialog"] = modalState();
+                }
+            }
+        }
+        if (closingNativeActive && event->type() == QEvent::Show) {
+            if (auto modal = qobject_cast<QDialog *>(object)) {
+                if (modal->isModal() && closingView && modal->parentWidget() == closingView->window()) {
+                    QAbstractButton *discard = nullptr, *cancel = nullptr, *save = nullptr;
+                    if (auto box = qobject_cast<QMessageBox *>(modal)) {
+                        discard = box->button(QMessageBox::Discard); cancel = box->button(QMessageBox::Cancel); save = box->button(QMessageBox::Save);
+                    } else for (QDialogButtonBox *box : modal->findChildren<QDialogButtonBox *>()) {
+                        if (box->button(QDialogButtonBox::Save) && box->button(QDialogButtonBox::Discard) && box->button(QDialogButtonBox::Cancel)) {
+                            discard = box->button(QDialogButtonBox::Discard); cancel = box->button(QDialogButtonBox::Cancel); save = box->button(QDialogButtonBox::Save); break;
+                        }
+                    }
+                    if (discard && cancel && save) {
+                        closingModal = modal;
+                        const QString request = closing.value("request").toString();
+                        connect(cancel, &QAbstractButton::clicked, this, [this, request]() { if (closing.value("request") == request) closing["decision"] = "cancel"; });
+                        connect(discard, &QAbstractButton::clicked, this, [this, request]() { if (closing.value("request") == request) closing["decision"] = "discard"; });
+                        connect(save, &QAbstractButton::clicked, this, [this, request]() { if (closing.value("request") == request) closing["decision"] = "save"; });
+                        connect(modal, &QDialog::rejected, this, [this, request]() { if (closing.value("request") == request) closing["decision"] = "cancel"; });
+                        if (closing.value("unsaved") == "discard") {
+                            QPointer<QAbstractButton> button = discard;
+                            QTimer::singleShot(0, this, [this, button, request]() {
+                                if (closing.value("request") == request && closingNativeActive && closingModal == QApplication::activeModalWidget() && button && button->isEnabled()) button->click();
+                            });
+                        }
+                    }
+                }
+            }
+        }
         if (name == "gp::gui::MainWindow" && event->type() == QEvent::Polish) {
             // Hidden mode disables Qt's last-visible-window exit; an accepted host close still exits.
             connect(object, &QObject::destroyed, this, [this] {
@@ -605,6 +810,7 @@ public:
         connect(qApp, &QCoreApplication::aboutToQuit, this, [this] { shutdown(); });
         if (hiddenMode) qApp->setQuitOnLastWindowClosed(false);
         connect(&creationPoll, &QTimer::timeout, this, [this]() { checkCreation(); });
+        connect(&openingPoll, &QTimer::timeout, this, [this]() { checkOpening(); });
         qApp->installEventFilter(this);
         const QString qtCore = QDir(QCoreApplication::applicationDirPath()).filePath("Qt5Core.dll");
         if (guitarpro::supportedBuild() && guitarpro::hash(qtCore) == "c2f85bd55c31e5380dd99f0d517ee183a54c3852480bc497dc30a5483fd70ff2") registry.install();

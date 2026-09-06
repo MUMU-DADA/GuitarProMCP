@@ -149,13 +149,14 @@ save/discard/cancel on close. Never silently discard user changes.
 
 Exit gate: successful and failed workflows are verified against actual files and
 native state, wrong-target writes are rejected, and request completion matches
-what happened in the host. Connection checks now cover two clients, identity,
-restart and port fallback. Save-current, explicit overwrite and preservation
-after rejected writes are verified. A second GUI launch exits, but opening its
-requested score in the existing host has not passed in visible or background
-mode. Independent GUI processes, native mid-write failure recovery, full
-asynchronous completion/cancellation and close policies remain open. P2 is not
-accepted.
+what happened in the host. Connection checks cover two clients, identity,
+restart and port fallback. Save-current, explicit overwrite, tracked new/open/
+close, save/discard/cancel close policies, native close-dialog cancellation and
+malformed ZIP/GPIF rejection are verified. A second GUI launch exits, but opening
+its requested score in the existing host has not passed in visible or background
+mode. Independent GUI processes, native mid-write failure recovery, save-time
+cancellation, manual tab reorder, real-client configuration reload and complete
+unknown-native-outcome recovery remain open. P2 is not accepted.
 
 ### P3: Complete musical editing
 
@@ -309,8 +310,10 @@ runtime tokens, temporary hosts and generated evidence out of Git.
    forwarding, external port contention, strict explicit port, two clients,
    stale identity, reconnect/restart and cleanup. Split tests by supported host
    behavior; do not count a prematurely exited second launch as a passing host.
-3. Finish P2 document completion, save/recovery and close policies, then run the
-   affected regression and document operation-level results.
+3. Complete the remaining P2 unknown-outcome and mid-write recovery paths,
+   save-time cancellation, manual tab reorder and real-client integration.
+   Basic request tracking, close policies and malformed archive errors now have
+   coverage; retain and extend those checks when completing the remaining work.
 4. Complete the pending real P1 update/entry-point check once Windows elevation
    is available. Independent repository work can proceed while it is pending.
 5. Complete P3, P4, P5 and P6 in order, committing each accepted phase, then run
@@ -440,3 +443,52 @@ other explicit gaps in that file remain open.
   `artifacts/instances-5524513fd40d4b2b988926b4abf5fd92/verification.json`.
   This is an intermediate P2 checkpoint; P1 installed-host acceptance and the
   remaining P2-P7 requirements are still open.
+- P2: native close now supports explicit save/discard/cancel and prompt policies.
+  Discard/cancel bind to standard native buttons in the target window's dialog
+  during the matching close request; they do not forge a saved state. Save on
+  close uses current-path saving or explicit Save As and retains the document
+  on failure. Fifty operation checks cover these flows, request history,
+  stale-cancel isolation and archive/XML errors.
+- P2: `gp_operation` reads current new/open/close results and the last 64 replaced
+  records. `gp_cancel` reports pending cancellation until native completion is
+  observed. Incomplete native outcomes after ten seconds remain explicitly
+  unknown, continue being observed and block new mutations. Full recovery for
+  such outcomes still needs a native completion/error adapter.
+- P2: a malformed non-ZIP `.gp` file was silently ignored by the host, with no
+  dialog or document. The first tracking test recorded a timeout rather than
+  claiming failure/cancellation. A Qt ZIP/XML precheck now rejects malformed
+  containers, duplicate/missing GPIF entries, invalid XML, wrong root and DTD
+  before dispatch. The same check validates saved output. The GPIF entry limit
+  is 64 MiB; semantic GPIF validity is not claimed. `Qt5Gui.dll` is now hash-bound
+  in the native adapter and installer manifest.
+- P2: installation checks including a modified Qt GUI DLL passed 46 checks plus
+  26 protocol checks:
+  `artifacts/installation-3bf209454bc545ca8e5eb1df9d841f91/verification.json`.
+  This run precedes the final conservative dirty-state restoration adjustment.
+- P2: failure recovery now restores an originally dirty document to dirty if a
+  successful native save cleared that flag before output validation failed.
+  It never clears a dirty flag during failure recovery. Injected mid-write and
+  recovery-failure checks remain open; normal passing saves do not prove them.
+- P2: regression `artifacts/regression-d55d5d21f0cb4eaa81a816918169e7cb/`
+  stopped during template creation after 1775 passing checks. The retained host
+  showed the requested template had been created with empty file paths and no
+  active dialog. The structure test incorrectly stopped polling on any status
+  other than `scheduled`, including the new intermediate `requested` status.
+  It now waits for an explicit terminal state and includes state in failures.
+  All 60 structure checks then passed in the retained host:
+  `artifacts/native-structure-a18fde20b1124e9381a69ce464736bda/verification.json`.
+  The original failed regression remains recorded as incomplete.
+- P2 checkpoint: all fifteen suites, 2275 checks, passed against the current
+  native source and binary, with exit code 0 and descriptor cleanup:
+  `artifacts/regression-ad790d076ad54c85aae881bcf2b63b33/regression.json`.
+  Core SHA-256:
+  `99680BF0C99959EFE8A229346ED7EAA999AC7F2D0B6C486A3B385ECE89935D77`.
+  The same binary passed the 50 document-operation checks under Windows
+  PowerShell 5.1 with clean host shutdown:
+  `artifacts/document-operations-13ae4ad7835248bf99eaa1eee823fa15/verification.json`.
+  All 53 connection/concurrent-client checks also passed:
+  `artifacts/instances-149583ef2ed448dcbbce0a0dad2110e4/verification.json`.
+  This does not verify launch forwarding, independent GUI instances, real
+  MCP-client configuration reload, manual tab reorder, save-time cancellation,
+  injected save/recovery failures or complete unknown-native-outcome recovery.
+  P1 remains pending installed-host acceptance; P2-P7 remain unfinished.

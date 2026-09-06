@@ -17,7 +17,7 @@ $sessionFile = Join-Path $run 'session/native-session.json'
 $process = & "$root/start-plugin.ps1" -Exe $Exe -ScorePath $fixture -SessionFile $sessionFile -PassThru
 $descriptor = Get-Content -LiteralPath $sessionFile -Raw | ConvertFrom-Json
 Write-Output "Regression host PID $($process.Id). Session: $sessionFile"
-$suites = @('mcp','native','editing','tracks','measures','effects','selection','saving','lifecycle','session','structure','clipboard','tuplets','connections')
+$suites = @('mcp','native','editing','tracks','measures','effects','selection','saving','document-operations','lifecycle','session','structure','clipboard','tuplets','connections')
 $results = @()
 $complete = $false
 try {

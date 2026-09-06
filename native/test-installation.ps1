@@ -175,19 +175,22 @@ try {
     Assert ((Get-Content -LiteralPath $statusPath -Raw | ConvertFrom-Json).status -eq 'configuration_error') 'Invalid settings were not diagnosed.'
     Stop-Owned $process; $process = $null
     Remove-Item -LiteralPath $settingsPath
-    $backupExe = Join-Path $run 'verified-GuitarPro.exe'
-    Copy-Item -LiteralPath $exe -Destination $backupExe
-    try {
-        $append = [IO.File]::Open($exe, [IO.FileMode]::Append, [IO.FileAccess]::Write)
-        try { $append.WriteByte(0) } finally { $append.Dispose() }
-        $process = Launch 'unsupported-host'
-        Assert (-not $process.HasExited -and -not (Test-Path -LiteralPath $descriptorPath)) 'Unsupported host started private MCP code or failed to launch.'
-        Assert ((Get-Content -LiteralPath $statusPath -Raw | ConvertFrom-Json).status -eq 'unsupported_host') 'Unsupported host was not diagnosed.'
-        $loadedCore = @($process.Modules | Where-Object ModuleName -EQ 'guitarpro_mcp.dll')
-        Assert ($loadedCore.Count -eq 0) 'Unsupported host loaded the private-interface DLL.'
-    } finally {
-        Stop-Owned $process; $process = $null
-        Copy-Item -LiteralPath $backupExe -Destination $exe -Force
+    foreach ($fileName in @('GuitarPro.exe','Qt5Gui.dll')) {
+        $targetFile = Join-Path $HostDirectory $fileName
+        $backupFile = Join-Path $run ('verified-' + $fileName)
+        Copy-Item -LiteralPath $targetFile -Destination $backupFile
+        try {
+            $append = [IO.File]::Open($targetFile, [IO.FileMode]::Append, [IO.FileAccess]::Write)
+            try { $append.WriteByte(0) } finally { $append.Dispose() }
+            $process = Launch ('unsupported-' + $fileName)
+            Assert (-not $process.HasExited -and -not (Test-Path -LiteralPath $descriptorPath)) "Unsupported $fileName started private MCP code or failed to launch."
+            Assert ((Get-Content -LiteralPath $statusPath -Raw | ConvertFrom-Json).status -eq 'unsupported_host') "Unsupported $fileName was not diagnosed."
+            $loadedCore = @($process.Modules | Where-Object ModuleName -EQ 'guitarpro_mcp.dll')
+            Assert ($loadedCore.Count -eq 0) "Unsupported $fileName loaded the private-interface DLL."
+        } finally {
+            Stop-Owned $process; $process = $null
+            Copy-Item -LiteralPath $backupFile -Destination $targetFile -Force
+        }
     }
     Install Uninstall | Out-Null
     Assert (-not (Install Status).installed) 'Uninstall left the receipt.'
