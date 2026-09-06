@@ -155,7 +155,7 @@ inline QJsonObject clipboard(const QJsonObject &args, ScoreClipboard &buffer, co
             return {{"error", "Native clipboard snapshot does not match the selected range"}};
         auto metadata = clipboardMetadata(*copied);
         if (metadata.contains("error")) return metadata;
-        metadata["source_document"] = document.view->objectName();
+        metadata["source_document"] = document.id();
         metadata["source_selection"] = selectionState(cursor);
         metadata["source_beats"] = selected.positions;
         metadata["beat_count"] = int(selected.beats.size());
@@ -167,7 +167,7 @@ inline QJsonObject clipboard(const QJsonObject &args, ScoreClipboard &buffer, co
             return metadata;
         }
         if (operation == "cut") {
-            const auto active = activate(QJsonObject{{"document", document.view->objectName()}}, objects);
+            const auto active = activate(QJsonObject{{"document", document.id()}}, objects);
             if (active.contains("error")) return active;
             if (range.isMultiTrack()) document.score->removeBarRange(unsigned(range.lowerModelIndex().barIndex()), unsigned(range.upperModelIndex().barIndex()));
             else if (range.isMultiVoice()) {
@@ -212,14 +212,14 @@ inline QJsonObject clipboard(const QJsonObject &args, ScoreClipboard &buffer, co
     const auto &extent = scope == "selection" ? selection.upperModelIndex() : cursor.modelIndex();
     const unsigned modes = scope == "selection" ? selection.selectionModes() : buffer.content->isMultiVoice() ? 2u : 0u;
     const gp::core::ScoreModelRange destination(base, extent, modes, static_cast<gp::core::ScoreModelRange::SortingPolicy>(0));
-    const auto active = activate(QJsonObject{{"document", document.view->objectName()}}, objects);
+    const auto active = activate(QJsonObject{{"document", document.id()}}, objects);
     if (active.contains("error")) return active;
     // Verified normal-paste dispatch in GuitarPro.exe (RVA 0x10A574).
     // Mode 0 follows its non-adapting normal paste; special-paste flags are separate.
     const auto mode = static_cast<gp::core::SerializedScore::OverridingMode>(0);
     if (bars) document.score->pasteBarRange(buffer.content, destination, 1, mode);
     else document.score->pasteBeatRange(buffer.content, destination, 1, mode);
-    auto result = scoreState(QJsonObject{{"document", document.view->objectName()}});
+    auto result = scoreState(QJsonObject{{"document", document.id()}});
     result["clipboard_id"] = buffer.metadata.value("id");
     result["native_method"] = bars ? "Score::pasteBarRange" : "Score::pasteBeatRange";
     result["previous_bar_count"] = int(previousBars);

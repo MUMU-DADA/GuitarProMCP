@@ -1,10 +1,12 @@
 #include "mcp_server.h"
+#include "plugin_config.h"
 #include <QtCore/QCoreApplication>
 #include <QtCore/QDateTime>
 #include <QtCore/QDir>
 #include <QtCore/QFile>
 #include <QtCore/QFileInfo>
 #include <QtCore/QJsonDocument>
+#include <QtCore/QLockFile>
 #include <QtCore/QPointer>
 #include <QtCore/QRegularExpression>
 #include <QtCore/QSaveFile>
@@ -30,7 +32,7 @@ QJsonObject rpcResult(const QJsonValue &id, const QJsonObject &result) {
 void reply(QTcpSocket *socket, int status, const QJsonObject &body = {}, const QByteArray &extra = {}) {
     const QByteArray reason = status == 200 ? "OK" : status == 202 ? "Accepted" : status == 204 ? "No Content" :
         status == 401 ? "Unauthorized" : status == 403 ? "Forbidden" : status == 404 ? "Not Found" :
-        status == 405 ? "Method Not Allowed" : status == 413 ? "Payload Too Large" : status == 415 ? "Unsupported Media Type" : "Bad Request";
+        status == 405 ? "Method Not Allowed" : status == 409 ? "Conflict" : status == 413 ? "Payload Too Large" : status == 415 ? "Unsupported Media Type" : "Bad Request";
     const QByteArray data = body.isEmpty() ? QByteArray() : QJsonDocument(body).toJson(QJsonDocument::Compact);
     socket->setProperty("replied", true);
     socket->write("HTTP/1.1 " + QByteArray::number(status) + " " + reason + "\r\nContent-Type: application/json\r\nContent-Length: " +
@@ -106,12 +108,14 @@ bool saveJson(const QString &path, const QJsonObject &data) {
 
 bool McpServer::start(const QString &path, QJsonObject identity, QJsonArray tools,
                      std::function<QJsonObject(const QString &, const QJsonObject &)> call) {
-    descriptorPath = path; catalog = tools; invoke = std::move(call);
+    catalog = tools; invoke = std::move(call);
     auto fail = [this](const QString &message) { startupError = message; return false; };
     startupError.clear();
     listener.setMaxPendingConnections(32);
     if (path.isEmpty()) return fail("Missing MCP session path");
     const QDir directory(QFileInfo(path).absolutePath());
+    QLockFile startupLock(directory.filePath("mcp-startup.lock"));
+    if (!startupLock.tryLock(1000)) return fail("Another instance is publishing its MCP connection; restart after it finishes");
     QFile tokenFile(directory.filePath("mcp-auth-token"));
     if (tokenFile.exists()) {
         if (!tokenFile.open(QIODevice::ReadOnly)) return fail("Cannot read local authentication token: " + tokenFile.errorString());
@@ -126,12 +130,30 @@ bool McpServer::start(const QString &path, QJsonObject identity, QJsonArray tool
     const QString configuredPort = qEnvironmentVariable("GPMCP_PORT");
     const int port = configuredPort.isEmpty() ? 18432 : configuredPort.toInt(&valid);
     if (!valid || port < 1 || port > 65535) return fail("GPMCP_PORT must be an integer from 1 to 65535");
-    if (!listener.listen(QHostAddress::LocalHost, quint16(port))) return fail("Cannot listen on local MCP port: " + listener.errorString());
+    if (!listener.listen(QHostAddress::LocalHost, quint16(port)) &&
+        (!configuredPort.isEmpty() || !listener.listen(QHostAddress::LocalHost, 0)))
+        return fail("Cannot listen on local MCP port: " + listener.errorString());
     const QString url = QString("http://127.0.0.1:%1/mcp").arg(listener.serverPort());
+    descriptorPath = directory.filePath("native-session-" + instanceIdentity + ".json");
+    instanceClientPath = directory.filePath("mcp-client-" + instanceIdentity + ".json");
+    QFile previous(path);
+    if (!previous.open(QIODevice::ReadOnly) || !gpmcp::liveDescriptor(QJsonDocument::fromJson(previous.readAll()).object())) aliasPath = path;
+    previous.close();
+    identity["instance_id"] = instanceIdentity;
+    identity["process_start_time"] = gpmcp::processStartTime(QCoreApplication::applicationPid());
+    identity["session_file"] = descriptorPath;
+    identity["client_config"] = aliasPath.isEmpty() ? instanceClientPath : directory.filePath("mcp-client.json");
+    identity["instance_client_config"] = instanceClientPath;
     identity["port"] = int(listener.serverPort()); identity["url"] = url;
+    identity["preferred_port"] = port; identity["port_fallback"] = listener.serverPort() != port;
     identity["transport"] = "streamable-http"; identity["protocolVersion"] = Version;
-    if (!saveJson(path, identity) || !saveJson(directory.filePath("mcp-client.json"),
-        {{"mcpServers", QJsonObject{{"guitarpro", QJsonObject{{"url", url}, {"headers", QJsonObject{{"Authorization", "Bearer " + token}}}}}}}})) {
+    auto clientConfig = [&](bool bound) {
+        QJsonObject headers{{"Authorization", "Bearer " + token}};
+        if (bound) headers["GuitarProMCP-Instance-Id"] = instanceIdentity;
+        return QJsonObject{{"mcpServers", QJsonObject{{"guitarpro", QJsonObject{{"url", url}, {"headers", headers}}}}}};
+    };
+    if (!saveJson(instanceClientPath, clientConfig(true)) || !saveJson(descriptorPath, identity) ||
+        (!aliasPath.isEmpty() && (!saveJson(directory.filePath("mcp-client.json"), clientConfig(false)) || !saveJson(aliasPath, identity)))) {
         stop(); return fail("Cannot publish MCP session or client configuration");
     }
     connect(&listener, &QTcpServer::newConnection, this, &McpServer::accept);
@@ -175,6 +197,9 @@ void McpServer::accept() {
             if (request.headers.value("authorization") != "Bearer " + token.toUtf8()) {
                 reply(socket, 401, {{"error", "Bearer token required"}}, "WWW-Authenticate: Bearer realm=\"GuitarProMCP\"\r\n"); return;
             }
+            if (request.headers.contains("guitarpromcp-instance-id") && request.headers.value("guitarpromcp-instance-id") != instanceIdentity.toUtf8()) {
+                reply(socket, 409, {{"error", "Guitar Pro instance changed; discover and explicitly select the intended instance"}}); return;
+            }
             if (request.target != "/mcp") { reply(socket, 404); return; }
             const QString sessionId = QString::fromUtf8(request.headers.value("mcp-session-id"));
             if (request.method == "DELETE") {
@@ -205,7 +230,8 @@ void McpServer::accept() {
                 const QString version = Versions.contains(params.value("protocolVersion").toString()) ? params.value("protocolVersion").toString() : Version;
                 const QString key = randomId();
                 sessions.insert(key, {version, false, QDateTime::currentMSecsSinceEpoch()});
-                reply(socket, 200, rpcResult(id, {{"protocolVersion", version}, {"serverInfo", QJsonObject{{"name", "GuitarProMCP"}, {"version", "0.2.0"}}},
+                reply(socket, 200, rpcResult(id, {{"protocolVersion", version}, {"serverInfo", QJsonObject{{"name", "GuitarProMCP"}, {"version", "0.3.0"}}},
+                      {"_meta", QJsonObject{{"instance_id", instanceIdentity}, {"pid", QCoreApplication::applicationPid()}}},
                       {"capabilities", QJsonObject{{"tools", QJsonObject{{"listChanged", false}}}}},
                       {"instructions", "Native C++ plugin. No Python, simulated input or foreground window is required. Inspect capabilities and observed state; verify mutations."}}),
                       "Mcp-Session-Id: " + key.toUtf8() + "\r\n"); return;
@@ -256,17 +282,18 @@ void McpServer::accept() {
 }
 
 void McpServer::stop() {
-    if (!descriptorPath.isEmpty()) {
-        QFile descriptor(descriptorPath);
+    for (const QString &path : {descriptorPath, aliasPath}) {
+        if (path.isEmpty()) continue;
+        QFile descriptor(path);
         if (descriptor.open(QIODevice::ReadOnly)) {
             const auto identity = QJsonDocument::fromJson(descriptor.readAll()).object();
-            if (identity.value("port").toInt() == listener.serverPort() &&
-                identity.value("pid").toVariant().toLongLong() == QCoreApplication::applicationPid()) {
+            if (identity.value("instance_id") == instanceIdentity) {
                 descriptor.close(); descriptor.remove();
             }
         }
-        descriptorPath.clear();
     }
+    descriptorPath.clear(); aliasPath.clear();
+    if (!instanceClientPath.isEmpty()) { QFile::remove(instanceClientPath); instanceClientPath.clear(); }
     listener.close();
     for (auto socket : listener.findChildren<QTcpSocket *>()) socket->abort();
     sessions.clear();

@@ -138,10 +138,11 @@ try {
     $blocker = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 18432)
     $blocker.Start()
     try {
+        $env:GPMCP_PORT = '18432'
         $process = Launch 'port-conflict'
         Assert (-not $process.HasExited -and -not (Test-Path -LiteralPath $descriptorPath)) 'Port conflict stopped the host or published a wrong session.'
         Assert ((Get-Content -LiteralPath $statusPath -Raw | ConvertFrom-Json).status -eq 'service_error') 'Port conflict was not diagnosed.'
-    } finally { Stop-Owned $process; $process = $null; $blocker.Stop() }
+    } finally { Stop-Owned $process; $process = $null; $blocker.Stop(); $env:GPMCP_PORT = '' }
     $clientPath = Join-Path $data 'mcp-client.json'
     $clientBackup = Join-Path $run 'client-backup.json'
     Move-Item -LiteralPath $clientPath -Destination $clientBackup

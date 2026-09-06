@@ -66,6 +66,7 @@ class Bridge : public QObject {
         if (qApp) {
             qApp->removeEventFilter(this);
             qApp->setProperty("gpmcpBridge", QVariant());
+            qApp->setProperty("gpmcpSessionFile", QVariant());
         }
         for (const auto &object : nativeObjects)
             if (object) QObject::disconnect(object, nullptr, this, nullptr);
@@ -116,7 +117,7 @@ class Bridge : public QObject {
             const QString empty;
             const bool adopted = QMetaObject::invokeMethod(document.object, "setOpenedFilePath", Qt::DirectConnection, Q_ARG(QString, empty)) &&
                 QMetaObject::invokeMethod(document.object, "setSaveFilePath", Qt::DirectConnection, Q_ARG(QString, empty));
-            creation["document"] = document.view->objectName();
+            creation["document"] = document.id();
             creation["status"] = adopted && document.object->property("saveFilePath").toString().isEmpty() &&
                 document.object->property("openedFilePath").toString().isEmpty() ? "created" : "error";
             creationPoll.stop(); creationBefore.clear(); return;
@@ -144,6 +145,7 @@ class Bridge : public QObject {
         GetUserObjectInformationW(GetProcessWindowStation(), UOI_NAME, station, sizeof(station), &stationBytes);
         return {{"backend", "in_process_qt_plugin"},
                 {"pid", double(QCoreApplication::applicationPid())}, {"qt_version", qVersion()},
+                {"instance_id", server.instanceId()}, {"process_start_time", gpmcp::processStartTime(QCoreApplication::applicationPid())},
                 {"host_exe", QCoreApplication::applicationFilePath()},
                 {"plugin_path", QString::fromWCharArray(filename)},
                 {"hidden_mode", hiddenMode},
@@ -373,8 +375,9 @@ class Bridge : public QObject {
         add("gp_open", "通过宿主原生文件打开事件异步打开已有 .gp 文件；用 gp_documents 的路径读回确认完成。", {{"path", str}}, {"path"});
         add("gp_close", "原生关闭指定的已保存文档，拒绝未保存修改；轮询 gp_documents.closing 并匹配请求 ID 确认 closed。", {{"document", str}}, {"document"});
         add("gp_documents", "读取实时文档 ID、原始路径、保存路径和未保存状态。", {});
-        add("gp_save_as", "原生另存为新的 .gp 文件并切换保存路径，通过宿主 save 方法更新保存状态。", {{"document", str}, {"path", str}}, {"path"});
-        add("gp_save", "调用原生文档 saveToFile 保存新副本；不使用对话框或输入模拟。", {{"document", str}, {"path", str}}, {"path"});
+        add("gp_save_as", "原生另存为 .gp 文件并更新保存状态；已有目标必须明确 overwrite=true。", {{"document", str}, {"path", str}, {"overwrite", boolean}}, {"path"});
+        add("gp_save", "原生保存 .gp 副本并保留文档保存状态；已有目标必须明确 overwrite=true。", {{"document", str}, {"path", str}, {"overwrite", boolean}}, {"path"});
+        add("gp_save_current", "原生保存到文档当前 .gp 路径；未命名文档须先 gp_save_as。", {{"document", str}});
         add("gp_window", "通过 Qt 原生窗口方法设置测试窗口状态；控制操作本身不需要前台窗口。", {{"state", str}}, {"state"});
         add("gp_capabilities", "原生 C++ 插件身份、后台控制能力及尚未覆盖的范围。", {});
         add("gp_dialogs", "Read the active modal dialog, its message labels and available buttons. Native score mutations are blocked until it is resolved.", {});
@@ -394,11 +397,11 @@ class Bridge : public QObject {
                 return QJsonObject{{"error", "A modal dialog blocks native operations; inspect gp_dialogs"}, {"dialog", modalState()}};
             // Host command observers update the active document's dirty state.
             // Bind every model mutation to its document before calling native APIs.
-            static const QSet<QString> mutations{"gp_edit_note", "gp_edit_note_effect", "gp_edit_connection", "gp_edit_beat", "gp_edit_bars", "gp_edit_track", "gp_edit_tracks", "gp_insert_track", "gp_edit_tempo", "gp_edit_measure", "gp_set_fret", "gp_edit_metadata", "gp_cursor", "gp_undo_redo", "gp_save_as"};
+            static const QSet<QString> mutations{"gp_edit_note", "gp_edit_note_effect", "gp_edit_connection", "gp_edit_beat", "gp_edit_bars", "gp_edit_track", "gp_edit_tracks", "gp_insert_track", "gp_edit_tempo", "gp_edit_measure", "gp_set_fret", "gp_edit_metadata", "gp_cursor", "gp_undo_redo", "gp_save_as", "gp_save_current"};
             if (mutations.contains(tool)) {
                 const auto target = guitarpro::choose(args);
                 if (!target.view || !target.score) return QJsonObject{{"error", "Choose a document with a verified native score"}};
-                const QJsonObject activated = guitarpro::activate(QJsonObject{{"document", target.view->objectName()}}, services());
+                const QJsonObject activated = guitarpro::activate(QJsonObject{{"document", target.id()}}, services());
                 if (activated.contains("error")) return activated;
             }
             if (tool == "gp_templates" || tool == "gp_new") {
@@ -478,7 +481,7 @@ class Bridge : public QObject {
                 for (const auto &document : guitarpro::documents()) {
                     for (const char *property : {"openedFilePath", "saveFilePath"})
                         if (QFileInfo(document.object->property(property).toString()).canonicalFilePath().compare(path, Qt::CaseInsensitive) == 0)
-                            return QJsonObject{{"status", "already_open"}, {"document", document.view->objectName()}, {"path", path}};
+                            return QJsonObject{{"status", "already_open"}, {"document", document.id()}, {"path", path}};
                 }
                 QCoreApplication::postEvent(qApp, new QFileOpenEvent(path));
                 return QJsonObject{{"status", "scheduled"}, {"path", path}, {"verify", "Read gp_documents until the path appears; event dispatch is not completion"}};
@@ -515,6 +518,7 @@ class Bridge : public QObject {
                 return closing;
             }
             if (tool == "gp_save_as") return guitarpro::save(args, true);
+            if (tool == "gp_save_current") return guitarpro::save(args, true, true);
             if (tool == "gp_save") return guitarpro::save(args);
             if (tool == "gp_window") {
                 for (QWidget *widget : QApplication::topLevelWidgets()) {
@@ -559,7 +563,11 @@ class Bridge : public QObject {
         })) {
             gpmcp::diagnostic("service_error", server.errorString());
             qWarning("GuitarProMCP: failed to start native MCP HTTP server");
-        } else gpmcp::diagnostic("running");
+        } else {
+            sessionFile = server.sessionFile();
+            qApp->setProperty("gpmcpSessionFile", sessionFile);
+            gpmcp::diagnostic("running");
+        }
     }
 
 protected:

@@ -41,7 +41,9 @@
 
 启动脚本为该新进程设置 `QT_PLUGIN_PATH`、`QT_QPA_GENERIC_PLUGINS=guitarpro_mcp` 和 `GPMCP_SESSION_FILE`，然后恢复调用进程的这些环境变量。临时目录设在项目 `.cache/tmp` 中。
 
-服务默认只监听 `127.0.0.1:18432`。`GPMCP_PORT` 可指定其他端口；`-SessionFile` 可指定会话文件位置。多实例的端口、令牌/配置目录和启动日志隔离尚未完成统一测试，当前建议使用一个插件实例。
+服务优先监听 `127.0.0.1:18432`，默认端口被占用时分配其他回环端口；明确指定 `GPMCP_PORT` 时保持严格冲突报错。实例由 UUID、PID 和进程启动时间识别。`native-session-<UUID>.json` 和 `mcp-client-<UUID>.json` 属于当前实例，退出时清理；固定别名不覆盖其他仍在运行的实例，令牌和固定客户端配置保留。两个客户端、重启失效和端口回退已验证，独立 GUI 多进程尚未验证。
+
+`Get-McpInstances -DataDirectory ...` 发现有效实例；`New-McpSession -InstanceId ...` 选择实例，`Reconnect-McpSession` 默认只重连原进程。重启后必须显式选择新的 UUID。实例绑定头为 `GuitarProMCP-Instance-Id`，不匹配时返回 HTTP 409；协议初始化也返回实例 UUID 和 PID。传输失败不会自动重放编辑。实际客户端在端口变化后重读连接配置的能力仍需验证。
 
 ## 协议边界
 
@@ -72,7 +74,7 @@ try {
 }
 ```
 
-曲谱工具的可选 `document` 参数使用 `gp_documents` 返回的 ID。只有一个文档时可以省略；存在多个文档时必须指定。ID 属于当前宿主会话，关闭或重新打开文档后应重新读取。
+曲谱工具的可选 `document` 参数使用 `gp_documents` 返回的独立 UUID，保存在该原生文档对象的动态属性中，不修改宿主控件名称。只有一个文档时可以省略；存在多个文档时必须指定。ID 在文档生命周期内稳定，关闭重开及宿主重启后失效，不能使用 `GPDocumentView_0` 等可复用的控件名称定位曲谱。
 
 | 工具 | 参数 | 行为 |
 | --- | --- | --- |
@@ -99,8 +101,9 @@ try {
 | `gp_clipboard` | 按操作提供 `document?`, `id?`, `scope?`, `track?`, `staff?`, `bar?`, `count?` | 原生独立快照的复制、剪切、读取和粘贴；见原生剪贴板章节 |
 | `gp_edit_bars` | `document?`, `operation`, `index`, `count?=1` | `insert` / `remove` 同步增删所有音轨的小节，数量 1–128；曲谱最多 100000 小节 |
 | `gp_undo_redo` | `document?`, `operation` | `operation` 为 `undo` 或 `redo`，必须存在相应历史 |
-| `gp_save` | `document?`, `path` | 调用 `IDocument::saveToFile`，仅创建新的 `.gp` 副本 |
-| `gp_save_as` | `document?`, `path` | 创建副本后调用 `setSaveFilePath` 和宿主 `save()`，完成另存为及保存状态更新 |
+| `gp_save` | `document?`, `path`, `overwrite?` | 调用 `IDocument::saveToFile` 保存 `.gp` 副本，不改变原文档保存路径和未保存状态 |
+| `gp_save_as` | `document?`, `path`, `overwrite?` | 保存后调用 `setSaveFilePath` 和宿主 `save()`，完成另存为及保存状态更新 |
+| `gp_save_current` | `document?` | 保存到当前 `.gp` 路径；未命名文档需要先另存为 |
 
 所有索引从 0 开始。弦索引沿用宿主内部顺序，并不直接等于日常所说的“第一弦”。光标尚未选中音符时，`note_string` 和 `note_midi` 可能为 `-1`。
 
@@ -109,6 +112,10 @@ try {
 切换声部后光标可能没有选中节拍，随后用 `bar` / `beat` 定位。声部超出 0–3、谱表超出当前音轨范围的请求在调用原生函数前拒绝；钢琴下谱表和第二声部的编辑隔离已实测。
 
 原生撤销能够恢复内容，但宿主的未保存标记不一定随之清零。插件如实报告这个状态。`gp_save` 也不会清零该标记；`gp_save_as` 使用宿主真正的保存流程更新状态，不直接伪造 `isDirty=false`。
+
+`gp_save` 和 `gp_save_as` 覆盖已有文件必须设置 `overwrite=true`，所有保存均拒绝覆盖其他已打开文档。复制到自身打开/保存路径会被拒绝，应使用 `gp_save_current`。覆盖前在目标目录创建临时备份，并预检文件可写性；原生保存失败后恢复原文件和保存路径，返回 `file_restored`、`save_path_restored`、`dirty_before` 和 `dirty`。文件恢复失败时保留备份并返回 `recovery_path`。不得仅根据 HTTP 成功判断保存成功。
+
+`test-saving.ps1` 的 30 项检查覆盖当前路径保存、显式覆盖、复制和另存为、跨文档保护、锁定目标和缺失目录、GPIF 与原生重开、未命名文档拒绝及临时文件清理。锁定文件的拒绝发生在原生写入之前，不能代替写入中途失败后的恢复验证。保存后撤销再重做恢复内容，当前宿主仍可能报告未保存；再次保存会恢复其原生已保存状态。
 
 `gp_score.tracks` 包含名称、简称、乐器类型、播放状态、音量、声像、移调偏移和颜色。`gp_edit_track` 的名称、简称、颜色及播放状态要求字符串；颜色格式为 `#RRGGBB`，播放状态为 `Default` / `Solo` / `Mute`。音量和声像要求数值 `0..1`，声像 `0.5` 居中；这些值不是分贝或百分数。混音设置调用原生 `setTrackChannelStripParameter`，声像参数为 11、音量参数为 12。除播放状态外均支持原生撤销；播放状态返回 `undoable=false`，不会伪造撤销历史。
 
@@ -379,6 +386,7 @@ IDocumentsManager + 0x10 → 管理器实现对象
 ./native/test-measures.ps1
 ./native/test-effects.ps1
 ./native/test-selection.ps1
+./native/test-saving.ps1
 ./native/test-lifecycle.ps1
 ./native/test-session.ps1
 ./native/test-structure.ps1

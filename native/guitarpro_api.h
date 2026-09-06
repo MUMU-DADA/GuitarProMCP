@@ -8,13 +8,29 @@
 #include <QtCore/QFileInfo>
 #include <QtCore/QMetaMethod>
 #include <QtCore/QPointer>
+#include <QtCore/QUuid>
+#include <QtCore/QSaveFile>
+#include <QtCore/QTemporaryDir>
 #include <QtWidgets/QApplication>
 #include <QtWidgets/QStackedWidget>
 #include <QtGui/QColor>
 #include <cmath>
 
 namespace guitarpro {
-struct Document { QPointer<QWidget> view; QPointer<QObject> object; gp::core::Score *score = nullptr; };
+struct Document {
+    QPointer<QWidget> view;
+    QPointer<QObject> object;
+    gp::core::Score *score = nullptr;
+    QString id() const {
+        if (!object) return {};
+        QString value = object->property("gpmcpDocumentId").toString();
+        if (value.isEmpty()) {
+            value = QUuid::createUuid().toString(QUuid::WithoutBraces);
+            object->setProperty("gpmcpDocumentId", value);
+        }
+        return value;
+    }
+};
 inline QList<Document> documents() {
     QList<Document> result;
     if (!supportedBuild()) return result;
@@ -63,8 +79,8 @@ inline QJsonObject list(const QList<QPointer<QObject>> &objects = {}) {
     QObject *current = activeDocument(objects);
     QString activeId;
     for (const auto &document : documents()) {
-        if (document.object == current) activeId = document.view->objectName();
-        result.append(QJsonObject{{"id", document.view->objectName()}, {"opened_path", document.object->property("openedFilePath").toString()},
+        if (document.object == current) activeId = document.id();
+        result.append(QJsonObject{{"id", document.id()}, {"opened_path", document.object->property("openedFilePath").toString()},
             {"save_path", document.object->property("saveFilePath").toString()}, {"dirty", document.object->property("isDirty").toBool()}, {"native_score_available", document.score != nullptr}, {"active", current ? QJsonValue(document.object == current) : QJsonValue()}});
     }
     return {{"documents", result}, {"active_document", activeId.isEmpty() ? QJsonValue() : QJsonValue(activeId)}, {"source", "Live gp::gui::IDocument objects inside GuitarPro.exe"}};
@@ -73,7 +89,7 @@ inline Document choose(const QJsonObject &args) {
     const auto available = documents();
     const QString id = args.value("document").toString();
     for (const auto &document : available)
-        if (document.view->objectName() == id || (id.isEmpty() && available.size() == 1)) return document;
+        if (document.id() == id || (id.isEmpty() && available.size() == 1)) return document;
     return {};
 }
 inline QJsonObject activate(const QJsonObject &args, const QList<QPointer<QObject>> &objects) {
@@ -88,7 +104,7 @@ inline QJsonObject activate(const QJsonObject &args, const QList<QPointer<QObjec
     const int limit = documents().size();
     for (int i = 0; i <= limit; ++i) {
         if (!target.object || !target.view || !window) return {{"error", "Document or window was closed during activation"}};
-        if (current == target.object) return {{"status", "active"}, {"document", target.view->objectName()}};
+        if (current == target.object) return {{"status", "active"}, {"document", target.id()}};
         if (i == limit || !QMetaObject::invokeMethod(window, "activateNextDocumentView", Qt::DirectConnection)) break;
         QObject *next = activeDocument(objects);
         if (!next || next == current) break;
@@ -214,7 +230,7 @@ inline QJsonObject editTempo(const QJsonObject &args) {
         document.score->setTempo(label.toStdString(), unit, float(value));
     if (std::abs(master->tempoValue() - float(value)) > 0.0001f || master->tempoUnit() != unit || master->tempoLabel() != label.toStdString())
         return {{"error", "Native tempo readback differs; inspect gp_score before retrying"}, {"tempo", tempoState(document.score)}};
-    return {{"document", document.view->objectName()}, {"tempo", tempoState(document.score)},
+    return {{"document", document.id()}, {"tempo", tempoState(document.score)},
         {"dirty", document.object->property("isDirty").toBool()}, {"undo_available", document.score->undoAvailable()}};
 }
 inline QJsonObject scoreState(const QJsonObject &args) {
@@ -237,7 +253,7 @@ inline QJsonObject scoreState(const QJsonObject &args) {
             {"color", QColor(color.red, color.green, color.blue).name()},
             {"instrument_type", QString::fromStdString(gp::core::InstrumentSet::typeToString(track->type()))}});
     }
-    return {{"document", document.view->objectName()}, {"metadata", metadata(document.score)}, {"tracks", tracks}, {"tempo", tempoState(document.score)},
+    return {{"document", document.id()}, {"metadata", metadata(document.score)}, {"tracks", tracks}, {"tempo", tempoState(document.score)},
         {"track_count", int(document.score->trackCount())}, {"cursor", cursorState(document.score)},
         {"dirty", document.object->property("isDirty").toBool()}, {"undo_available", document.score->undoAvailable()},
         {"redo_available", document.score->redoAvailable()}, {"source", "GPCore native Score API"}};
@@ -257,7 +273,7 @@ inline QJsonObject editMetadata(const QJsonObject &args) {
         const std::string value(bytes.constData(), size_t(bytes.size()));
         if (document.score->property(property) != value) document.score->setProperty(property, value);
         if (document.score->property(property) != value) return {{"error", "Native metadata readback differs"}};
-        return {{"document", document.view->objectName()}, {"property", name}, {"value", args.value("value")},
+        return {{"document", document.id()}, {"property", name}, {"value", args.value("value")},
             {"dirty", document.object->property("isDirty").toBool()}, {"undo_available", document.score->undoAvailable()}};
     }
     return {{"error", "Unknown metadata property; use the exact key from gp_score.metadata"}};
@@ -346,7 +362,7 @@ inline QJsonObject editTracks(const QJsonObject &args) {
 inline QJsonObject insertTrack(const QJsonObject &args) {
     const Document document = choose(args);
     if (!document.score) return {{"error", "Native target score unavailable"}};
-    const QString sourceId = args.value("source_document").toString(document.view->objectName());
+    const QString sourceId = args.value("source_document").toString(document.id());
     const Document source = choose(QJsonObject{{"document", sourceId}});
     if (!source.score) return {{"error", "Native source score unavailable"}};
     const int sourceIndex = args.value("source_track").toInt(-1);
@@ -410,7 +426,7 @@ inline QJsonObject moveCursor(const QJsonObject &args) {
     } else return {{"error", "axis must be track, staff, bar, voice or beat"}};
     const int observed = cursorState(document.score).value(axis).toInt(-1);
     if (!changed || observed != int(value)) return {{"error", "Native cursor rejected or clamped the requested index"}, {"cursor", cursorState(document.score)}};
-    return {{"document", document.view->objectName()}, {"cursor", cursorState(document.score)}};
+    return {{"document", document.id()}, {"cursor", cursorState(document.score)}};
 }
 inline std::shared_ptr<gp::core::Beat> selectionBeat(gp::core::Score *score, const QJsonValue &endpoint) {
     if (!endpoint.isObject()) return {};
@@ -528,12 +544,12 @@ inline QJsonObject selection(const QJsonObject &args, const QList<QPointer<QObje
     for (auto it = args.begin(); it != args.end(); ++it)
         if (!allowed.contains(it.key())) return {{"error", "Argument does not apply to this selection operation: " + it.key()}};
     auto &cursor = document.score->cursor();
-    if (operation == "state") return {{"document", document.view->objectName()}, {"cursor", cursorState(document.score)}};
+    if (operation == "state") return {{"document", document.id()}, {"cursor", cursorState(document.score)}};
     if (operation == "beats") {
         BeatSelection targets;
         const auto error = collectBeatSelection(document.score, targets);
         if (!error.isEmpty()) return {{"error", error}};
-        return {{"document", document.view->objectName()}, {"beats", targets.positions}, {"count", int(targets.beats.size())},
+        return {{"document", document.id()}, {"beats", targets.positions}, {"count", int(targets.beats.size())},
             {"skipped_placeholders", targets.placeholders}, {"cursor", cursorState(document.score)}};
     }
     const bool allTracks = args.value("all_tracks").toBool(), allVoices = args.value("all_voices").toBool();
@@ -582,10 +598,10 @@ inline QJsonObject selection(const QJsonObject &args, const QList<QPointer<QObje
         return {{"error", "Native selection found no selectable range; original cursor was retained"}};
     candidate.setLastUserSelectionRange(candidateRange);
     const auto expected = selectionState(candidate);
-    const auto activated = activate(QJsonObject{{"document", document.view->objectName()}}, objects);
+    const auto activated = activate(QJsonObject{{"document", document.id()}}, objects);
     if (activated.contains("error")) return activated;
     cursor.moveToCursorAndNotify(candidate, nullptr);
-    QJsonObject result{{"document", document.view->objectName()}, {"cursor", cursorState(document.score)}, {"index_base", 0}};
+    QJsonObject result{{"document", document.id()}, {"cursor", cursorState(document.score)}, {"index_base", 0}};
     // Notification can fill the cursor's note fields from its visual staff line.
     const auto observed = selectionState(cursor);
     bool matched = expected.value("native_modes") == observed.value("native_modes");
@@ -676,7 +692,7 @@ inline QJsonObject readBarsForScore(const gp::core::Score *score, const QJsonObj
 inline QJsonObject readBars(const QJsonObject &args) {
     const Document document = choose(args);
     auto result = readBarsForScore(document.score, args);
-    if (document.view) result["document"] = document.view->objectName();
+    if (document.view) result["document"] = document.id();
     return result;
 }
 inline std::shared_ptr<gp::core::MasterBar> masterBar(gp::core::Score *score, unsigned index) {
@@ -710,7 +726,7 @@ inline QJsonObject readMasterBars(const QJsonObject &args) {
         if (bar.contains("error")) return bar;
         bars.append(bar);
     }
-    return {{"document", document.view->objectName()}, {"bars", bars}, {"bar_count", int(master->masterBarCount())},
+    return {{"document", document.id()}, {"bars", bars}, {"bar_count", int(master->masterBarCount())},
         {"scope", "Score-wide master bars; key signatures use concert pitch"}, {"index_base", 0}};
 }
 inline QJsonObject editMeasure(const QJsonObject &args) {
@@ -766,7 +782,7 @@ inline QJsonObject editMeasure(const QJsonObject &args) {
     }
     const auto after = masterBarState(document.score, unsigned(index));
     if (after != expected) return {{"error", "Native measure readback differs; inspect master bars before retrying"}, {"observed", after}};
-    return {{"document", document.view->objectName()}, {"bar", after}, {"dirty", document.object->property("isDirty").toBool()},
+    return {{"document", document.id()}, {"bar", after}, {"dirty", document.object->property("isDirty").toBool()},
         {"undo_available", document.score->undoAvailable()}};
 }
 inline QJsonObject setFret(const QJsonObject &args) {
@@ -784,7 +800,7 @@ inline QJsonObject setFret(const QJsonObject &args) {
         const auto updated = cursor.beat();
         if (updated) for (const auto &value : updated->notes()) {
             if (value && value->string() == unsigned(string) && value->fret() == fret)
-                return {{"document", document.view->objectName()}, {"cursor", cursorState(document.score)}, {"note", noteState(*value)},
+                return {{"document", document.id()}, {"cursor", cursorState(document.score)}, {"note", noteState(*value)},
                     {"dirty", document.object->property("isDirty").toBool()}};
         }
         return {{"error", "Native fret readback differs; inspect score before retrying"}};
@@ -882,7 +898,7 @@ inline QJsonObject editConnection(const QJsonObject &args) {
     const auto after = states();
     int changed = 0;
     for (int i = 0; i < after.size(); ++i) if (before[i] != after[i]) ++changed;
-    return {{"document", document.view->objectName()}, {"kind", kind}, {"requested_enabled", enabled},
+    return {{"document", document.id()}, {"kind", kind}, {"requested_enabled", enabled},
         {"changed_selected_beats", changed}, {"observed_beats", after}, {"status", "executed"},
         {"cursor", cursorState(document.score)}, {"cursor_preserved", beforeCursor == cursorState(document.score)},
         {"dirty", document.object->property("isDirty").toBool()}, {"undo_available", document.score->undoAvailable()}};
@@ -984,7 +1000,7 @@ inline QJsonObject editNoteEffect(const QJsonObject &args) {
     if (!matches(after) || after.value("midi") != before.value("midi") ||
         after.value("fret") != before.value("fret") || currentOtherNotes != otherNotes)
         return {{"error", "Native note effect readback differs; inspect score before retrying"}, {"observed", after}};
-    return {{"document", document.view->objectName()}, {"note", after}, {"dirty", document.object->property("isDirty").toBool()},
+    return {{"document", document.id()}, {"note", after}, {"dirty", document.object->property("isDirty").toBool()},
         {"undo_available", document.score->undoAvailable()}};
 }
 inline QJsonObject editNote(const QJsonObject &args) {
@@ -1005,7 +1021,7 @@ inline QJsonObject editNote(const QJsonObject &args) {
     std::shared_ptr<gp::core::Note> existing;
     if (beat) for (const auto &note : beat->notes()) if (note && note->string() == unsigned(string)) existing = note;
     if (operation == "set" && existing) return setFret(args);
-    if (operation == "remove" && !existing) return {{"status", "unchanged"}, {"document", document.view->objectName()}};
+    if (operation == "remove" && !existing) return {{"status", "unchanged"}, {"document", document.id()}};
     const int expectedMidi = operation == "set" ? staff->midi(unsigned(string), fret) : existing->midi();
     if (operation == "set" && (expectedMidi < 0 || expectedMidi > 127)) return {{"error", "Requested fret is outside MIDI pitch range"}};
     // Native bool is add/remove, followed by string and fret. -3 requests the
@@ -1021,7 +1037,7 @@ inline QJsonObject editNote(const QJsonObject &args) {
         if (note->string() == unsigned(string)) matched = operation == "set" && note->fret() == fret && note->midi() == expectedMidi;
     }
     if (!matched) return {{"error", "Native note readback differs; inspect the score before retrying"}};
-    return {{"document", document.view->objectName()}, {"operation", operation}, {"notes", notes},
+    return {{"document", document.id()}, {"operation", operation}, {"notes", notes},
         {"rest", updated->isRest()}, {"cursor", cursorState(document.score)}, {"dirty", document.object->property("isDirty").toBool()}};
 }
 inline QJsonObject editBeat(const QJsonObject &args) {
@@ -1117,10 +1133,10 @@ inline QJsonObject editBeat(const QJsonObject &args) {
         } else if (operation == "remove") document.score->removeBeat(cursor.modelIndex());
         else return {{"error", "operation must be insert, rhythm, dots, tuplet, clear or remove"}};
     }
-    if (scope == "selection") return {{"document", document.view->objectName()}, {"affected_beats", int(targets.size())},
+    if (scope == "selection") return {{"document", document.id()}, {"affected_beats", int(targets.size())},
         {"beats", batch.positions}, {"skipped_placeholders", batch.placeholders},
         {"cursor", cursorState(document.score)}, {"dirty", document.object->property("isDirty").toBool()}};
-    return readBars(QJsonObject{{"document", document.view->objectName()}, {"track", track}, {"staff", staff}, {"bar", bar}});
+    return readBars(QJsonObject{{"document", document.id()}, {"track", track}, {"staff", staff}, {"bar", bar}});
 }
 inline QJsonObject editBars(const QJsonObject &args) {
     const Document document = choose(args);
@@ -1193,41 +1209,88 @@ inline QJsonObject playback(const QJsonObject &args, const QList<QPointer<QObjec
     } else if (operation != "state") return {{"error", "Unknown playback operation"}};
     if (!controllerObject || !document.view) return {{"error", "Document or playback controller was closed during the operation"}};
     const auto &conductor = controller->conductor();
-    return {{"document", document.view->objectName()}, {"requested", operation}, {"status", operation == "state" ? "observed" : "requested; poll state for completion"}, {"playing", controller->isPlaying()},
+    return {{"document", document.id()}, {"requested", operation}, {"status", operation == "state" ? "observed" : "requested; poll state for completion"}, {"playing", controller->isPlaying()},
         {"loop", controller->isLoopEnabled()}, {"metronome", controller->metronome().isEnabled()},
         {"countdown", controller->metronome().isCountdownEnabled()}, {"counting_down", controller->isCountingDown()},
         {"countdown_bars", int(controller->metronome().countdownBarCount())}, {"metronome_volume", controller->metronomeVolume()},
         {"tick", conductor->tickOffset()}, {"total_ticks", conductor->tickCount()}, {"score_bar_count", int(conductor->barCount())}, {"frame", double(conductor->frameOffset())},
         {"source", "Native GPRSE ConductorController matched to the document Score"}};
 }
-inline QJsonObject save(const QJsonObject &args, bool adopt = false) {
-    const QString id = args.value("document").toString(), path = args.value("path").toString();
+inline QJsonObject save(const QJsonObject &args, bool adopt = false, bool current = false) {
+    const Document chosen = choose(args);
+    if (!chosen.object || !chosen.view) return {{"error", "Choose an existing document id from gp_documents"}};
+    const QString oldPath = chosen.object->property("saveFilePath").toString();
+    const bool dirtyBefore = chosen.object->property("isDirty").toBool();
+    const QString path = current ? oldPath : args.value("path").toString();
     const QFileInfo destination(path);
     if (path.isEmpty() || !destination.isAbsolute() || destination.fileName().contains(':') || destination.suffix().toLower() != "gp" || !destination.absoluteDir().exists()) return {{"error", "Specify an absolute .gp output path in an existing directory"}};
-    if (destination.exists()) return {{"error", "Destination exists; choose a new file"}};
-    const auto docs = documents();
-    Document chosen;
-    for (const auto &document : docs) if (document.view->objectName() == id || (id.isEmpty() && docs.size() == 1)) chosen = document;
-    if (!chosen.object) return {{"error", "Choose an existing document id from gp_documents"}};
-    const int index = chosen.object->metaObject()->indexOfMethod("saveToFile(QString)");
-    if (index < 0) return {{"error", "Native saveToFile method not available"}};
-    bool saved = false;
     const QString absolute = destination.absoluteFilePath();
-    if (!chosen.object->metaObject()->method(index).invoke(chosen.object, Qt::DirectConnection, Q_RETURN_ARG(bool, saved), Q_ARG(QString, absolute)) || !saved)
-        return {{"error", "Native save did not report success; inspect the destination before retrying"}};
-    const QFileInfo output(absolute);
-    if (!output.isFile() || !output.size()) return {{"error", "Native save returned without a completed file"}};
-    if (adopt) {
-        // First create the requested new file, then let IDocument::save() perform
-        // the host's normal saved-state bookkeeping. No dirty flag is forged.
-        bool committed = false;
-        if (!QMetaObject::invokeMethod(chosen.object, "setSaveFilePath", Qt::DirectConnection, Q_ARG(QString, absolute)) ||
-            !QMetaObject::invokeMethod(chosen.object, "save", Qt::DirectConnection, Q_RETURN_ARG(bool, committed)) ||
-            !committed || chosen.object->property("isDirty").toBool())
-            return {{"error", "Copy saved, but native document save did not complete; inspect document before retrying"}, {"copy_path", absolute}};
+    auto samePath = [&](const QString &other) {
+        if (other.isEmpty()) return false;
+        const QFileInfo candidate(other);
+        const QString left = destination.exists() ? destination.canonicalFilePath() : QDir::cleanPath(absolute);
+        const QString right = candidate.exists() ? candidate.canonicalFilePath() : QDir::cleanPath(candidate.absoluteFilePath());
+        return left.compare(right, Qt::CaseInsensitive) == 0;
+    };
+    for (const auto &document : documents()) {
+        if (samePath(document.object->property("saveFilePath").toString()) || samePath(document.object->property("openedFilePath").toString())) {
+            if (document.object != chosen.object) return {{"error", "Destination belongs to another open document"}};
+            if (!adopt) return {{"error", "Use gp_save_current to save the open document, or choose a separate copy path"}};
+        }
     }
-    return {{"path", absolute}, {"bytes", double(output.size())}, {"document", chosen.view->objectName()},
-        {"copy_only", !adopt}, {"dirty", chosen.object->property("isDirty").toBool()},
+    const bool existed = destination.exists();
+    if (existed && !current && !args.value("overwrite").toBool()) return {{"error", "Destination exists; explicitly set overwrite=true"}};
+    if (existed && (!destination.isFile() || destination.isSymLink())) return {{"error", "Destination must be a regular file, not a directory or link"}};
+    const int copyMethod = chosen.object->metaObject()->indexOfMethod("saveToFile(QString)");
+    if (copyMethod < 0 || (adopt && (chosen.object->metaObject()->indexOfMethod("save()") < 0 || chosen.object->metaObject()->indexOfMethod("setSaveFilePath(QString)") < 0)))
+        return {{"error", "Native document save methods are unavailable"}};
+    // Preserve existing bytes before the host writes, and retain the backup if
+    // recovery cannot finish. All files stay on the destination volume.
+    QTemporaryDir recovery(destination.absolutePath() + "/.gpmcp-save-XXXXXX");
+    if (!recovery.isValid()) return {{"error", "Cannot create a recovery directory beside the destination"}};
+    const QString backup = recovery.filePath("original.gp");
+    if (existed && !QFile::copy(absolute, backup)) return {{"error", "Cannot back up the existing destination"}};
+    QFile probe(absolute);
+    if (!probe.open(existed ? QIODevice::ReadWrite : QIODevice::WriteOnly | QIODevice::NewOnly))
+        return {{"error", "Destination is not writable: " + probe.errorString()}};
+    probe.close();
+    if (!existed && !probe.remove()) return {{"error", "Cannot release the new destination before native saving"}};
+    auto recover = [&](const QString &message) {
+        bool restored = false;
+        if (existed) {
+            QFile source(backup);
+            QSaveFile output(absolute);
+            if (source.open(QIODevice::ReadOnly) && output.open(QIODevice::WriteOnly)) {
+                bool copied = true;
+                while (!source.atEnd()) {
+                    const QByteArray bytes = source.read(1024 * 1024);
+                    if (source.error() != QFileDevice::NoError || output.write(bytes) != bytes.size()) { copied = false; break; }
+                }
+                restored = copied && output.commit();
+            }
+        } else restored = !QFileInfo::exists(absolute) || QFile::remove(absolute);
+        const bool pathRestored = chosen.object &&
+            (chosen.object->property("saveFilePath").toString() == oldPath ||
+             (QMetaObject::invokeMethod(chosen.object, "setSaveFilePath", Qt::DirectConnection, Q_ARG(QString, oldPath)) && chosen.object->property("saveFilePath").toString() == oldPath));
+        QJsonObject result{{"error", message}, {"file_restored", restored}, {"save_path_restored", pathRestored}, {"dirty_before", dirtyBefore},
+            {"dirty", chosen.object ? QJsonValue(chosen.object->property("isDirty").toBool()) : QJsonValue()}};
+        if (!restored && existed) { recovery.setAutoRemove(false); result["recovery_path"] = backup; }
+        return result;
+    };
+    bool saved = false;
+    if (!chosen.object->metaObject()->method(copyMethod).invoke(chosen.object, Qt::DirectConnection, Q_RETURN_ARG(bool, saved), Q_ARG(QString, absolute)) || !saved)
+        return recover("Native copy save did not report success; inspect recovery and document state before retrying");
+    if (adopt) {
+        bool committed = false;
+        if (!chosen.object || !QMetaObject::invokeMethod(chosen.object, "setSaveFilePath", Qt::DirectConnection, Q_ARG(QString, absolute)) ||
+            !QMetaObject::invokeMethod(chosen.object, "save", Qt::DirectConnection, Q_RETURN_ARG(bool, committed)) ||
+            !committed || !chosen.object || chosen.object->property("isDirty").toBool())
+            return recover("Native document save did not complete; inspect recovery and document state before retrying");
+    }
+    const QFileInfo output(absolute);
+    if (!output.isFile() || !output.size()) return recover("Native save returned without a completed file");
+    return {{"path", absolute}, {"bytes", double(output.size())}, {"document", chosen.id()},
+        {"copy_only", !adopt}, {"overwrote", existed}, {"dirty", chosen.object->property("isDirty").toBool()},
         {"native_method", adopt ? "IDocument::saveToFile, setSaveFilePath, save" : "IDocument::saveToFile(QString)"}};
 }
 }

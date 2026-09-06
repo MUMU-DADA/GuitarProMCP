@@ -18,11 +18,18 @@ The normal window stays visible. To start an explicit background instance:
 ./start-installed.ps1 -Background -ScorePath C:/Scores/example.gp
 ```
 
-Default endpoint: `http://127.0.0.1:18432/mcp`. Configuration and credentials are
+Preferred endpoint: `http://127.0.0.1:18432/mcp`. The development P2 build falls
+back to another loopback port when this default is occupied; read the generated
+configuration for the actual URL. An explicit `GPMCP_PORT` remains strict.
+Configuration and credentials are
 stored under `%LOCALAPPDATA%/GuitarProMCP`, independently of the source checkout.
 The files are `native-session.json`, `mcp-client.json`, `mcp-auth-token`,
 `settings.json` and a credential-free `status.json`. Developer scripts and
 isolated tests can override the data directory with `GPMCP_DATA_DIR`.
+P2 also publishes `native-session-<UUID>.json` and `mcp-client-<UUID>.json` for
+the current instance and removes them on exit. The instance-bound client file
+must be refreshed after a process restart. The archived P1 candidate retains its
+original fixed-port behavior and does not contain these P2 changes.
 
 ## Update, Disable and Uninstall
 
@@ -59,9 +66,11 @@ reverified after Guitar Pro updates.
 
 The status dialog and `status.json` distinguish `running`, `disabled`,
 `unsupported_host`, `configuration_error`, `load_error` and `service_error`.
-A port already in use produces `service_error`; close the other plugin instance
-or use `GPMCP_PORT` with a separate data directory. Multi-instance discovery is
-still planned in P2. The initial package is a development release: remaining
+An explicitly configured port already in use produces `service_error`. Discovery,
+two clients, reconnect and default-port fallback have P2 verification; independent
+GUI processes and forwarding a second launch to open a file remain unverified.
+Actual clients must also be checked for configuration reload after a URL change.
+The initial package is a development release: remaining
 functional and reliability scope is tracked in `DEVELOPMENT_PLAN.md` and
 `COVERAGE.md` in the source repository.
 

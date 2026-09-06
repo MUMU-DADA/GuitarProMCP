@@ -7,8 +7,24 @@
 #include <QtCore/QJsonObject>
 #include <QtCore/QSaveFile>
 #include <QtCore/QStandardPaths>
+#include <windows.h>
 
 namespace gpmcp {
+inline QString processStartTime(qint64 pid) {
+    if (pid < 1 || quint64(pid) > MAXDWORD) return {};
+    HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, DWORD(pid));
+    if (!process) return {};
+    FILETIME created{}, exited{}, kernel{}, user{};
+    const bool read = GetProcessTimes(process, &created, &exited, &kernel, &user);
+    CloseHandle(process);
+    if (!read || exited.dwHighDateTime || exited.dwLowDateTime) return {};
+    return QString::number((quint64(created.dwHighDateTime) << 32) | created.dwLowDateTime);
+}
+inline bool liveDescriptor(const QJsonObject &identity) {
+    const QString created = processStartTime(identity.value("pid").toVariant().toLongLong());
+    // Preserve a live older descriptor that predates process-start identities.
+    return !created.isEmpty() && (!identity.contains("process_start_time") || identity.value("process_start_time") == created);
+}
 inline QString dataDirectory() {
     const QString configured = qEnvironmentVariable("GPMCP_DATA_DIR");
     return configured.isEmpty() ? QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation) + "/GuitarProMCP" : configured;

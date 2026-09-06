@@ -16,7 +16,7 @@ or historical passing suite does not complete a phase.
 | --- | --- | --- |
 | P0 Automatic loading | Complete | Direct EXE, real Windows shortcut, file-association command arguments, and removing the extension verified in an isolated host copy. See `native/AUTOLOAD.md`. |
 | P1 Installation | In progress; final installed-host verification pending | Prebuilt package, installation/update/disable/uninstall, normal visible startup, explicit background mode, persistent local configuration, MCP connection information. |
-| P2 Sessions and documents | In progress; connection changes uncommitted and not fully verified | Restart/reconnect, port conflicts, instance identity, multiple clients, asynchronous failure/cancellation, document lifecycle, save-current/overwrite/recovery, explicit save/discard/cancel on close. |
+| P2 Sessions and documents | In progress; connection and save checks passed, lifecycle and recovery gaps remain | Restart/reconnect, port conflicts, instance identity, multiple clients, asynchronous failure/cancellation, document lifecycle, save-current/overwrite/recovery, explicit save/discard/cancel on close. |
 | P3 Score and tracks | Pending | Missing notation/effects, keyboard/percussion notes, cross-track operations, instrument/tuning/capo/transposition, complex repeats/endings/jumps, verified read/write/undo/persistence/playback. |
 | P4 Selection and clipboard | Pending | Partial track sets, complex voice ranges, batch commands, special/repeated paste, complex cut/replace, tuning/transposition/percussion compatibility, isolated system-clipboard verification. |
 | P5 Playback and audio | Pending | Tempo points/ramps, loop ranges, mixing/effects/sounds/devices, repeat/jump timeline, accurate seeking and multi-document isolation. |
@@ -149,9 +149,13 @@ save/discard/cancel on close. Never silently discard user changes.
 
 Exit gate: successful and failed workflows are verified against actual files and
 native state, wrong-target writes are rejected, and request completion matches
-what happened in the host. Current connection changes compile and have a working
-single-host handshake, but the new multi-host test does not pass: the second
-launch exits and forwards to the existing process. P2 is not accepted.
+what happened in the host. Connection checks now cover two clients, identity,
+restart and port fallback. Save-current, explicit overwrite and preservation
+after rejected writes are verified. A second GUI launch exits, but opening its
+requested score in the existing host has not passed in visible or background
+mode. Independent GUI processes, native mid-write failure recovery, full
+asynchronous completion/cancellation and close policies remain open. P2 is not
+accepted.
 
 ### P3: Complete musical editing
 
@@ -396,8 +400,43 @@ other explicit gaps in that file remain open.
   reconnection implemented; build and a single-host handshake succeeded. Full
   verification is pending, and no P2 completion commit exists.
 - P2 investigation: `native/test-instances.ps1` currently fails because a second
-  GUI launch exits normally and forwards to the existing process, including
+  GUI launch exits normally instead of providing an independent host, including
   when launched from a different isolated installation. The host inherits
   QtSingleApplication; no supported independent-instance mode has been verified.
   Preserve this boundary while testing concurrent clients and connection
   isolation independently.
+- P2: document IDs are now UUIDs stored on the native document, replacing
+  reusable view names. All document tools use that identity, including clipboard
+  metadata and cross-document operations. Restart and reopen reject old IDs.
+- P2: `gp_save_current` and explicit `overwrite=true` for copy/Save As implemented.
+  Existing destination bytes are backed up before native writing; failed native
+  writes attempt file/path recovery and retain the backup if file recovery
+  fails. Thirty checks verify save-current, overwrite, protected open documents,
+  locked/missing destinations, native state, GPIF and reopening. Failure during
+  the native write itself has not yet been injected or verified.
+- P2: full fourteen-suite regression passed 2225 checks with exit code 0 and
+  descriptor cleanup at
+  `artifacts/regression-a5bf1961faf441cfa42eabf4782296e9/regression.json`.
+  Installation 43 plus protocol 26 passed at
+  `artifacts/installation-8253afa705c0458bad1fe25ea708b534/verification.json`.
+  These runs precede the subsequent exited-process identity fix below.
+- P2: retaining a terminated process handle reproduced stale alias ownership:
+  Windows still returns its creation time. Identity probing now also checks
+  the exit timestamp. All 53 connection checks passed after this fix:
+  `artifacts/instances-d32b829a0032440a86a001624a5d01df/verification.json`.
+- P2: `test-instances.ps1 -CheckLaunchForwarding` remains a separately runnable
+  failing workflow, not counted among the passing connection checks. The second
+  process exits with code 0 but its score does not appear in the existing host;
+  native `gp_open` does open that same kind of fixture. Visible-mode evidence:
+  `artifacts/instances-fa5b0650158348838bc0f681a3f46daa/verification.json`.
+  Earlier statements that it forwarded successfully were not supported by file
+  readback. This still requires investigation and is not a completed P2 gate.
+- P2 checkpoint validation after the exited-process fix: all fourteen suites,
+  2225 checks, passed with exit code 0 and descriptor removal:
+  `artifacts/regression-dd6830958c334f7cb5ad42add6e4bd4d/regression.json`.
+  Core SHA-256:
+  `00470B0D0F90015EF32076A37002BFC865DF0F43989FA954BF4585CB830F356C`.
+  The same core passed all 53 connection checks under Windows PowerShell 5.1:
+  `artifacts/instances-5524513fd40d4b2b988926b4abf5fd92/verification.json`.
+  This is an intermediate P2 checkpoint; P1 installed-host acceptance and the
+  remaining P2-P7 requirements are still open.

@@ -31,13 +31,18 @@ inline void showStatus(QWidget *parent) {
         detail->setWordWrap(true);
         layout->addRow(detail);
     }
-    QString session = qEnvironmentVariable("GPMCP_SESSION_FILE");
+    QString session = qApp->property("gpmcpSessionFile").toString();
+    if (session.isEmpty()) session = qEnvironmentVariable("GPMCP_SESSION_FILE");
     if (session.isEmpty()) session = QDir(dataDirectory()).filePath("native-session.json");
     QFile descriptor(session);
     QString endpoint = "Unavailable";
+    QString config;
     if (descriptor.open(QIODevice::ReadOnly)) {
         const auto identity = QJsonDocument::fromJson(descriptor.readAll()).object();
-        if (identity.value("pid").toVariant().toLongLong() == QCoreApplication::applicationPid()) endpoint = identity.value("url").toString();
+        if (identity.value("pid").toVariant().toLongLong() == QCoreApplication::applicationPid()) {
+            endpoint = identity.value("url").toString();
+            config = identity.value("client_config").toString();
+        }
     }
     auto address = new QLabel(endpoint, dialog);
     address->setTextInteractionFlags(Qt::TextSelectableByMouse);
@@ -55,7 +60,6 @@ inline void showStatus(QWidget *parent) {
         if (writeEnabled(checked)) pending->setText("Restart required");
         else QMessageBox::warning(dialog, "Guitar Pro MCP", "Cannot update settings.json");
     });
-    const QString config = QFileInfo(session).dir().filePath("mcp-client.json");
     auto openConfig = new QPushButton(dialog->style()->standardIcon(QStyle::SP_DirOpenIcon), "Open client configuration", dialog);
     openConfig->setEnabled(QFileInfo::exists(config));
     QObject::connect(openConfig, &QPushButton::clicked, dialog, [config] { QDesktopServices::openUrl(QUrl::fromLocalFile(config)); });
