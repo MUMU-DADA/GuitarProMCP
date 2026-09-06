@@ -15,7 +15,15 @@ MCP 客户端
 
 宿主剪贴板互通已有实验性实现，但尚未完成隔离环境验证，默认关闭。它不计入下述已通过检查；当前默认 `gp_clipboard` 仍使用插件独立缓冲区。开发入口、已知限制和测试状态见 [宿主剪贴板实验](native/README.md#宿主剪贴板实验)。
 
-## 编译、启动与连接
+## 安装与自动加载
+
+安装入口为 `Install.cmd` 或 `install-plugin.ps1`。预编译包由 `package.ps1` 生成，使用者不需要编译器或 Qt SDK。安装器在软件现有 `Plugins/imageformats` 和 `Plugins/generic` 目录中新增自动加载器和 MCP 核心，并记录文件哈希；不会替换宿主 EXE、Qt DLL、快捷方式或文件关联。
+
+安装后从原来的 Guitar Pro 入口启动，正常窗口默认可见；菜单栏的 **MCP** 入口提供服务状态、启动开关及客户端配置。默认运行数据位于 `%LOCALAPPDATA%/GuitarProMCP`。后台启动使用 `start-installed.ps1 -Background`。具体安装、更新、停用和卸载命令见 [安装说明](INSTALL.md)。
+
+自动加载使用已验证的 Qt 图像插件发现入口，该加载器不处理图像。调用私有接口前检查宿主文件哈希。不兼容版本、无效配置和服务启动失败有明确诊断。它仍是开发版本，完整交付状态见 [开发计划](DEVELOPMENT_PLAN.md)，加载机制和验证边界见 [自动加载决策](native/AUTOLOAD.md)。
+
+## 开发编译、启动与连接
 
 需要已安装的 Visual Studio x64 C++ 构建工具和 Qt 5.15.2 MSVC x64 开发包。当前工作区的 Qt 开发包位于 `.tools/qt/5.15.2/msvc2019_64`；首次克隆时需要在项目内准备该开发包。
 
@@ -29,7 +37,7 @@ MCP 客户端
 # ./start-plugin.ps1 -ScorePath C:/绝对路径/曲谱.gp
 ```
 
-插件输出到 `.tools/native/plugins/generic/guitarpro_mcp.dll`。启动脚本通过新进程的环境变量加载插件；插件默认维持隐藏模式，在 Qt 控件和底层窗口两层禁止自动获取焦点。它不会附加到已经运行的普通 Guitar Pro 实例。可通过 `gp_window restore` 恢复正常可见窗口，再用 `hide` 返回后台模式。
+插件输出到 `.tools/native/plugins/generic/guitarpro_mcp.dll`。开发启动脚本通过新进程的环境变量加载插件，默认使用后台模式，在 Qt 控件和底层窗口两层禁止自动获取焦点；`-Visible` 可选择可见启动。它不会附加到已经运行的普通 Guitar Pro 实例。可通过 `gp_window restore` 恢复正常可见窗口，再用 `hide` 返回后台模式。
 
 插件启动后生成以下本地文件：
 
@@ -41,13 +49,14 @@ MCP 客户端
 
 将 `.cache/mcp-client.json` 中的服务器配置接入支持 HTTP MCP 的客户端。[mcp.example.json](mcp.example.json) 是使用占位令牌的模板。默认端点为 `http://127.0.0.1:18432/mcp`，协议版本为 `2025-06-18`。
 
-宿主进程退出后，MCP 服务随之停止。重新编译 DLL 前应关闭该插件实例。项目没有修改 Guitar Pro 安装目录、系统环境变量或全局 MCP 客户端配置。
+宿主进程退出后，MCP 服务随之停止。重新编译 DLL 前应关闭加载该构建产物的插件实例。开发启动脚本不修改安装目录；正式安装器管理其自行安装的文件。系统环境变量及全局 MCP 客户端配置不会自动修改。
 
 ## 当前 MCP 工具
 
 | 工具 | 原生能力 |
 | --- | --- |
 | `gp_capabilities` | 宿主身份、Qt 线程、前台进程及能力边界 |
+| `gp_dialogs` | 当前模态对话框的标题、消息和按钮；存在模态对话框时阻止原生写入，界面操作限于该对话框 |
 | `gp_documents` | 文档 ID、打开路径、保存路径、未保存状态、活动文档 |
 | `gp_templates` / `gp_new` | 枚举内置模板；从模板异步新建无保存路径的独立曲谱 |
 | `gp_open` / `gp_activate` | 运行中异步打开已有 `.gp` 文件；原生切换活动文档 |

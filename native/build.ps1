@@ -26,5 +26,11 @@ $clIncludes = $includeDirs | ForEach-Object { "/I$_" }
 & cl /nologo /std:c++17 /EHsc /MD /O2 /utf-8 /LD /DQT_NO_DEBUG /DQT_PLUGIN @clIncludes $source (Join-Path $PSScriptRoot 'mcp_server.cpp') "/Fo$buildDir/" "/Fd$buildDir/guitarpro_mcp.pdb" "/Fe$pluginDir/guitarpro_mcp.dll" /link "/LIBPATH:$QtDir/lib" Qt5Core.lib Qt5Gui.lib Qt5Widgets.lib Qt5Network.lib User32.lib "$buildDir/GPCore.lib" "$buildDir/GPRSE.lib" "/IMPLIB:$buildDir/guitarpro_mcp.lib"
 if ($LASTEXITCODE -ne 0) { throw '原生插件编译失败。' }
 Write-Output "插件已生成：$pluginDir/guitarpro_mcp.dll"
+$autoloadDir = Join-Path $projectRoot '.tools/native/plugins/imageformats'
+New-Item -ItemType Directory -Force -Path $autoloadDir | Out-Null
+& (Join-Path $QtDir 'bin/moc.exe') @mocIncludes (Join-Path $PSScriptRoot 'autoload.cpp') -o (Join-Path $buildDir 'autoload.moc')
+if ($LASTEXITCODE -ne 0) { throw 'Autoload moc failed.' }
+& cl /nologo /std:c++17 /EHsc /MD /O2 /LD /DQT_NO_DEBUG /DQT_PLUGIN @clIncludes (Join-Path $PSScriptRoot 'autoload.cpp') "/Fo$buildDir/" "/Fe$autoloadDir/guitarpro_mcp_autoload.dll" /link "/LIBPATH:$QtDir/lib" Qt5Core.lib Qt5Gui.lib Qt5Widgets.lib "/IMPLIB:$buildDir/guitarpro_mcp_autoload.lib"
+if ($LASTEXITCODE -ne 0) { throw 'Autoload compilation failed.' }
 
 

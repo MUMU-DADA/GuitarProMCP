@@ -1,6 +1,7 @@
 #pragma once
 #include "discovery.h"
 #include "guitarpro_abi.h"
+#include "host_build.h"
 #include <QtCore/QCryptographicHash>
 #include <QtCore/QFile>
 #include <QtCore/QDir>
@@ -14,20 +15,6 @@
 
 namespace guitarpro {
 struct Document { QPointer<QWidget> view; QPointer<QObject> object; gp::core::Score *score = nullptr; };
-inline QByteArray hash(const QString &path) {
-    QFile file(path); if (!file.open(QIODevice::ReadOnly)) return {};
-    QCryptographicHash hash(QCryptographicHash::Sha256);
-    if (!hash.addData(&file)) return {};
-    return hash.result().toHex();
-}
-inline bool supportedBuild() {
-    static const bool supported = [] {
-        const QDir directory(QFileInfo(QCoreApplication::applicationFilePath()).absolutePath());
-        return hash(QCoreApplication::applicationFilePath()) == "b233b0f1c87deb3aece693d51e8d3c3a841c88fee78828607b20034737c4c6df" &&
-            hash(directory.filePath("GPCore.dll")) == "9425f3e8eb627d328e0cb01146d43045d86d1ba639f73718bbe7fccf733bd250";
-    }();
-    return supported;
-}
 inline QList<Document> documents() {
     QList<Document> result;
     if (!supportedBuild()) return result;

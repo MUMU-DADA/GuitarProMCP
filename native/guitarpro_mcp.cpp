@@ -6,6 +6,8 @@
 #include <QtWidgets/QAbstractButton>
 #include <QtWidgets/QWidget>
 #include <QtWidgets/QStackedWidget>
+#include <QtWidgets/QDialog>
+#include <QtWidgets/QLabel>
 #include <QtCore/QElapsedTimer>
 #include <QtCore/QFileInfo>
 #include <QtCore/QDirIterator>
@@ -16,6 +18,7 @@
 #include <QtCore/QMetaMethod>
 #include <QtCore/QThread>
 #include "mcp_server.h"
+#include "plugin_config.h"
 #include "discovery.h"
 #include "guitarpro_api.h"
 #include "guitarpro_clipboard.h"
@@ -51,9 +54,40 @@ class Bridge : public QObject {
     QJsonObject closing;
     QPointer<QWidget> closingView;
     QElapsedTimer closingElapsed;
-    bool hiddenMode = true;
+    bool hiddenMode = qEnvironmentVariable("GPMCP_BACKGROUND") == "1";
+    bool shuttingDown = false;
     const bool originalQuitOnLastWindow = qApp->quitOnLastWindowClosed();
     QPointer<QWidget> noFocusWindow;
+
+    void shutdown() {
+        if (shuttingDown) return;
+        shuttingDown = true;
+        creationPoll.stop();
+        if (qApp) {
+            qApp->removeEventFilter(this);
+            qApp->setProperty("gpmcpBridge", QVariant());
+        }
+        for (const auto &object : nativeObjects)
+            if (object) QObject::disconnect(object, nullptr, this, nullptr);
+        registry.uninstall();
+        server.stop();
+        clipboardBuffer = {};
+        nativeObjects.clear(); observed.clear(); creationBefore.clear();
+    }
+
+    QJsonObject modalState() const {
+        QWidget *modal = QApplication::activeModalWidget();
+        if (!modal) return {{"blocked", false}};
+        QJsonArray labels, buttons;
+        for (QLabel *label : modal->findChildren<QLabel *>()) {
+            if (labels.size() >= 24) break;
+            if (!label->text().isEmpty()) labels.append(label->text().left(2048));
+        }
+        for (QAbstractButton *button : modal->findChildren<QAbstractButton *>())
+            buttons.append(QJsonObject{{"name", button->objectName()}, {"text", button->text()}, {"enabled", button->isEnabled()}});
+        return {{"blocked", true}, {"class", modal->metaObject()->className()}, {"name", modal->objectName()},
+            {"title", modal->windowTitle()}, {"visible", modal->isVisible()}, {"labels", labels}, {"buttons", buttons}};
+    }
 
     void preventActivation(QWidget *window) {
         qApp->setQuitOnLastWindowClosed(false);
@@ -251,6 +285,11 @@ class Bridge : public QObject {
             return {{"error", "Stale snapshot; observe again"}};
         QPointer<QObject> object = observed.value(args.value("id").toInt());
         if (!object) return {{"error", "Observed object no longer exists"}};
+        if (QWidget *modal = QApplication::activeModalWidget()) {
+            auto target = qobject_cast<QWidget *>(object.data());
+            if (!target || (target != modal && !modal->isAncestorOf(target)))
+                return {{"error", "A modal dialog blocks actions outside that dialog"}, {"dialog", modalState()}};
+        }
         if (auto widget = qobject_cast<QWidget*>(object.data()))
             if (!widget->isEnabled()) return {{"error", "Widget is disabled"}};
         if (operation == "native_trigger") {
@@ -295,6 +334,10 @@ class Bridge : public QObject {
 
     void start() {
         sessionFile = qEnvironmentVariable("GPMCP_SESSION_FILE");
+        if (sessionFile.isEmpty()) sessionFile = QDir(gpmcp::dataDirectory()).filePath("native-session.json");
+        if (!QDir().mkpath(QFileInfo(sessionFile).absolutePath())) {
+            gpmcp::diagnostic("configuration_error", "Cannot create the MCP session directory"); return;
+        }
         const QJsonObject str{{"type", "string"}}, integer{{"type", "integer"}}, boolean{{"type", "boolean"}};
         QJsonArray tools;
         auto add = [&](const QString &name, const QString &description, QJsonObject properties, QJsonArray required = {}) {
@@ -334,6 +377,7 @@ class Bridge : public QObject {
         add("gp_save", "调用原生文档 saveToFile 保存新副本；不使用对话框或输入模拟。", {{"document", str}, {"path", str}}, {"path"});
         add("gp_window", "通过 Qt 原生窗口方法设置测试窗口状态；控制操作本身不需要前台窗口。", {{"state", str}}, {"state"});
         add("gp_capabilities", "原生 C++ 插件身份、后台控制能力及尚未覆盖的范围。", {});
+        add("gp_dialogs", "Read the active modal dialog, its message labels and available buttons. Native score mutations are blocked until it is resolved.", {});
         add("gp_objects", "读取宿主 Qt 对象、属性和可调用方法；无需窗口可见或前台。", {{"query", str}, {"offset", integer}, {"limit", integer}, {"include_hidden", boolean}});
         add("gp_actions", "枚举原生 QAction；禁用状态可能受宿主内部上下文影响。", {{"query", str}, {"offset", integer}, {"limit", integer}, {"include_hidden", boolean}});
         QString clipboardDescription = "原生曲谱片段：state 查看插件缓冲区，copy/cut 复制或剪切明确选区，read 读取副本，paste 粘贴，clear 清空插件缓冲区。read/paste 需当前 id。scope 默认 cursor 插入，可用 selection 替换选区。跨小节或多轨粘贴会顺移全曲小节；多声部片段要求目标处于全部声部模式。read 的谱表索引见 tracks 与 source_selection。默认操作不访问系统剪贴板。";
@@ -343,6 +387,11 @@ class Bridge : public QObject {
         add("gp_set_property", "原生 Qt 属性设置；需使用观察结果中允许写入的属性。", {{"snapshot", str}, {"id", integer}, {"property", str}, {"value", QJsonObject{}}}, {"snapshot", "id", "property", "value"});
         add("gp_close_window", "调用原生窗口关闭方法，保留未保存文档确认。", {{"snapshot", str}, {"id", integer}}, {"snapshot", "id"});
         if (!server.start(sessionFile, info(), tools, [this](const QString &tool, const QJsonObject &args) {
+            if (tool == "gp_dialogs") return modalState();
+            static const QSet<QString> modalReads{"gp_capabilities", "gp_documents", "gp_score", "gp_read_bars", "gp_read_master_bars", "gp_templates", "gp_objects", "gp_actions", "gp_debug_objects", "gp_debug_resources"};
+            static const QSet<QString> dialogActions{"gp_trigger", "gp_set_property", "gp_close_window", "gp_window"};
+            if (QApplication::activeModalWidget() && !modalReads.contains(tool) && !dialogActions.contains(tool))
+                return QJsonObject{{"error", "A modal dialog blocks native operations; inspect gp_dialogs"}, {"dialog", modalState()}};
             // Host command observers update the active document's dirty state.
             // Bind every model mutation to its document before calling native APIs.
             static const QSet<QString> mutations{"gp_edit_note", "gp_edit_note_effect", "gp_edit_connection", "gp_edit_beat", "gp_edit_bars", "gp_edit_track", "gp_edit_tracks", "gp_insert_track", "gp_edit_tempo", "gp_edit_measure", "gp_set_fret", "gp_edit_metadata", "gp_cursor", "gp_undo_redo", "gp_save_as"};
@@ -499,18 +548,30 @@ class Bridge : public QObject {
                 result["native_score_abi_verified"] = guitarpro::supportedBuild();
                 result["runtime"] = "C++ DLL inside GuitarPro.exe, no external language runtime";
                 result["transport"] = "MCP Streamable HTTP";
+                result["session_file"] = sessionFile;
+                result["plugin_data_directory"] = gpmcp::dataDirectory();
+                result["modal_dialog"] = modalState();
                 result["limitations"] = QJsonArray{"Full control remains incomplete: closing with unsaved changes, complete notation/effects, track management, import/export, audio/settings and compatibility need further native adapters and verification.", "New/open/close document workflows and playback can complete asynchronously; poll document/playback state. Activate a document before playback control."};
                 return result;
             }
             const QHash<QString, QString> operations{{"gp_objects", "native_objects"}, {"gp_actions", "native_actions"}, {"gp_trigger", "native_trigger"}, {"gp_set_property", "native_set_property"}, {"gp_close_window", "native_close_window"}};
             return execute(operations.value(tool), args);
-        })) qWarning("GuitarProMCP: failed to start native MCP HTTP server");
+        })) {
+            gpmcp::diagnostic("service_error", server.errorString());
+            qWarning("GuitarProMCP: failed to start native MCP HTTP server");
+        } else gpmcp::diagnostic("running");
     }
 
 protected:
     bool eventFilter(QObject *object, QEvent *event) override {
         if (event->type() == QEvent::ThreadChange) { registry.forget(object); nativeObjects.remove(object); return false; }
         const QByteArray name = object->metaObject()->className();
+        if (name == "gp::gui::MainWindow" && event->type() == QEvent::Polish) {
+            // Hidden mode disables Qt's last-visible-window exit; an accepted host close still exits.
+            connect(object, &QObject::destroyed, this, [this] {
+                if (hiddenMode && !shuttingDown) QCoreApplication::quit();
+            });
+        }
         // The host may request activation late in startup and document opening.
         // Set the Qt focus policy before showing, then keep explicit hidden mode.
         if (hiddenMode && name == "gp::gui::MainWindow" && (event->type() == QEvent::Polish || event->type() == QEvent::Show)) {
@@ -532,13 +593,18 @@ protected:
     }
 public:
     Bridge() {
-        qApp->setQuitOnLastWindowClosed(false);
+        // Qt owns generic-plugin return values; release resources without deleting its object.
+        connect(qApp, &QCoreApplication::aboutToQuit, this, [this] { shutdown(); });
+        if (hiddenMode) qApp->setQuitOnLastWindowClosed(false);
         connect(&creationPoll, &QTimer::timeout, this, [this]() { checkCreation(); });
         qApp->installEventFilter(this);
         const QString qtCore = QDir(QCoreApplication::applicationDirPath()).filePath("Qt5Core.dll");
         if (guitarpro::supportedBuild() && guitarpro::hash(qtCore) == "c2f85bd55c31e5380dd99f0d517ee183a54c3852480bc497dc30a5483fd70ff2") registry.install();
-        setObjectName("GuitarProMCPBridge"); QTimer::singleShot(0, this, [this]() { start(); });
+        setObjectName("GuitarProMCPBridge");
+        qApp->setProperty("gpmcpBridge", QVariant::fromValue<QObject *>(this));
+        QTimer::singleShot(0, this, [this]() { if (!shuttingDown) start(); });
     }
+    ~Bridge() override { shutdown(); }
 };
 
 class GuitarProPlugin : public QGenericPlugin {
@@ -549,6 +615,7 @@ public:
         if (name.compare("guitarpro_mcp", Qt::CaseInsensitive) ||
             QFileInfo(QCoreApplication::applicationFilePath()).baseName().compare("GuitarPro", Qt::CaseInsensitive) ||
             !QString::fromLatin1(qVersion()).startsWith("5.15.")) return nullptr;
+        if (qApp->property("gpmcpBridge").value<QObject *>()) return nullptr;
         return new Bridge;
     }
 };

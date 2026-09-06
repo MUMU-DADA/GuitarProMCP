@@ -1,7 +1,9 @@
-param(
+﻿param(
     [string]$ScorePath = '',
     [string]$Exe = 'C:\Program Files\Arobas Music\Guitar Pro 8\GuitarPro.exe',
-    [string]$SessionFile = ''
+    [string]$SessionFile = '',
+    [switch]$Visible,
+    [switch]$PassThru
 )
 $ErrorActionPreference = 'Stop'
 $pluginRoot = Join-Path $PSScriptRoot '.tools/native/plugins'
@@ -18,13 +20,15 @@ if (Test-Path -LiteralPath $SessionFile) {
     }
 }
 $originalEnvironment = @{}
-foreach ($name in @('QT_PLUGIN_PATH','QT_QPA_GENERIC_PLUGINS','GPMCP_SESSION_FILE','TEMP','TMP')) {
+foreach ($name in @('QT_PLUGIN_PATH','QT_QPA_GENERIC_PLUGINS','GPMCP_SESSION_FILE','GPMCP_BACKGROUND','GPMCP_DATA_DIR','TEMP','TMP')) {
     $originalEnvironment[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
 }
 try {
     $env:QT_PLUGIN_PATH = if ($env:QT_PLUGIN_PATH) { "$pluginRoot;$env:QT_PLUGIN_PATH" } else { $pluginRoot }
     $env:QT_QPA_GENERIC_PLUGINS = 'guitarpro_mcp'
     $env:GPMCP_SESSION_FILE = $SessionFile
+    $env:GPMCP_DATA_DIR = Split-Path -Parent $SessionFile
+    $env:GPMCP_BACKGROUND = if ($Visible) { '0' } else { '1' }
     $env:TEMP = Join-Path $PSScriptRoot '.cache/tmp'
     $env:TMP = $env:TEMP
     $launch = @{FilePath=$Exe; WorkingDirectory=(Split-Path -Parent $Exe); PassThru=$true; WindowStyle='Hidden'; RedirectStandardError=(Join-Path $PSScriptRoot '.cache/plugin-start.stderr.log')}
@@ -33,6 +37,7 @@ try {
         $launch.ArgumentList = @('--open', "`"$resolvedScore`"")
     }
     $application = Start-Process @launch
+    $null = $application.Handle
 } finally {
     foreach ($name in $originalEnvironment.Keys) {
         if ($null -eq $originalEnvironment[$name]) { Remove-Item -LiteralPath "Env:$name" -ErrorAction SilentlyContinue }
@@ -44,6 +49,7 @@ while ([DateTime]::UtcNow -lt $deadline) {
     if (Test-Path -LiteralPath $SessionFile) {
         $session = Get-Content -LiteralPath $SessionFile -Raw | ConvertFrom-Json
         if ($session.pid -eq $application.Id -and $session.backend -eq 'in_process_qt_plugin') {
+            if ($PassThru) { return $application }
             Write-Output "插件已加载到 Guitar Pro 进程：PID $($session.pid)，Qt $($session.qt_version)"
             Write-Output "会话文件：$SessionFile"
             return

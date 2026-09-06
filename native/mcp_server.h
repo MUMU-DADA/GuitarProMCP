@@ -9,7 +9,7 @@
 class McpServer final : public QObject {
     struct Session { QString version; bool initialized = false; qint64 touched = 0; };
     QTcpServer listener{this};
-    QString token, descriptorPath;
+    QString token, descriptorPath, startupError;
     bool invoking = false;
     QHash<QString, Session> sessions;
     QJsonArray catalog;
@@ -18,6 +18,8 @@ class McpServer final : public QObject {
 public:
     explicit McpServer(QObject *parent = nullptr) : QObject(parent) {}
     ~McpServer() override;
+    void stop();
+    QString errorString() const { return startupError; }
     bool start(const QString &path, QJsonObject identity, QJsonArray tools,
                std::function<QJsonObject(const QString &, const QJsonObject &)> call);
 };

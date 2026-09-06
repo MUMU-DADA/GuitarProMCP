@@ -23,6 +23,8 @@
 
 ## 构建和加载
 
+正式安装使用根目录的 `Install.cmd` / `install-plugin.ps1`，说明见 [INSTALL.md](../INSTALL.md)。`autoload.cpp` 作为 Qt 图像插件加载器，在主事件循环中校验宿主并加载现有 MCP 核心；`host_build.h` 提供宿主检查，`plugin_config.h` 管理用户配置与诊断，`plugin_status.h` 提供软件内状态入口。它不参与图像编解码。正常安装默认可见，开发启动脚本默认后台。
+
 ```powershell
 ./native/build.ps1
 # 或：
@@ -328,7 +330,7 @@ Invoke-McpTool $connection gp_undo_redo @{operation='undo';document=$target}
 
 这些工具没有使用鼠标事件或键盘快捷键，但 Qt 动作是否启用仍由宿主上下文决定。控件属性修改也不等于模型修改；曲谱业务操作应优先使用前述 GPCore 工具。
 
-`gp_window` 的 `state` 为 `hide`、`minimize` 或 `restore`。插件默认隐藏主窗口，并对 `QWidget` 及已有 `QWindow` 同步设置 `WindowDoesNotAcceptFocus`；底层窗口不能只等下一次显示才更新。`restore` 解除插件设置的标志，使窗口可正常接受焦点，`hide` 重新进入后台模式。
+`gp_window` 的 `state` 为 `hide`、`minimize` 或 `restore`。显式 `GPMCP_BACKGROUND=1` 时隐藏主窗口，并对 `QWidget` 及已有 `QWindow` 同步设置 `WindowDoesNotAcceptFocus`；底层窗口不能只等下一次显示才更新。`restore` 解除插件设置的标志，使窗口可正常接受焦点，`hide` 重新进入后台模式。开发启动脚本默认设置该变量，正常安装启动不设置。
 
 后台模式关闭 Qt 的“最后窗口关闭即退出”，避免无可见窗口时关闭或重开曲谱导致服务退出。恢复可见窗口时恢复原退出设置。`gp_close_window` 显式关闭主窗口时，只有宿主接受关闭才退出应用；有未保存内容时保留宿主确认流程。进程退出可能先于关闭请求的 HTTP 响应完全发送，客户端应以宿主退出和连接断开确认服务已停止。
 

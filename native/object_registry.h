@@ -37,12 +37,16 @@ public:
         hooks[4] = reinterpret_cast<quintptr>(&removed);
         return true;
     }
-    ~ObjectRegistry() {
-        if (!hooks) return;
-        if (hooks[3] == reinterpret_cast<quintptr>(&added)) hooks[3] = 0;
-        if (hooks[4] == reinterpret_cast<quintptr>(&removed)) hooks[4] = 0;
-        active = nullptr;
+    void uninstall() {
+        if (hooks) {
+            if (hooks[3] == reinterpret_cast<quintptr>(&added)) hooks[3] = 0;
+            if (hooks[4] == reinterpret_cast<quintptr>(&removed)) hooks[4] = 0;
+            hooks = nullptr;
+        }
+        if (active == this) active = nullptr;
+        entries.clear();
     }
+    ~ObjectRegistry() { uninstall(); }
     void forget(QObject *object) { entries.remove(object); }
     QList<QPointer<QObject>> objects() const {
         QList<QPointer<QObject>> result;
