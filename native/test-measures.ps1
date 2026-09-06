@@ -11,7 +11,7 @@ $connection = New-McpSession -SessionFile $SessionFile
 function Measures { Invoke-McpTool $connection gp_read_master_bars @{document=$id;count=2} }
 function Notes { Invoke-McpTool $connection gp_read_bars @{document=$id;count=2} }
 function SoundingContent($state) {
-    $bars=Json $state.bars | ConvertFrom-Json -NoEnumerate
+    $bars=(Json @{items=$state.bars} | ConvertFrom-Json).items
     foreach ($note in @($bars | ForEach-Object voices | ForEach-Object beats | ForEach-Object notes)) { $note.PSObject.Properties.Remove('accidental') }
     Json $bars
 }
@@ -38,7 +38,7 @@ try {
     Invoke-McpTool $connection gp_cursor @{document=$id;axis='bar';index=0} | Out-Null
     Invoke-McpTool $connection gp_cursor @{document=$id;axis='beat';index=0} | Out-Null
     $before=Measures
-    $expectedBars=Json $before.bars | ConvertFrom-Json -NoEnumerate
+    $expectedBars=(Json @{items=$before.bars} | ConvertFrom-Json).items
     $beforeNotes=Notes
     Assert ($before.bar_count -eq 2 -and $before.bars[0].time_signature.numerator -eq 4 -and $before.bars[0].time_signature.denominator -eq 4) 'Fixture master time signature differs'
     Assert ($before.bars[0].key_signature.accidentals -eq 0 -and $before.bars[0].key_signature.major -and -not $before.bars[0].repeat_end) 'Fixture key or repeat state differs'

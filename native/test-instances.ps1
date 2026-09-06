@@ -1,4 +1,4 @@
-param([Parameter(Mandatory=$true)][string]$HostDirectory, [switch]$CheckLaunchForwarding, [switch]$Visible)
+param([Parameter(Mandatory=$true)][string]$HostDirectory, [switch]$CheckLaunchForwarding, [switch]$Visible, [ValidateRange(0,60000)][int]$StartupSettlingMs = 5000)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $HostDirectory = [IO.Path]::GetFullPath($HostDirectory)
@@ -6,8 +6,10 @@ foreach ($directory in @($HostDirectory)) {
     if (-not $directory.StartsWith(([IO.Path]::GetFullPath((Join-Path $root '.tools')) + '\'), [StringComparison]::OrdinalIgnoreCase)) { throw 'Use isolated host copies under .tools.' }
 }
 . "$PSScriptRoot/mcp-client.ps1"
+$ddeClient = Join-Path $root '.tools/dde-client/dde-open.exe'
+if ($CheckLaunchForwarding -and -not (Test-Path -LiteralPath $ddeClient)) { throw 'Build native/build-dde-client.ps1 before testing the registered file-association protocol.' }
 $run = Join-Path $root ('artifacts/instances-' + [guid]::NewGuid().ToString('N'))
-$data = Join-Path $run 'data'
+$data = Join-Path $run ('data ' + [char]0x4f1a + [char]0x8bdd)
 New-Item -ItemType Directory -Path $data -Force | Out-Null
 $exe = Join-Path $HostDirectory 'GuitarPro.exe'
 $checks = 0
@@ -50,7 +52,7 @@ function Start-Host {
 function Stop-Host($hostInstance) {
     $documents = Invoke-McpTool $hostInstance.connection gp_documents
     Assert (-not @($documents.documents | Where-Object dirty).Count) 'Cannot close a dirty test instance.'
-    $settle = 5000 - ([DateTime]::Now - $hostInstance.process.StartTime).TotalMilliseconds
+    $settle = $StartupSettlingMs - ([DateTime]::Now - $hostInstance.process.StartTime).TotalMilliseconds
     if ($settle -gt 0) { Start-Sleep -Milliseconds ([int]$settle) }
     $windows = Invoke-McpTool $hostInstance.connection gp_objects @{query='MainWindow';limit=100}
     $main = @($windows.objects | Where-Object class -EQ 'gp::gui::MainWindow')[0]
@@ -97,7 +99,7 @@ function Concurrent-Edits($first, $second, [hashtable]$firstArgs, [hashtable]$se
     }
 }
 $fixture = Join-Path $run 'original.gp'
-$forwardedPath = Join-Path $run 'forwarded.gp'
+$forwardedPath = Join-Path $run ('forwarded ' + [char]0x66f2 + [char]0x8c31 + '.gp')
 Copy-Item -LiteralPath "$PSScriptRoot/testdata/minimal.gp" -Destination $fixture
 Copy-Item -LiteralPath $fixture -Destination $forwardedPath
 $fixtureHash = (Get-FileHash -LiteralPath $fixture).Hash
@@ -116,13 +118,28 @@ try {
     $clientHash = (Get-FileHash -LiteralPath (Join-Path $data 'mcp-client.json')).Hash
     $tokenHash = (Get-FileHash -LiteralPath (Join-Path $data 'mcp-auth-token')).Hash
     Assert (@(Get-McpInstances -DataDirectory $data).Count -eq 1) 'Alias and unique descriptors were not deduplicated.'
-    $settle = 5000 - ([DateTime]::Now - $first.process.StartTime).TotalMilliseconds
+    $settle = $StartupSettlingMs - ([DateTime]::Now - $first.process.StartTime).TotalMilliseconds
     if ($settle -gt 0) { Start-Sleep -Milliseconds ([int]$settle) }
     if ($CheckLaunchForwarding) {
+        $association = 'Registry::HKEY_CLASSES_ROOT\Guitar Pro 8.AssocFile.gp\shell\open'
+        $dde = @{}
+        foreach ($part in @('','application','topic','ifexec')) {
+            $key = Join-Path $association ('ddeexec' + $(if ($part) { '\' + $part }))
+            $dde[$(if ($part) { $part } else { 'command' })] = (Get-Item -LiteralPath $key).GetValue('')
+        }
+        Assert ($dde.command -eq '[open("%1")]' -and $dde.application -eq 'Guitar Pro 8' -and $dde.topic -eq 'system') 'Registered Guitar Pro file-association protocol changed.'
         $forwarder = Start-Process -FilePath $exe -ArgumentList @('--open', ('"' + $forwardedPath + '"')) -WorkingDirectory $HostDirectory -WindowStyle Hidden -PassThru
         $null = $forwarder.Handle
         $processes.Add($forwarder)
-        Assert ($forwarder.WaitForExit(15000) -and $forwarder.ExitCode -eq 0) 'Expected the supported host to forward a second launch and exit.'
+        Assert ($forwarder.WaitForExit(15000) -and $forwarder.ExitCode -eq 0) 'Expected the supported host to notify the existing instance and exit.'
+        $beforeDde = Invoke-McpTool $first.connection gp_documents
+        $wrongReceiver = @(& $ddeClient $forwarder.Id $forwardedPath 2>&1 | ForEach-Object { "$_" })
+        $wrongReceiverExit = $LASTEXITCODE
+        Assert ($wrongReceiverExit -ne 0 -and ($wrongReceiver -join ' ') -like '*no command sent*') 'DDE helper did not reject a mismatched receiver PID.'
+        Assert ((Invoke-McpTool $first.connection gp_documents).documents.Count -eq $beforeDde.documents.Count) 'Rejected DDE destination changed open documents.'
+        $ddeResult = @(& $ddeClient $first.process.Id $forwardedPath)
+        Assert ($LASTEXITCODE -eq 0 -and ($ddeResult -join ' ') -like "*receiver_pid=$($first.process.Id) expected_pid=$($first.process.Id)*") 'Native file-association DDE command failed or reached the wrong process.'
+        $script:observations += @{registered_dde=$dde;documents_before_dde=$beforeDde;wrong_receiver=$wrongReceiver;dde_result=$ddeResult;secondary_exit_code=$forwarder.ExitCode}
     } else {
         Invoke-McpTool $first.connection gp_open @{path=$forwardedPath} | Out-Null
     }
@@ -135,9 +152,19 @@ try {
     } while ([DateTime]::UtcNow -lt $deadline)
     $script:observations += @{launch_forwarding_test=[bool]$CheckLaunchForwarding;documents_after_open=$documents;dialogs_after_open=(Invoke-McpTool $first.connection gp_dialogs)}
     Assert ($documents.documents.Count -eq 2 -and $forwarded.Count -eq 1 -and -not $forwarded[0].dirty) 'Second score did not open in the existing host.'
+    if ($CheckLaunchForwarding) {
+        $repeatDde = @(& $ddeClient $first.process.Id $forwardedPath)
+        Assert ($LASTEXITCODE -eq 0) 'Repeated file-association DDE command failed.'
+        $repeated = Invoke-McpTool $first.connection gp_documents
+        Assert ($repeated.documents.Count -eq 2 -and @($repeated.documents | Where-Object id -EQ $forwarded[0].id).Count -eq 1) 'Repeated file association duplicated or replaced the document.'
+        if (-not $Visible) {
+            $identity = Invoke-McpTool $first.connection gp_capabilities
+            Assert ($identity.hidden_mode -and $identity.foreground_pid -ne $first.process.Id) 'File-association opening took foreground focus in explicit background mode.'
+        }
+    }
     Assert (@($documents.documents | Where-Object id -EQ $first.document).Count -eq 1) 'Opening another document changed the original document identity.'
-    Assert (@(Get-McpInstances -DataDirectory $data).Count -eq 1) 'Forwarding published a false independent instance.'
-    Assert ((Get-FileHash -LiteralPath $alias).Hash -eq $aliasHash -and (Get-FileHash -LiteralPath (Join-Path $data 'mcp-client.json')).Hash -eq $clientHash) 'Forwarding overwrote the existing connection information.'
+    Assert (@(Get-McpInstances -DataDirectory $data).Count -eq 1) 'Opening the score published a false independent instance.'
+    Assert ((Get-FileHash -LiteralPath $alias).Hash -eq $aliasHash -and (Get-FileHash -LiteralPath (Join-Path $data 'mcp-client.json')).Hash -eq $clientHash) 'Opening the score overwrote the existing connection information.'
     $second = New-McpSession -DataDirectory $data
     $connections.Add($second)
     Assert ($second.InstanceId -eq $first.connection.InstanceId -and $second.Headers['Mcp-Session-Id'] -ne $first.connection.Headers['Mcp-Session-Id']) 'Clients did not receive distinct sessions for the same host.'
@@ -164,12 +191,12 @@ try {
     $fake.instance_id = [guid]::NewGuid().ToString()
     $fake.session_file = Join-Path $data ('native-session-' + $fake.instance_id + '.json')
     $fake.process_start_time = '0'
-    $fake | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $fake.session_file
+    $fake | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $fake.session_file -Encoding UTF8
     Reject { New-McpSession -SessionFile $fake.session_file } 'The descriptor does not identify*'
     Assert (@(Get-McpInstances -DataDirectory $data).Count -eq 1) 'A reused PID was treated as a live instance.'
     $fake.process_start_time = $first.descriptor.process_start_time
     $fake.url = 'http://example.invalid/mcp'; $fake.port = 80
-    $fake | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $fake.session_file
+    $fake | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $fake.session_file -Encoding UTF8
     Reject { New-McpSession -SessionFile $fake.session_file } 'Invalid local MCP endpoint*'
     Remove-Item -LiteralPath $fake.session_file
     Invoke-McpTool $first.connection gp_save_as @{document=$first.document;path=(Join-Path $run 'first.gp')} | Out-Null
@@ -178,7 +205,7 @@ try {
     Stop-Host $first
     Assert (@(Get-McpInstances -DataDirectory $data).Count -eq 0) 'Closing the host left a live discovery record.'
     Reject { Reconnect-McpSession $stale } 'Target instance stopped*'
-    $first.descriptor | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $alias
+    $first.descriptor | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $alias -Encoding UTF8
     $restarted = Start-Host
     Assert ((Get-Content -LiteralPath $alias -Raw | ConvertFrom-Json).instance_id -eq $restarted.descriptor.instance_id) 'Restart did not reclaim an exited process alias while its handle was retained.'
     Assert ($restarted.descriptor.port -eq 18432 -and $restarted.descriptor.instance_id -ne $first.descriptor.instance_id) 'Restart did not acquire a fresh identity on the default port.'
@@ -204,9 +231,16 @@ try {
     $passed = $true
 } finally {
     if ($blocker) { $blocker.Stop() }
-    foreach ($process in $processes) { if (-not $process.HasExited) { $process.Kill(); $process.WaitForExit(5000) | Out-Null }; $process.Dispose() }
+    $retained = @()
+    foreach ($process in $processes) {
+        if (-not $process.HasExited) {
+            $retained += $process.Id
+            Write-Warning "Connection-test host retained for inspection: PID $($process.Id), data directory $data"
+        }
+        $process.Dispose()
+    }
     foreach ($name in $saved.Keys) { [Environment]::SetEnvironmentVariable($name,$saved[$name],'Process') }
-    & "$root/install-plugin.ps1" -Action Uninstall -InstallDirectory $HostDirectory | Out-Null
-    @{passed=$passed;checks=$checks;launch_forwarding_test=[bool]$CheckLaunchForwarding;visible=[bool]$Visible;startup_settling_ms=5000;independent_gui_instances_verified=$false;observations=$observations;plugin_sha256=(Get-FileHash "$root/.tools/native/plugins/generic/guitarpro_mcp.dll").Hash;host_sha256=(Get-FileHash $exe).Hash;client_sha256=(Get-FileHash "$PSScriptRoot/mcp-client.ps1").Hash} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $run 'verification.json')
+    if (-not $retained.Count) { & "$root/install-plugin.ps1" -Action Uninstall -InstallDirectory $HostDirectory | Out-Null }
+    @{passed=$passed;checks=$checks;launch_forwarding_test=[bool]$CheckLaunchForwarding;file_association_dde_verified=($passed -and [bool]$CheckLaunchForwarding);visible=[bool]$Visible;startup_settling_ms=$StartupSettlingMs;powershell=$PSVersionTable.PSVersion.ToString();independent_gui_instances_verified=$false;retained_hosts=$retained;observations=$observations;plugin_sha256=(Get-FileHash "$root/.tools/native/plugins/generic/guitarpro_mcp.dll").Hash;host_sha256=(Get-FileHash $exe).Hash;client_sha256=(Get-FileHash "$PSScriptRoot/mcp-client.ps1").Hash;dde_client_sha256=$(if($CheckLaunchForwarding){(Get-FileHash -LiteralPath $ddeClient).Hash})} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $run 'verification.json') -Encoding UTF8
 }
-Write-Output "PASS: $checks discovery, concurrent clients, binding, reconnection, restart and port checks. Launch forwarding tested: $CheckLaunchForwarding. Independent GUI instances remain unverified. Evidence: $run"
+Write-Output "PASS: $checks discovery, concurrent clients, binding, reconnection, restart and port checks. File-association DDE tested: $CheckLaunchForwarding. Independent GUI instances remain unverified. Evidence: $run"

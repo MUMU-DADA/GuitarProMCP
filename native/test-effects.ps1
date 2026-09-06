@@ -108,7 +108,7 @@ try {
         foreach ($value in $case.values) {
             $changed=Effect $case.property $value
             Assert ($changed.note.effects.($case.property) -ceq $value -and $changed.dirty) "Native $($case.property) $value was not applied"
-            $expected=Json $before.bars | ConvertFrom-Json -NoEnumerate
+            $expected=(Json @{items=$before.bars} | ConvertFrom-Json).items
             $expected[0].voices[0].beats[0].notes[0].effects.($case.property)=$value
             Assert ((Json (Notes).bars) -eq (Json $expected)) "Effect $($case.property) changed another note, voice, rhythm or pitch"
             Assert ((Json (Notes 1).bars) -eq (Json $otherTrack.bars)) "Effect $($case.property) changed another track"

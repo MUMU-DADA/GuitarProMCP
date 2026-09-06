@@ -1,4 +1,4 @@
-param([string]$SessionFile = "$PSScriptRoot/../.cache/native-session.json")
+﻿param([string]$SessionFile = "$PSScriptRoot/../.cache/native-session.json")
 $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot/mcp-client.ps1"
 $root = Split-Path -Parent $PSScriptRoot

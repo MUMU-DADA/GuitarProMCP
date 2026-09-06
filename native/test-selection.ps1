@@ -146,7 +146,7 @@ try {
     Select-Score @{operation='range';base=(Point 0 0);extent=(Point 0 0)} | Out-Null
     Select-Score @{operation='clear'} | Out-Null
     $transientAfter=@((Bars 0),(Bars 1))
-    $withoutPlaceholders=Json $transientBefore | ConvertFrom-Json -NoEnumerate
+    $withoutPlaceholders=(Json @{items=$transientBefore} | ConvertFrom-Json).items
     foreach($track in $withoutPlaceholders) { foreach($bar in $track) { foreach($voice in $bar.voices) {
         foreach($placeholder in $voice.beats | Where-Object placeholder) {
             Assert ($placeholder.rest -and $placeholder.notes.Count -eq 0) 'Unexpected musical content in a placeholder'
@@ -311,7 +311,7 @@ try {
     $lower=(Invoke-McpTool $connection gp_read_bars @{document=$id;staff=1}).bars
     $range=Select-Score @{operation='range';base=(Point 0 0 0 0 1);extent=(Point 0 1 0 0 1)}
     Assert ($range.cursor.staff -eq 1 -and $range.cursor.selection.beats -eq 2 -and $range.cursor.selection.base.staff -eq 1) 'Piano lower-staff range failed'
-    $upperBeforeSelection=Json $upper | ConvertFrom-Json -NoEnumerate
+    $upperBeforeSelection=(Json @{items=$upper} | ConvertFrom-Json).items
     $upper[0].voices[0].beats=@($upper[0].voices[0].beats | Where-Object { -not $_.placeholder })
     Assert ((Json (Invoke-McpTool $connection gp_read_bars @{document=$id;staff=0}).bars) -eq (Json $upper)) 'Piano selection changed upper-staff content beyond transient placeholders'
     Invoke-McpTool $connection gp_edit_beat @{document=$id;scope='selection';operation='dots';dots=1} | Out-Null

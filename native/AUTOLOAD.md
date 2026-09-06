@@ -37,6 +37,15 @@ P0 verified those same arguments against the isolated executable; it did not
 change the user's association. Opening an associated file against the actual
 installed production plugin remains a P1 installation acceptance check.
 
+The association also registers `ddeexec = [open("%1")]`, application
+`Guitar Pro 8`, topic `system`, and `ifexec = []`. A later P2 investigation
+confirmed that repeated command-line startup sends an empty Qt single-instance
+message; the DDE command delivers the actual file-open event. Repeating only
+the EXE command is therefore not a complete file-association test. The native
+DDE test client verifies the recipient PID before sending any open command.
+Isolated protocol checks do not replace the pending real installed Explorer
+entry-point check in P1.
+
 Evidence: `artifacts/autoload-probe-724964da0f7740f991172f092da7b43f/verification.json`.
 The host SHA-256 equals the production allowlist. Probe results do not prove
 the MCP service itself works: P1 must verify the real DLL, protocol, live score,

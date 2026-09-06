@@ -35,7 +35,7 @@ void reply(QTcpSocket *socket, int status, const QJsonObject &body = {}, const Q
         status == 405 ? "Method Not Allowed" : status == 409 ? "Conflict" : status == 413 ? "Payload Too Large" : status == 415 ? "Unsupported Media Type" : "Bad Request";
     const QByteArray data = body.isEmpty() ? QByteArray() : QJsonDocument(body).toJson(QJsonDocument::Compact);
     socket->setProperty("replied", true);
-    socket->write("HTTP/1.1 " + QByteArray::number(status) + " " + reason + "\r\nContent-Type: application/json\r\nContent-Length: " +
+    socket->write("HTTP/1.1 " + QByteArray::number(status) + " " + reason + "\r\nContent-Type: application/json; charset=utf-8\r\nContent-Length: " +
                   QByteArray::number(data.size()) + "\r\nConnection: close\r\nCache-Control: no-store\r\n" + extra + "\r\n" + data);
     socket->disconnectFromHost();
 }

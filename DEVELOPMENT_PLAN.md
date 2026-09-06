@@ -152,9 +152,12 @@ native state, wrong-target writes are rejected, and request completion matches
 what happened in the host. Connection checks cover two clients, identity,
 restart and port fallback. Save-current, explicit overwrite, tracked new/open/
 close, save/discard/cancel close policies, native close-dialog cancellation and
-malformed ZIP/GPIF rejection are verified. A second GUI launch exits, but opening
-its requested score in the existing host has not passed in visible or background
-mode. Injected native partial-write failures, post-save validation recovery,
+malformed ZIP/GPIF rejection are verified. Windows file-association opening
+requires the registered DDE command as well as process startup. Isolated DDE
+opening has passed; repeated CLI-only startup carries no file path on this host
+build. The original CLI-only test did not exercise the registered protocol.
+Actual installed Explorer entry points remain a P1 gate.
+Injected native partial-write failures, post-save validation recovery,
 save-error dialog handling and retained recovery backups are verified.
 Independent GUI processes, complete native save-progress cancellation,
 manual tab reorder, real-client configuration reload and complete
@@ -308,9 +311,9 @@ runtime tokens, temporary hosts and generated evidence out of Git.
 
 1. Preserve the archived P1 candidate and its evidence. The development DLLs now
    contain P2 changes and must not be represented as the tested P1 package.
-2. Resolve P2 single-instance file forwarding and establish the supported GUI
-   process boundary. Retain the passing port-contention, explicit-port,
-   two-client, stale-identity, reconnect/restart and cleanup checks. A normally
+2. Retain the verified native DDE file-association protocol and establish the
+   supported independent-GUI-process boundary. Retain the passing port-contention,
+   explicit-port, two-client, stale-identity, reconnect/restart and cleanup checks. A normally
    exited second launch does not prove that its requested document was opened.
 3. Complete the remaining P2 unknown-outcome paths, native save-progress
    cancellation, manual tab reorder and real-client integration.
@@ -527,3 +530,58 @@ other explicit gaps in that file remain open.
   open, alongside launch forwarding, independent GUI process support, manual
   tab reorder and real-client integration. P1 installed-host acceptance remains
   pending; this checkpoint completes neither P2 nor the full project.
+- P2: file-association investigation found the omitted native DDE contract in
+  the Windows registry: service `Guitar Pro 8`, topic `system`, execute command
+  `[open("%1")]`. The ordinary second process receives the correct CLI path but
+  sends an empty Qt single-instance message. In a probe-only host with no MCP
+  core loaded, the subsequent DDE command produces a file-open event and the
+  correct second document. Baseline, events and probe sources are preserved in
+  `artifacts/forwarding-probe-7e502806f8224290bbf07076d1299123/`.
+  This corrects the CLI-only test's interpretation; it does not add CLI file
+  forwarding to the host. Real installed Explorer acceptance remains P1 work.
+- P2: `test-instances.ps1 -CheckLaunchForwarding` now verifies registered DDE
+  settings, secondary process exit, recipient PID, Unicode/spaced paths,
+  duplicate-open identity, background focus and the existing connection checks.
+  The test-only client rejects a mismatched recipient before sending a command
+  and is built outside production plugin directories. Failed tests now retain
+  live hosts and their installed files for inspection instead of killing them.
+- P2: Windows PowerShell 5.1 decoded HTTP JSON with its legacy default encoding
+  because the response did not declare UTF-8. The DDE-opened Chinese path was
+  correct in the native host and PowerShell 7, but garbled in the 5.1 client:
+  `artifacts/instances-dc1ac592ad984e23965e111b8f4f3e3e/inspection.json`.
+  The new raw-UTF-8 versus HTTP-client protocol assertion failed before the fix.
+  The shared response now declares `charset=utf-8`; both descriptor-reading
+  entry points explicitly read UTF-8. Unicode session-directory checks cover
+  discovery, ownership, stale identity and restart with valid JSON fixtures.
+- P2: made the full regression runner usable in Windows PowerShell 5.1: load
+  its standard compression assembly, retain UTF-8 BOMs for four Chinese test
+  scripts, use the available base-two logarithm, preserve JSON arrays through
+  object properties, and parse expected JSON error codes rather than matching
+  whitespace. The tested assertions and musical scope are retained.
+  Incomplete runs remain failed; retained dirty fixtures were saved for
+  inspection and all retained hosts were closed before a fresh full run.
+- P2 checkpoint validation: the final core SHA-256 is
+  `A22ECD07B9C48776CF25CA1E9FA4A8C650CF9E93841F511380FF97FE7F73227F`.
+  All fifteen suites, 2276 checks, passed independently on Windows PowerShell
+  5.1.19041.6456 and PowerShell 7.6.5 with exit code 0 and descriptor removal:
+  `artifacts/regression-9e09be6fb7784486bc7423a8a50cd9f5/regression.json` and
+  `artifacts/regression-b7fb07a5f6c14bd5abe4811a36c14159/regression.json`.
+  Native source hashes were checked against the final working tree.
+  On that core, DDE/connection checks passed 61 cases in background PowerShell 7
+  and 60 cases in visible Windows PowerShell 5.1:
+  `artifacts/instances-3833810d444349888852106424949221/verification.json` and
+  `artifacts/instances-3b540bd0135545bc965d08b618631733/verification.json`.
+  Both record a 15000 ms startup settling interval. The default 5000 ms runs
+  still reproduced the vendor network shutdown deadlock after a restart:
+  `artifacts/instances-69d4f4d62d6141b6b52b1c3fc4271ebd/` and
+  `artifacts/instances-70832e139e884a3c895c1ceb8b32c41e/` contain the failed
+  results, thread stacks and justified disposable-host termination records.
+  Longer settling is not a verified fix; P2/P7 retain this issue. P1 actual
+  installation, independent GUI instances, real-client integration, manual tab
+  reorder, native save-progress cancellation and unknown-outcome recovery
+  remain open. No phase completion is claimed by this checkpoint.
+- The same final core passed all 167 injected save/recovery checks under Windows
+  PowerShell 5.1 with clean shutdown and descriptor cleanup:
+  `artifacts/save-recovery-a9adcab860bc4afd944359d371399572/verification.json`.
+  Native save-progress cancellation is explicitly still unverified. No test
+  hosts remain running after the checkpoint's verification and inspections.

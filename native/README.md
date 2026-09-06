@@ -43,6 +43,17 @@
 
 服务优先监听 `127.0.0.1:18432`，默认端口被占用时分配其他回环端口；明确指定 `GPMCP_PORT` 时保持严格冲突报错。实例由 UUID、PID 和进程启动时间识别。`native-session-<UUID>.json` 和 `mcp-client-<UUID>.json` 属于当前实例，退出时清理；固定别名不覆盖其他仍在运行的实例，令牌和固定客户端配置保留。两个客户端、重启失效和端口回退已验证，独立 GUI 多进程尚未验证。
 
+HTTP JSON 响应使用 `application/json; charset=utf-8`。Windows PowerShell 5.1 在缺少该声明时会把 UTF-8 中文路径、工具说明和对话框文字误解码。连接描述由 Qt 写为 UTF-8，客户端与开发启动脚本均显式按 UTF-8 读取。
+
+Windows `.gp` 文件关联包含两个部分：启动命令 `--open "%1"`，以及服务 `Guitar Pro 8`、主题 `system` 的 DDE 命令 `[open("%1")]`。当前宿主的重复命令行启动只通知已有实例，发送的 Qt 单实例消息不含文件路径。`test-instances.ps1 -CheckLaunchForwarding` 读取注册的 DDE 配置并执行完整协议；测试用 DDE 客户端先核对接收窗口的进程 ID，再发送文件打开命令，覆盖中文及空格路径、错误接收进程拒绝、重复打开和后台焦点。它不调用真实安装目录的 EXE，也不修改文件关联。
+
+```powershell
+./native/build-dde-client.ps1
+./native/test-instances.ps1 -HostDirectory '<isolated .tools host>' -CheckLaunchForwarding -StartupSettlingMs 15000
+```
+
+`-Visible` 验证正常可见模式。`-StartupSettlingMs` 默认仍为 5000，实际等待值写入证据；较长等待下的通过不代表较早退出的宿主网络死锁已经解决。失败时保留仍在运行的测试宿主和连接数据，供检查后正常保存关闭。DDE 测试客户端构建在 `.tools/dde-client`，生产包不包含它。完整回归入口 `test-all.ps1` 加载 Windows PowerShell 所需的压缩程序集；含中文的测试脚本带 UTF-8 BOM。
+
 `Get-McpInstances -DataDirectory ...` 发现有效实例；`New-McpSession -InstanceId ...` 选择实例，`Reconnect-McpSession` 默认只重连原进程。重启后必须显式选择新的 UUID。实例绑定头为 `GuitarProMCP-Instance-Id`，不匹配时返回 HTTP 409；协议初始化也返回实例 UUID 和 PID。传输失败不会自动重放编辑。实际客户端在端口变化后重读连接配置的能力仍需验证。
 
 ## 协议边界

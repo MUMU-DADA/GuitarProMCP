@@ -83,7 +83,7 @@ try {
     foreach ($denominator in @(1,2,8,16,32,64,128)) {
         Invoke-McpTool $connection gp_edit_beat @{operation='rhythm';denominator=$denominator} | Out-Null
         $changed = (Bars).bars[0].voices[0].beats[0]
-        Assert ($changed.native_note_value -eq (2 + [Math]::Log2($denominator)) -and $changed.notes[0].midi -eq 40) 'Note value mapping or pitch changed'
+        Assert ($changed.native_note_value -eq (2 + [int][Math]::Log($denominator, 2)) -and $changed.notes[0].midi -eq 40) 'Note value mapping or pitch changed'
         Undo
         Same-Bars $before
     }

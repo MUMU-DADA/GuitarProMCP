@@ -14,7 +14,7 @@ if (-not $SessionFile) { $SessionFile = Join-Path $PSScriptRoot '.cache/native-s
 $SessionFile = [IO.Path]::GetFullPath($SessionFile)
 New-Item -ItemType Directory -Force -Path (Split-Path -Parent $SessionFile),(Join-Path $PSScriptRoot '.cache/tmp') | Out-Null
 if (Test-Path -LiteralPath $SessionFile) {
-    $previous = Get-Content -LiteralPath $SessionFile -Raw | ConvertFrom-Json
+    $previous = Get-Content -LiteralPath $SessionFile -Raw -Encoding UTF8 | ConvertFrom-Json
     if ($previous.pid -and (Get-Process -Id $previous.pid -ErrorAction SilentlyContinue)) {
         throw "该会话已有运行中的进程（PID $($previous.pid)）。请使用现有插件，或为新实例指定不同的 -SessionFile。"
     }
@@ -47,7 +47,7 @@ try {
 $deadline = [DateTime]::UtcNow.AddSeconds(30)
 while ([DateTime]::UtcNow -lt $deadline) {
     if (Test-Path -LiteralPath $SessionFile) {
-        $session = Get-Content -LiteralPath $SessionFile -Raw | ConvertFrom-Json
+        $session = Get-Content -LiteralPath $SessionFile -Raw -Encoding UTF8 | ConvertFrom-Json
         if ($session.pid -eq $application.Id -and $session.backend -eq 'in_process_qt_plugin') {
             if ($PassThru) { return $application }
             Write-Output "插件已加载到 Guitar Pro 进程：PID $($session.pid)，Qt $($session.qt_version)"

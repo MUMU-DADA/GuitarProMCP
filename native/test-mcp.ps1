@@ -62,6 +62,10 @@ try {
     }
     $list=Send-Http '{"jsonrpc":"2.0","id":10,"method":"tools/list"}' $sessionHeaders
     Assert ($list.Json.result.tools.name -contains 'gp_set_fret') 'Native tool missing'
+    $decoded = Invoke-RestMethod -Uri $connection.Url -Method Post -Headers $connection.Headers -ContentType 'application/json' -Body '{"jsonrpc":"2.0","id":11,"method":"tools/list"}' -TimeoutSec 15 -MaximumRedirection 0
+    $rawDescription = @($list.Json.result.tools | Where-Object name -EQ 'gp_save_current')[0].description
+    $decodedDescription = @($decoded.result.tools | Where-Object name -EQ 'gp_save_current')[0].description
+    Assert ($rawDescription -match '[^\x00-\x7f]' -and $decodedDescription -ceq $rawDescription) 'HTTP client did not decode UTF-8 tool descriptions correctly'
     $chunkHeaders=$sessionHeaders.Clone(); $chunkHeaders['Content-Length']=$null; $chunkHeaders['Transfer-Encoding']='chunked'
     $chunks=('{0:x}' -f [Text.Encoding]::UTF8.GetByteCount($ping)) + "`r`n$ping`r`n0`r`n`r`n"
     Assert ((Send-Http $chunks $chunkHeaders).Status -eq 200) 'Chunked request failed'

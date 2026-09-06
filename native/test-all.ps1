@@ -1,5 +1,6 @@
 param([string]$Exe = 'C:\Program Files\Arobas Music\Guitar Pro 8\GuitarPro.exe')
 $ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName System.IO.Compression.FileSystem
 $Exe = (Resolve-Path -LiteralPath $Exe).Path
 $root = Split-Path -Parent $PSScriptRoot
 . "$PSScriptRoot/mcp-client.ps1"
@@ -43,8 +44,8 @@ try {
 } finally {
     $sourceFiles = @('guitarpro_mcp.cpp','guitarpro_api.h','guitarpro_abi.h','guitarpro_clipboard.h','mcp_server.cpp','object_registry.h','host_build.h','plugin_config.h','autoload.cpp','plugin_status.h')
     $hashes = @($sourceFiles | ForEach-Object { Get-FileHash -LiteralPath (Join-Path $PSScriptRoot $_) | Select-Object Path,Hash })
-    @{complete=$complete;host_pid=$descriptor.pid;exit_code=$(if($process.HasExited){$process.ExitCode}else{$null});checks=($results | Measure-Object -Property checks -Sum).Sum;suites=$results;sources=$hashes;plugin_sha256=(Get-FileHash -LiteralPath "$root/.tools/native/plugins/generic/guitarpro_mcp.dll").Hash;autoload_sha256=(Get-FileHash -LiteralPath "$root/.tools/native/plugins/imageformats/guitarpro_mcp_autoload.dll").Hash;host_exe=$Exe;host_sha256=(Get-FileHash -LiteralPath $Exe).Hash} |
-        ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $run 'regression.json')
+    @{complete=$complete;host_pid=$descriptor.pid;exit_code=$(if($process.HasExited){$process.ExitCode}else{$null});checks=($results | Measure-Object -Property checks -Sum).Sum;suites=$results;sources=$hashes;powershell=$PSVersionTable.PSVersion.ToString();plugin_sha256=(Get-FileHash -LiteralPath "$root/.tools/native/plugins/generic/guitarpro_mcp.dll").Hash;autoload_sha256=(Get-FileHash -LiteralPath "$root/.tools/native/plugins/imageformats/guitarpro_mcp_autoload.dll").Hash;host_exe=$Exe;host_sha256=(Get-FileHash -LiteralPath $Exe).Hash} |
+        ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $run 'regression.json') -Encoding UTF8
     if (-not $process.HasExited) { Write-Warning "Regression host retained for inspection: PID $($process.Id), session $sessionFile" }
     $process.Dispose()
 }

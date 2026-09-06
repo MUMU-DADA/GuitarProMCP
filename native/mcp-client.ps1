@@ -1,7 +1,7 @@
 function Read-McpInstance {
     param([Parameter(Mandatory=$true)][string]$SessionFile)
     $SessionFile = [IO.Path]::GetFullPath($SessionFile)
-    $descriptor = Get-Content -LiteralPath $SessionFile -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+    $descriptor = Get-Content -LiteralPath $SessionFile -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
     $instance = [guid]::Empty
     if (-not [guid]::TryParse([string]$descriptor.instance_id, [ref]$instance) -or $instance -eq [guid]::Empty -or
         $descriptor.backend -ne 'in_process_qt_plugin' -or -not $descriptor.process_start_time) {

@@ -108,7 +108,7 @@ try {
     foreach($args in $invalid){
         $args.document=$script:id
         try {$rejected=(Invoke-McpTool $connection gp_edit_connection $args -AllowError).error}
-        catch {if($_.Exception.Message -notmatch '"code": -32602'){throw};$rejected=$true}
+        catch {if(($_.Exception.Message | ConvertFrom-Json).code -ne -32602){throw};$rejected=$true}
         Assert $rejected 'Invalid connection accepted'
     }
     Assert ((Json (Model)) -eq (Json $original) -and -not (Tool gp_score @{document=$script:id}).dirty) 'Invalid connection changed score'

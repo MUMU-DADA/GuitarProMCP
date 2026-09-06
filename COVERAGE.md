@@ -6,7 +6,7 @@
 
 | 范围 | 已实现并验证 | 仍有边界 |
 | --- | --- | --- |
-| 插件与 MCP | C++ DLL 在 GuitarPro.exe 内提供 HTTP MCP；会话、令牌、Host/Origin 和参数检查；实例 UUID/PID/启动时间绑定、默认端口回退、两个客户端并发编辑、重连及重启失效 | 各类真实 MCP 客户端、独立 GUI 多进程、二次启动打开文件和长时间运行尚未完成验证 |
+| 插件与 MCP | C++ DLL 在 GuitarPro.exe 内提供 HTTP MCP；会话、令牌、Host/Origin 和参数检查；实例 UUID/PID/启动时间绑定、默认端口回退、两个客户端并发编辑、重连及重启失效；隔离宿主的 Windows DDE 文件关联打开；Windows PowerShell 5.1 中文路径与 UTF-8 描述读取 | 各类真实 MCP 客户端、独立 GUI 多进程、真实安装目录的资源管理器入口和长时间运行尚未完成验证；单独重复命令行启动不转发文件路径 |
 | 后台执行 | 同步 QWidget / QWindow 焦点策略，显式后台启动保持隐藏，常规安装启动窗口可见；无需预先最小化即可执行模板新建、打开、关闭、切换、编辑、保存和播放；窗口恢复后可再隐藏 | 未验证无桌面环境、所有模态窗口和长时间运行 |
 | 文档状态与切换 | 独立 ID、路径、未保存状态、原生 Score 和活动文档；打开/新建/关闭请求跟踪和 64 条历史；明确保存/丢弃/取消及原生确认；关闭全部文档后重开及旧 ID 失效；损坏 ZIP/GPIF 明确拒绝 | 手工标签重排、完整 GPIF 语义错误、未知原生结果恢复、全部模态上下文和保存中途取消尚未完成验证 |
 | 曲谱元数据 | 读取 11 项元数据；使用原生命令修改，支持撤销重做和中文保存 | 拒绝宿主不能可靠保存的补充平面 Unicode 字符和 XML 控制字符 |
@@ -45,11 +45,13 @@
 
 ## 当前验证证据
 
-P2 当前构建十五组回归共 2275 项通过，退出码为 0，连接描述已清理：`artifacts/regression-7b51b29bd97f426f9d162f6f70efa42a/regression.json`。核心 DLL SHA-256 为 `4DAE75091EB5ABBDB2F88FE698983E31B9B85A1150ECDBA0F358E69413F482C3`。本轮保留请求跟踪、关闭策略和 ZIP/GPIF 校验，并将三个保存工具改为异步请求，修复原生保存错误提示期间全部 MCP 原生操作被占用的问题。
+P2 当前构建在 Windows PowerShell 5.1 和 PowerShell 7 下均完整通过十五组、2276 项回归，两轮退出码均为 0，连接描述已清理。证据分别为 `artifacts/regression-9e09be6fb7784486bc7423a8a50cd9f5/regression.json` 和 `artifacts/regression-b7fb07a5f6c14bd5abe4811a36c14159/regression.json`。核心 DLL SHA-256 为 `A22ECD07B9C48776CF25CA1E9FA4A8C650CF9E93841F511380FF97FE7F73227F`。新增 HTTP UTF-8 解码对照检查，修复旧版 PowerShell 的中文路径/工具说明乱码，并让完整测试入口兼容该运行时。
 
-同一构建的保存故障专项在 Windows PowerShell 5.1 下通过 167 项：`artifacts/save-recovery-1074077d21354e4ab0ecb526cfa71680/verification.json`。已验证原生部分写入失败、宿主拒绝损坏输出、保存后校验失败、保存后关闭失败和恢复失败时备份保留；宿主正常退出并清理连接描述。保存错误提示关闭后仍报告 `error`；该专项明确记录完整原生保存进度取消尚未验证。
+同一构建的保存故障专项在 Windows PowerShell 5.1 下通过 167 项：`artifacts/save-recovery-a9adcab860bc4afd944359d371399572/verification.json`。已验证原生部分写入失败、宿主拒绝损坏输出、保存后校验失败、保存后关闭失败和恢复失败时备份保留；宿主正常退出并清理连接描述。保存错误提示关闭后仍报告 `error`；该专项明确记录完整原生保存进度取消尚未验证。
 
-同一构建的连接及两个客户端并发专项通过 53 项：`artifacts/instances-b41dfdb2831a4167be7453cf8d4907d9/verification.json`。二次启动文件转发、独立 GUI 多进程、真实 MCP 客户端配置重新加载、手工标签重排和未知原生结果恢复仍未通过验收。P1 实际安装目录仍为旧版，P2 仍是中间检查点。
+此前连接及两个客户端并发专项通过 53 项：`artifacts/instances-b41dfdb2831a4167be7453cf8d4907d9/verification.json`。后续确认 `.gp` 文件关联还使用 DDE `[open("%1")]`；单独重复执行 EXE 命令没有覆盖该协议。未加载 MCP 核心的宿主收到空单实例消息后，DDE 才触发文件打开，基线证据为 `artifacts/forwarding-probe-7e502806f8224290bbf07076d1299123/baseline.json`。真实安装入口、独立 GUI 多进程、真实 MCP 客户端配置重新加载、手工标签重排和未知原生结果恢复仍未通过验收。P1 实际安装目录仍为旧版，P2 仍是中间检查点。
+
+当前构建的 DDE/连接专项在 PowerShell 7 后台模式通过 61 项：`artifacts/instances-3833810d444349888852106424949221/verification.json`；Windows PowerShell 5.1 可见模式通过 60 项：`artifacts/instances-3b540bd0135545bc965d08b618631733/verification.json`。覆盖中文会话目录和文件路径、错误 DDE 接收进程拒绝、重复打开不重复建文档、并发编辑、重启失效和端口回退。两轮记录的启动等待均为 15000 ms，不代表较早退出已可靠。默认 5000 ms 的两次运行在重启后的宿主退出时仍卡于 `AMNetwork::NetworkServiceGuard`，失败证据和线程栈保留在 `artifacts/instances-69d4f4d62d6141b6b52b1c3fc4271ebd/` 与 `artifacts/instances-70832e139e884a3c895c1ceb8b32c41e/`。
 
 此前回归 `artifacts/regression-d55d5d21f0cb4eaa81a816918169e7cb/regression.json` 在通过 1775 项后停于模板新建检查，保留宿主中已观察到成功创建。模板测试错误地将中间状态 `requested` 当作结束条件，已改为等待明确终态并在失败时输出实际状态。该轮失败记录仍保留，未计为完整通过。
 
@@ -57,7 +59,7 @@ P2 上一检查点十四组回归共 2225 项通过，退出码为 0，连接描
 
 同一构建的连接专项为 53 项通过，包括保留已退出进程句柄时重新接管旧连接描述。PowerShell 7 证据为 `artifacts/instances-d32b829a0032440a86a001624a5d01df/verification.json`，Windows PowerShell 5.1 证据为 `artifacts/instances-5524513fd40d4b2b988926b4abf5fd92/verification.json`。两轮均未将二次启动打开文件或独立 GUI 多进程计入通过范围。
 
-连接专项 52 项通过：`artifacts/instances-019140371f2f41f882a28657709dbe21/verification.json`，覆盖发现去重、两个客户端同时编辑同一或不同文档、错误实例拒绝、重连、重启后旧文档 ID 失效、端口回退和退出清理。此记录对应保存功能加入前的构建。独立 GUI 多进程未验证；`test-instances.ps1 -CheckLaunchForwarding` 在后台和可见模式均未观察到第二次启动的曲谱被打开，可见模式失败证据为 `artifacts/instances-fa5b0650158348838bc0f681a3f46daa/verification.json`。进程退出码 0 不能证明打开转发成功。
+连接专项 52 项通过：`artifacts/instances-019140371f2f41f882a28657709dbe21/verification.json`，覆盖发现去重、两个客户端同时编辑同一或不同文档、错误实例拒绝、重连、重启后旧文档 ID 失效、端口回退和退出清理。此记录对应保存功能加入前的构建。旧版 `test-instances.ps1 -CheckLaunchForwarding` 仅重复执行命令行，在后台和可见模式均未打开第二份曲谱，可见模式失败证据为 `artifacts/instances-fa5b0650158348838bc0f681a3f46daa/verification.json`。该失败记录保留；新版专项按实际注册协议加入 DDE，并核对接收进程与文档内容。
 
 P1 当前 DLL 的十三组回归共 2195 项通过，进程退出码为 0 且连接文件已清理，证据为 `artifacts/regression-f1463f227d554ba0b74060538e9ff651/regression.json`。安装检查 43 项及协议 26 项、安装文件归属和配置检查 23 项通过。阶段状态和安装包见 [开发计划](DEVELOPMENT_PLAN.md)。实际安装目录仍为旧版，最终真实启动入口验收尚未完成。
 
@@ -71,7 +73,7 @@ P1 当前 DLL 的十三组回归共 2195 项通过，进程退出码为 0 且连
 
 2026-09-07 在默认配置重新运行协议 26 项、原生后台 26 项、插件独立剪贴板 112 项，共 164 项通过。另确认三项实验性 `native_*` 操作在默认模式下拒绝执行，且插件缓冲区不变。该轮原生证据为 `artifacts/native-verification-19374c9022ec416ea4d36317884fd6f6/verification.json` 和 `artifacts/native-clipboard-6dd5d970ccb34e99b7028e3131c22f67/verification.json`；没有将未完成的宿主剪贴板验证加入历史累计数。
 
-- `native/test-mcp.ps1`：26 项协议、会话、鉴权、消息分帧和参数边界检查。
+- `native/test-mcp.ps1`：27 项协议、会话、鉴权、消息分帧、参数边界和 HTTP 客户端 UTF-8 解码检查。
 - `native/test-native.ps1`：26 项真实宿主后台检查，读取保存文件内部的 `Content/score.gpif` 验证标题和音符变化。
 - `native/test-editing.ps1`：58 项单拍音符/节拍编辑、无效参数、撤销重做、GPIF 音符引用和附点时值检查。
 - `native/test-tracks.ps1`：90 项音轨新增/复制/删除/交换、零轨恢复、跨文档配置复用、名称/颜色/混音/播放状态、无效输入、撤销及 GPIF 持久化检查。
