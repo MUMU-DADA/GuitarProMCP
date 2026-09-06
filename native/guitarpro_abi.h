@@ -1,0 +1,321 @@
+#pragma once
+#include <QtCore/QString>
+#include <memory>
+#include <string>
+#include <vector>
+#include <array>
+#include <utility>
+namespace am::music { enum class Accidental : int {}; }
+namespace am::utils {
+// Verified Color copy/read code uses exactly three bytes, without alpha.
+class Color { public: unsigned char red, green, blue; };
+static_assert(sizeof(Color) == 3 && alignof(Color) == 1);
+}
+
+// Declarations for verified MSVC x64 exports only. The host owns model objects.
+// Only the value types with verified storage below are constructed locally.
+namespace gp::core {
+enum class ScoreProperty : int {};
+enum class PlaybackState : int {};
+enum class TempoUnit : int {};
+enum class Vibrato : int {};
+enum class AntiAccent : int {};
+enum class Fingering : int {};
+enum class TupletLevel : int {};
+enum class SlideFlag : int {};
+struct Harmonic {
+    enum class Type : int {};
+    enum class Fret : int {};
+    __declspec(dllimport) static std::string typeToString(Type);
+    __declspec(dllimport) static float fretToFloat(Fret);
+};
+using TupletRatio = std::pair<unsigned char, unsigned char>;
+static_assert(sizeof(TupletRatio) == 2 && alignof(TupletRatio) == 1);
+class InstrumentSet {
+public:
+    enum class Type : int {};
+    __declspec(dllimport) static std::string typeToString(Type);
+};
+class ScoreModel;
+class MasterBar;
+class TimeSignature {
+    unsigned numerator, denominator;
+    __declspec(dllimport) TimeSignature(unsigned, unsigned);
+public:
+    // The native constructor is private; validation precedes this local factory.
+    static TimeSignature fromValues(unsigned numerator, unsigned denominator) { return TimeSignature(numerator, denominator); }
+    __declspec(dllimport) unsigned getNumerator() const;
+    __declspec(dllimport) unsigned getDenominator() const;
+};
+static_assert(sizeof(TimeSignature) == 8 && alignof(TimeSignature) == 4);
+class __declspec(dllimport) KeySignature {
+    unsigned char data[8]; // Native vptr plus accidental count and two booleans: 16 bytes.
+public:
+    KeySignature(int, bool);
+    virtual ~KeySignature();
+    KeySignature(const KeySignature &) = delete;
+    KeySignature &operator=(const KeySignature &) = delete;
+    int accidentalCount() const; bool isMajor() const; QString toQString() const;
+};
+static_assert(sizeof(KeySignature) == 16 && alignof(KeySignature) == 8);
+class __declspec(dllimport) MasterBar {
+public:
+    unsigned index() const; ScoreModel *model() const; int tickCount() const;
+    const TimeSignature &timeSignature() const;
+    const KeySignature &concertKeySignature() const;
+    bool hasRepeatStart() const; bool hasRepeatEnd() const; unsigned repeatCount() const;
+    bool hasDoubleBar() const; bool hasFreeTime() const;
+};
+class __declspec(dllimport) MasterTrack {
+public:
+    unsigned masterBarCount() const;
+    const std::string &tempoLabel() const;
+    TempoUnit tempoUnit() const; float tempoValue() const;
+    std::shared_ptr<MasterBar> masterBar(unsigned) const;
+};
+class Beat;
+class Note;
+class __declspec(dllimport) ScoreModelIndex {
+    void *implementation; // Native value owns a 0x38-byte implementation.
+public:
+    ScoreModelIndex(ScoreModel *, int, int, int, unsigned, unsigned);
+    ~ScoreModelIndex();
+    ScoreModelIndex(const ScoreModelIndex &) = delete;
+    ScoreModelIndex &operator=(const ScoreModelIndex &) = delete;
+    int trackIndex() const; int barIndex() const; int beatIndex() const;
+    unsigned staffIndex() const; unsigned voiceIndex() const;
+    unsigned noteString() const; unsigned noteMidi() const;
+    std::shared_ptr<Beat> beat() const;
+    std::shared_ptr<Note> note() const;
+    void setNoteString(unsigned); void setNoteMidi(unsigned);
+};
+static_assert(sizeof(ScoreModelIndex) == 8 && alignof(ScoreModelIndex) == 8);
+class __declspec(dllimport) ScoreModelRange {
+    // Verified constructor/destructor own one pointer to a 0x20-byte implementation.
+    void *implementation;
+public:
+    enum class SortingPolicy : int {};
+    ScoreModelRange(const ScoreModelIndex &, unsigned, SortingPolicy);
+    ScoreModelRange(const ScoreModelIndex &, const ScoreModelIndex &, unsigned, SortingPolicy);
+    ~ScoreModelRange();
+    ScoreModelRange(const ScoreModelRange &) = delete;
+    ScoreModelRange &operator=(const ScoreModelRange &) = delete;
+    unsigned barCount() const; unsigned beatCount() const;
+    bool isMultiTrack() const; bool isMultiVoice() const; bool isPlaceholder() const;
+    const ScoreModelIndex &baseModelIndex() const;
+    const ScoreModelIndex &extentModelIndex() const;
+    const ScoreModelIndex &lowerModelIndex() const; const ScoreModelIndex &upperModelIndex() const;
+    unsigned selectionModes() const; void setSelectionModes(unsigned);
+    ScoreModelIndex &mutableBaseModelIndex(); ScoreModelIndex &mutableExtentModelIndex();
+    void setMultiSelection(bool); bool isMultiSelection() const;
+};
+static_assert(sizeof(ScoreModelRange) == 8 && alignof(ScoreModelRange) == 8);
+namespace flatten {
+__declspec(dllimport) std::vector<Beat *> beats(const ScoreModelRange &);
+}
+class Score;
+class __declspec(dllimport) SerializedScore {
+    void *implementation; // Native vptr + owned 0x210-byte implementation.
+public:
+    enum class OverridingMode : int {};
+    SerializedScore(const ScoreModelRange &);
+    virtual ~SerializedScore();
+    SerializedScore(const SerializedScore &) = delete;
+    SerializedScore &operator=(const SerializedScore &) = delete;
+    unsigned barCount() const;
+    bool isMultiTrack() const; bool isMultiVoice() const;
+    bool isCompatibleWith(const Score &) const;
+    unsigned long long incompatiblePasteTypeWith(const Score &) const;
+    const Score &score() const;
+};
+static_assert(sizeof(SerializedScore) == 16 && alignof(SerializedScore) == 8);
+class __declspec(dllimport) MacroCommandRecorder {
+    // Verified fields: committed bool at 0, Score* at 8, execute bool at 16.
+    alignas(8) unsigned char storage[24];
+public:
+    MacroCommandRecorder(Score *, bool);
+    ~MacroCommandRecorder();
+    MacroCommandRecorder(const MacroCommandRecorder &) = delete;
+    MacroCommandRecorder &operator=(const MacroCommandRecorder &) = delete;
+    void commit();
+};
+static_assert(sizeof(MacroCommandRecorder) == 24 && alignof(MacroCommandRecorder) == 8);
+class __declspec(dllimport) Note {
+public:
+    int midi() const; int fret() const; unsigned string() const;
+    am::music::Accidental accidental() const;
+    bool isPalmMuted() const; bool hasLetRing() const;
+    bool isLeftHandTapped() const; bool isTapped() const;
+    bool isTieOrigin() const; bool isTieDestination() const;
+    unsigned slideFlags() const;
+    bool isSlideValid() const; bool isShiftSlideDestination() const; bool isLegatoSlideDestination() const;
+    bool isHarmonic() const; Harmonic::Type harmonicType() const; Harmonic::Fret harmonicFret() const;
+    Vibrato vibrato() const; AntiAccent antiAccent() const;
+    Fingering leftHandFingering() const; Fingering rightHandFingering() const;
+};
+class __declspec(dllimport) RhythmValue {
+    // GP 8.1.1.17: constructor/destructor and vector stride verify 0x38 bytes,
+    // alignment 8. Native code manages the rational at +0x10 and cache at +0x30.
+    alignas(8) unsigned char storage[0x38];
+public:
+    enum class Value : int {};
+    RhythmValue(Value, int, int, int);
+    ~RhythmValue();
+    RhythmValue(const RhythmValue &) = delete;
+    RhythmValue &operator=(const RhythmValue &) = delete;
+    Value getNoteValue() const; unsigned getAugmentationDot() const;
+    const TupletRatio &getTupletRatio(TupletLevel) const;
+    bool hasTuplet(TupletLevel) const;
+    QString toQString() const;
+};
+static_assert(sizeof(RhythmValue) == 0x38 && alignof(RhythmValue) == 8);
+class __declspec(dllimport) Beat {
+public:
+    const std::vector<std::shared_ptr<Note>> &notes() const;
+    bool isRest() const; bool isPlaceholder() const; const RhythmValue &rhythm() const;
+    bool isLegatoOrigin() const; bool isLegatoDestination() const;
+};
+class __declspec(dllimport) Voice {
+public:
+    const std::vector<std::shared_ptr<Beat>> &beats() const;
+};
+class __declspec(dllimport) Bar {
+public:
+    bool isSimileBar() const;
+    const std::array<std::shared_ptr<Voice>, 4> &voices() const;
+};
+class __declspec(dllimport) GuitarTuning {
+public:
+    unsigned stringCount() const;
+};
+class __declspec(dllimport) Staff {
+public:
+    const std::vector<std::shared_ptr<Bar>> &bars() const;
+    GuitarTuning &tuning() const;
+    int midi(unsigned, int) const;
+};
+class __declspec(dllimport) ScoreCursor {
+    void *implementation; // Native constructor and clone allocate an 8-byte value.
+public:
+    ScoreCursor(); ~ScoreCursor();
+    ScoreCursor(const ScoreCursor &) = delete;
+    ScoreCursor &operator=(const ScoreCursor &) = delete;
+    void copy(const ScoreCursor &);
+    void moveToCursorAndNotify(const ScoreCursor &, const ScoreCursor *);
+    void select(const ScoreModelIndex &, const ScoreModelIndex &);
+    void selectAll(); void selectMultiTrack(); void endMultiSelection();
+    void selectNote(const std::shared_ptr<const Note> &, int);
+    void setMultiVoice(bool);
+    void setLastUserSelectionRange(const ScoreModelRange &);
+    const ScoreModelIndex &modelIndex() const;
+    const ScoreModelRange &selectionRange() const;
+    const RhythmValue &nextInsertRhythm() const;
+    std::shared_ptr<Beat> beat() const;
+    std::shared_ptr<Staff> staff() const;
+    int barIndex() const; int beatIndex() const; int trackIndex() const;
+    unsigned noteMidi() const; unsigned noteString() const;
+    unsigned staffIndex() const; unsigned voiceIndex() const;
+    bool trySetBarIndex(int); bool trySetBeatIndex(int); bool trySetTrackIndex(int);
+    bool trySetStaffIndex(unsigned); void setVoiceIndex(unsigned);
+};
+static_assert(sizeof(ScoreCursor) == 8 && alignof(ScoreCursor) == 8);
+class __declspec(dllimport) TrackBase {
+public:
+    enum class Type : int {};
+    int index() const;
+    const std::string &name() const; const std::string &shortName() const;
+    PlaybackState playbackState() const;
+    float volume() const; float pan() const;
+    const am::utils::Color &color() const;
+    ScoreModel *parentScoreModel() const;
+};
+class __declspec(dllimport) Track {
+public:
+    const std::vector<std::shared_ptr<Staff>> &staves() const;
+    unsigned barCount() const; unsigned staffCount() const;
+    InstrumentSet::Type type() const; int transpositionOffset() const;
+    int defaultBarCountBySystem() const;
+};
+class __declspec(dllimport) Score {
+public:
+    const std::shared_ptr<ScoreModel> &modelPrivate() const;
+    std::string property(ScoreProperty) const;
+    void setStringedNoteFret(const ScoreModelIndex &, unsigned, int, am::music::Accidental);
+    void setStringedNote(const ScoreModelRange &, bool, int, int, am::music::Accidental, const RhythmValue &);
+    void clearBeat(const ScoreModelIndex &); void removeBeat(const ScoreModelIndex &);
+    void removeBeatRange(const ScoreModelRange &);
+    void pasteBeatRange(const std::shared_ptr<SerializedScore> &, const ScoreModelRange &, unsigned, SerializedScore::OverridingMode);
+    void pasteBarRange(const std::shared_ptr<SerializedScore> &, const ScoreModelRange &, unsigned, SerializedScore::OverridingMode);
+    void setBeatRhythm(const ScoreModelRange &, const RhythmValue &);
+    void setNoteAugmentationDot(const ScoreModelRange &, bool, unsigned);
+    void setBeatTuplet(const ScoreModelRange &, bool, const TupletRatio &, TupletLevel);
+    void setBeatLegato(const ScoreModelRange &, bool);
+    void setBeatTied(const ScoreModelRange &, bool);
+    void setNoteTied(const ScoreModelRange &, bool);
+    void setStringedNotePalmMute(const ScoreModelRange &, bool, bool);
+    void setNoteLetRing(const ScoreModelRange &, bool, bool);
+    void setStringedNoteLeftHandTapping(const ScoreModelRange &, bool);
+    void setStringedNoteRightHandTapping(const ScoreModelRange &, bool);
+    void setStringedNoteVibrato(const ScoreModelRange &, bool, Vibrato);
+    void setNoteAntiAccent(const ScoreModelRange &, bool, AntiAccent);
+    void setNoteLeftHandFingering(const ScoreModelRange &, bool, Fingering);
+    void setNoteRightHandFingering(const ScoreModelRange &, bool, Fingering);
+    void setStringedNoteSlide(const ScoreModelRange &, bool, SlideFlag, int, int);
+    void unsetStringedNoteSlide(const ScoreModelRange &);
+    void setStringedNoteNaturalHarmonic(const ScoreModelRange &, bool, Harmonic::Fret);
+    void setStringedNoteArtificialHarmonic(const ScoreModelRange &, bool, Harmonic::Type, Harmonic::Fret);
+    void unsetStringedNoteHarmonic(const ScoreModelRange &);
+    void createBars(unsigned, unsigned); void removeBarRange(unsigned, unsigned);
+    void createBeat(const ScoreModelRange &, const RhythmValue &);
+    void setProperty(ScoreProperty, const std::string &);
+    void setTempo(const std::string &, TempoUnit, float);
+    void setMasterBarTimeSignature(const ScoreModelRange &, bool, const TimeSignature &);
+    void setMasterBarKeySignature(const ScoreModelRange &, bool, const KeySignature &, bool);
+    void setBarRepeatStart(const ScoreModelRange &, bool);
+    void setBarRepeatEnd(const ScoreModelRange &, bool, int);
+    void setMasterBarDoubleBar(const ScoreModelRange &, bool);
+    void setMasterBarFreeTime(const ScoreModelRange &, bool);
+    unsigned trackCount() const;
+    const std::vector<std::shared_ptr<Track>> &tracks() const;
+    std::shared_ptr<TrackBase> track(TrackBase::Type, unsigned) const;
+    std::shared_ptr<MasterTrack> masterTrack() const;
+    void createTrack(unsigned, const std::shared_ptr<Track> &, unsigned, bool, bool, bool, unsigned);
+    void duplicateTrack(unsigned); void removeTrack(unsigned); void swapTracks(unsigned, unsigned);
+    void setTrackName(TrackBase &, const std::string &); void setTrackShortName(TrackBase &, const std::string &);
+    void setTrackPlaybackState(TrackBase &, PlaybackState);
+    void setTrackChannelStripParameter(TrackBase &, unsigned, float);
+    void setTrackColor(TrackBase &, const am::utils::Color &);
+    ScoreCursor &cursor();
+    bool undoAvailable() const; bool redoAvailable() const;
+    void undo(); void redo();
+};
+__declspec(dllimport) QString scorePropertyToQString(ScoreProperty);
+__declspec(dllimport) std::string playbackStateToString(PlaybackState);
+__declspec(dllimport) std::string tempoUnitToString(TempoUnit);
+__declspec(dllimport) float convertTempo(float, TempoUnit, TempoUnit);
+__declspec(dllimport) std::string vibratoToString(Vibrato);
+__declspec(dllimport) std::string antiAccentToString(AntiAccent);
+__declspec(dllimport) std::string fingeringToString(Fingering);
+}
+namespace gp::rse {
+class __declspec(dllimport) Metronome {
+public:
+    bool isEnabled() const; bool isCountdownEnabled() const; unsigned countdownBarCount() const;
+};
+class __declspec(dllimport) Conductor {
+public:
+    const std::shared_ptr<gp::core::Score> &score() const;
+    unsigned barCount() const;
+    int tickCount() const; int tickOffset() const; int tickOffset(unsigned) const;
+    long long frameOffset() const;
+};
+class __declspec(dllimport) ConductorController {
+public:
+    const std::shared_ptr<Conductor> &conductor() const;
+    bool isPlaying() const; bool isLoopEnabled() const; bool isCountingDown() const;
+    const Metronome &metronome(); float metronomeVolume() const;
+    void play(); void stop(); void seek(unsigned, int); void seek(int);
+    void setLoopEnabled(bool); void setMetronomeEnabled(bool); void setCountdownEnabled(bool);
+    void setMetronomeVolume(float); void setCountdownBarCount(unsigned);
+};
+}

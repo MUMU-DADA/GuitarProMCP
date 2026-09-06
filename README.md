@@ -1,36 +1,190 @@
 # GuitarProMCP
 
-An MCP extension for controlling Guitar Pro through an external bridge.
+为 Windows 版 Guitar Pro 提供进程内 **C++ MCP 服务器插件**。`guitarpro_mcp.dll` 加载到 `GuitarPro.exe`，直接处理 MCP 请求并调用宿主的文档和曲谱接口。运行链路不需要 Python、Node.js 或外部协议转接进程。
 
-## Goal
+目标是原生、完整的后台控制。**目前尚未实现全部操作，也不能读取软件的全部内部状态。** 已验证隐藏窗口下从模板新建、打开、切换和关闭已保存文档、读取实时曲谱、管理音轨、增删小节/节拍/音符、空白曲谱首音输入、修改品位/时值/附点/两层连音、拍号/调号/反复记号、修改元数据、声部和谱表导航、撤销重做、保存及播放控制。完整范围见 [覆盖清单](COVERAGE.md)。
 
-Expose all user-accessible Guitar Pro operations to MCP clients, including
-file management, score and note editing, tracks and instruments, playback,
-mixing and effects, import/export, printing, preferences, windows and dialogs.
-Reading selections and editing the current unsaved score are also in scope.
+```text
+MCP 客户端
+  → 本机 HTTP /mcp
+  → GuitarPro.exe 内的 C++ 插件
+  → Qt 主线程中的 IDocument / GPCore::Score 原生接口
+```
 
-Initial target: Windows and Guitar Pro 8.
+当前验证环境：Guitar Pro **8.1.1.17 / Qt 5.15.3 / Windows x64**。插件使用 Qt 通用插件加载入口；这不是 Arobas 提供的业务插件 SDK。私有曲谱接口只对已校验的宿主文件启用。
 
-## Starting Evidence
+宿主剪贴板互通已有实验性实现，但尚未完成隔离环境验证，默认关闭。它不计入下述已通过检查；当前默认 `gp_clipboard` 仍使用插件独立缓冲区。开发入口、已知限制和测试状态见 [宿主剪贴板实验](native/README.md#宿主剪贴板实验)。
 
-The preceding local investigation on 2026-09-06 reported:
+## 编译、启动与连接
 
-- Installed version: Guitar Pro 8.1.1.17.
-- Installation: `C:\Program Files\Arobas Music\Guitar Pro 8`.
-- The `Plugins` directory contains Qt components; no third-party business
-  plugin API or SDK was found.
-- Windows registers `GuitarPro.exe --open "<file>"` for opening scores.
-- GP, MIDI and MusicXML formats are supported; editing and conversion fidelity
-  still need validation.
+需要已安装的 Visual Studio x64 C++ 构建工具和 Qt 5.15.2 MSVC x64 开发包。当前工作区的 Qt 开发包位于 `.tools/qt/5.15.2/msvc2019_64`；首次克隆时需要在项目内准备该开发包。
 
-## Approach and Status
+```powershell
+./setup.ps1
+# SDK 位于项目内其他目录时：
+# ./setup.ps1 -QtDir ./本地SDK目录
 
-Use an external MCP server with available file/command interfaces and Windows
-UI automation for interactive operations. Full control is the target, not a
-verified capability; live selection, unsaved edits and UI reliability remain
-unproven. Validate each operation and its resulting application state before
-claiming support. A generic click or keystroke tool alone is not full coverage.
+./start-plugin.ps1
+# 或在启动时打开曲谱：
+# ./start-plugin.ps1 -ScorePath C:/绝对路径/曲谱.gp
+```
 
-Repository initialization only: no server, dependencies or automation are
-implemented. The next step is to inventory operations and validate one complete
-MCP-to-Guitar-Pro workflow before expanding implementation.
+插件输出到 `.tools/native/plugins/generic/guitarpro_mcp.dll`。启动脚本通过新进程的环境变量加载插件；插件默认维持隐藏模式，在 Qt 控件和底层窗口两层禁止自动获取焦点。它不会附加到已经运行的普通 Guitar Pro 实例。可通过 `gp_window restore` 恢复正常可见窗口，再用 `hide` 返回后台模式。
+
+插件启动后生成以下本地文件：
+
+| 文件 | 用途 |
+| --- | --- |
+| `.cache/native-session.json` | 宿主 PID、端口、协议和插件身份，不含访问令牌 |
+| `.cache/mcp-auth-token` | 本机访问令牌 |
+| `.cache/mcp-client.json` | 包含实际端点与令牌的 MCP 客户端配置 |
+
+将 `.cache/mcp-client.json` 中的服务器配置接入支持 HTTP MCP 的客户端。[mcp.example.json](mcp.example.json) 是使用占位令牌的模板。默认端点为 `http://127.0.0.1:18432/mcp`，协议版本为 `2025-06-18`。
+
+宿主进程退出后，MCP 服务随之停止。重新编译 DLL 前应关闭该插件实例。项目没有修改 Guitar Pro 安装目录、系统环境变量或全局 MCP 客户端配置。
+
+## 当前 MCP 工具
+
+| 工具 | 原生能力 |
+| --- | --- |
+| `gp_capabilities` | 宿主身份、Qt 线程、前台进程及能力边界 |
+| `gp_documents` | 文档 ID、打开路径、保存路径、未保存状态、活动文档 |
+| `gp_templates` / `gp_new` | 枚举内置模板；从模板异步新建无保存路径的独立曲谱 |
+| `gp_open` / `gp_activate` | 运行中异步打开已有 `.gp` 文件；原生切换活动文档 |
+| `gp_close` | 异步关闭指定的已保存文档；拒绝未保存修改，关闭最后文档后仍可重新打开 |
+| `gp_playback` | 播放/停止、按原谱小节或反复展开后的绝对 tick 定位、循环、节拍器、倒计时及时间线状态 |
+| `gp_score` | 实时元数据、音轨和小节数量、光标、撤销重做状态 |
+| `gp_read_bars` | 读取实时音符、音高、弦、品位、时值、休止、占位拍和已接入的音符技法，每次最多 16 小节 |
+| `gp_read_master_bars` | 读取全曲共享的拍号、实音调号、反复记号、双小节线和自由拍号，每次最多 128 小节 |
+| `gp_edit_measure` | 修改光标所在单个小节的拍号、实音调号、反复起止/次数、双小节线和自由拍号，支持撤销 |
+| `gp_edit_metadata` | 使用原生命令修改一项元数据，例如标题 |
+| `gp_edit_tempo` | 修改初始速度、速度单位和文字标记，支持撤销并更新原生播放时间线 |
+| `gp_edit_track` | 修改音轨名称、简称、颜色、音量、声像及独奏/静音状态 |
+| `gp_edit_tracks` | 复制、删除或交换音轨，支持撤销 |
+| `gp_insert_track` | 以本曲谱或其他已打开曲谱中的音轨配置新增音轨，可选复制内容 |
+| `gp_set_fret` | 使用原生命令修改当前节拍中一个已有音符的品位 |
+| `gp_edit_note` | 在当前节拍新增/修改音符或删除指定弦音符；支持和弦增音、休止及空白占位拍上输入 |
+| `gp_edit_note_effect` | 修改当前拍指定弦的掌根闷音、延音、左右手点弦、揉弦、弱音级别或左右手指法，支持撤销 |
+| `gp_edit_connection` | 原生连奏和延音线；光标整拍、指定弦单音、跨小节选区、全部声部/音轨与钢琴谱表，支持撤销及状态读回 |
+| `gp_edit_beat` | 在当前拍前插入休止拍、修改基础时值/附点/两层连音、清空音符为休止、删除节拍；选区批量编辑支持跨声部、跨音轨及全部谱表 |
+| `gp_edit_bars` | 同步插入或删除所有音轨的小节，支持撤销；删光时宿主保留一个空小节 |
+| `gp_cursor` | 移动音轨、谱表、小节、声部或节拍索引；声部为 0–3 |
+| `gp_selection` | 读取选区端点、方向、模式和实际节拍位置；选择节拍范围、单音或全谱表，扩展到全部声部/音轨，取消选择 |
+| `gp_clipboard` | 原生曲谱快照的复制、剪切、读取、粘贴和清空；支持单声部、多声部、多轨及钢琴谱表，使用插件独立缓冲区 |
+| `gp_undo_redo` | 调用曲谱模型的撤销或重做 |
+| `gp_save` | 保存到新的 `.gp` 副本，保留文档当前保存路径和未保存状态 |
+| `gp_save_as` | 另存为新的 `.gp` 文件，更新保存路径及宿主保存状态 |
+| `gp_objects` / `gp_actions` | 检查 Qt 对象、属性、方法和 QAction |
+| `gp_trigger` / `gp_set_property` | 调用观察到的原生 Qt 动作或设置允许的属性 |
+| `gp_window` / `gp_close_window` | 原生窗口隐藏、最小化、恢复和关闭 |
+
+曲谱工具调用 GPCore 的原生方法和命令，不发送鼠标或键盘输入。Qt 控件属性工具只保证控件属性操作：例如修改标题输入框的 `plainText` 不会自动提交曲谱标题，应使用 `gp_edit_metadata`。
+
+保存工具要求绝对路径、现有父目录以及尚不存在的 `.gp` 目标文件。`gp_set_fret` 当前只修改已有音符，品位范围为 0–36。弦编号使用宿主内部索引，应以 `gp_read_bars` 的返回值为准。
+
+`gp_open` 返回 `scheduled` 后，需要轮询 `gp_documents` 确认文件出现；打开已存在的路径返回对应文档 ID。多文档播放前先调用 `gp_activate`，再调用 `gp_playback`。播放和停止可能异步完成，应轮询状态确认。
+
+`gp_new` 的模板名来自 `gp_templates`。返回 `scheduled` 后，轮询 `gp_documents.creation`，核对相同 `request` 的 `status` 为 `created`；最多等待 10 秒，同一时间只接受一次创建。重复使用同一模板会生成独立文档。
+
+`gp_close` 接受文档 ID，返回 `scheduled` 后轮询 `gp_documents.closing`，匹配请求 ID 并确认 `closed`。有未保存修改时先保存；此工具不会丢弃修改或代答保存对话框。后台关闭最后一份文档后，MCP 服务仍保持运行。关闭软件主窗口的 `gp_close_window` 则会退出宿主并断开连接。
+
+指定文档的编辑、光标、撤销重做和另存为操作会先原生切换软件内的活动文档，以确保宿主把未保存标记归到正确曲谱。这个切换无需将软件窗口放到前台。
+
+音符和节拍编辑默认针对光标所在的单个节拍，使用独立构造的原生范围。基础时值和附点分别编辑，各对应宿主自己的撤销命令；基础时值修改保留已有附点和连音比例，不自动补齐小节。
+
+`gp_edit_beat operation=tuplet` 设置连音，`actual=3, normal=2` 表示三连音。`level` 为 `primary`（默认）或 `secondary`；`enabled=false` 只清除指定层，不带比例参数。支持光标单拍、明确选区、跨小节、全部声部/音轨和钢琴谱表，批量编辑可一次撤销。`gp_read_bars` 的每拍 `tuplets` 返回两层的 `enabled/actual/normal`。具体语义见 [原生连音](native/README.md#原生连音)。
+
+`gp_selection` 的 `range` 操作接受 `base` 和 `extent`，每个端点明确指定 `track/staff/bar/voice/beat`，包括首尾节拍并保留选择方向。端点需属于同轨、同谱表和同声部；`all_voices=true` 扩展声部，`all_tracks=true` 则按宿主规则覆盖所选整小节的全部音轨和声部。单音选择使用 `note` 操作及 `gp_read_bars` 返回的 `notes` 数组下标 `note_index`。选区先在独立原生光标副本上校验，再通知宿主提交。
+
+`gp_selection operation=beats` 返回明确选区的实际节拍位置、`count` 和跳过的空占位拍数，不切换活动文档。`gp_edit_beat scope=selection` 可批量修改基础时值、附点或连音，支持全部声部、全部音轨及钢琴双谱表，并用原生宏命令提供一次撤销。范围最多 128 小节；为控制遍历开销，所检查小节区域内最多 20000 拍。空占位拍不作为编辑目标，区间内部无法避开的占位拍及同前小节记号会被拒绝。省略 `scope` 时仍只编辑光标所在的一拍。
+
+`gp_clipboard` 的 `copy/cut` 使用明确选区，`read/paste` 必须携带当前快照 `id`。快照不随源文档修改而变化，关闭源文档后仍可粘贴。它与系统剪贴板独立，不能读取系统中的复制内容。`paste` 默认在光标处插入；单小节片段插入节拍，多轨或跨小节片段则插入全曲共享小节，其他音轨的原内容随之顺移。返回 `previous_bar_count` 和 `global_bar_delta`。多声部粘贴前需用 `gp_selection all_voices=true` 设置目标模式，保持该模式并用默认 `scope=cursor` 可插入；`scope=selection` 表示替换选区。详细语义和边界见 [原生剪贴板](native/README.md#原生剪贴板)。
+
+多声部选区按宿主的音乐时间规则映射，不能直接套用基点声部的节拍下标。时值修改后，其他声部下一次被选中的节拍可能随时间变化，应重新读取 `operation=beats`。全音轨选择覆盖所选整小节的全部谱表和声部。
+
+`gp_edit_note_effect` 使用 `string` 定位当前拍内的一个已有弦乐音符，`property` 指定技法，`value` 为布尔值或宿主枚举名称。`gp_read_bars` 中每个音符的 `effects` 返回这些状态。单音范围同时指定弦号与 MIDI 音高，不改变界面选区；同拍其他音符、其他声部及音轨的隔离均已验证。具体取值见 [原生插件说明](native/README.md#音符技法)。
+
+`gp_edit_connection` 的 `kind` 为 `legato`（连奏）或 `tie`（延音线），`enabled` 必填。默认光标模式下，连奏连接下一拍，延音线连接前一拍；延音线可能改写当前音高、品位和升降号，也可能补入缺少的弦音符。`scope=selection` 处理明确选区，支持跨声部/音轨的一次撤销。每拍的 `legato` 和每个音符的 `tie` 返回 `origin/destination`。返回的 `changed_selected_beats` 只统计所选节拍，`status=executed` 表示原生命令已执行；重复命令可能增加撤销记录。详见 [连奏与延音线](native/README.md#连奏与延音线)。
+
+已发现该宿主版本的保存过程不能可靠保留补充平面 Unicode 字符，例如 🎸。元数据工具会在修改前拒绝这类字符及不允许出现在 XML 中的控制字符；中文标题已通过保存后 GPIF 内容检查。
+
+音轨颜色使用 `#RRGGBB`，音量和声像使用 `0..1` 的原生归一化值，声像 `0.5` 居中。名称、简称、颜色、音量和声像支持撤销；`playback_state` 为 `Default`、`Solo` 或 `Mute`，宿主不将它加入撤销栈，工具返回 `undoable=false`。音轨文本与元数据采用相同的字符限制。
+
+`gp_insert_track` 默认保留源音轨配置、清空音符并匹配目标曲谱的小节数；`copy_content=true` 目前要求两份曲谱小节数相同。可从其他已打开文档插入钢琴双谱表等音轨，也可为零音轨曲谱插入首条音轨。它尚不支持任意乐器配置、调弦或完整音效链编辑。
+
+`gp_score.tempo` 返回初始速度、单位、文字标记及等效四分音符 BPM。`gp_edit_tempo` 的 `value` 为 `1..400` 的整数，单位取自 `gp_score.tempo.units`，省略 `unit` / `label` 时保留原值。此宿主会截断小数速度，因此插件在修改前拒绝小数。后续变速点保持不变；分段变速和渐变速度尚未提供编辑接口。
+
+`gp_edit_measure` 只修改光标所在的一个全曲共享小节，拍号和调号不会自动延伸到后续小节。调号以实音表示，修改后宿主可能调整音符的升降号拼写；已验证 MIDI 音高、弦、品位和节奏保持不变，撤销恢复原拼写。`key_signature.native_label` 是宿主编码，不是常用调名。
+
+反复次数为 `2..100`，省略时为 2。关闭反复结束标记或撤销新增标记后，宿主可能保留 `repeat_count` 缓存；只有 `repeat_end=true` 时次数才生效。`gp_playback operation=seek` 的 `bar` 是原曲谱小节索引，`tick` 是该小节内偏移；`seek_tick` 的 `tick` 是展开反复后的绝对位置，范围为 `0..total_ticks-1`。反复编辑会异步更新时间线，应轮询状态确认。
+
+参数和实现细节见 [原生插件说明](native/README.md)。
+
+## 运行检查
+
+协议检查只需要一个已启用插件的宿主：
+
+```powershell
+./native/test-mcp.ps1
+```
+
+后台曲谱检查使用仓库提供的简单测试曲谱，并拒绝修改其他文档。先关闭已有插件实例，再运行：
+
+```powershell
+New-Item -ItemType Directory -Force artifacts
+Copy-Item ./native/testdata/minimal.gp ./artifacts/native-test.gp
+./start-plugin.ps1 -ScorePath ./artifacts/native-test.gp
+./native/test-native.ps1
+./native/test-editing.ps1
+./native/test-tracks.ps1
+./native/test-measures.ps1
+./native/test-effects.ps1
+./native/test-selection.ps1
+./native/test-lifecycle.ps1
+./native/test-session.ps1
+./native/test-structure.ps1
+./native/test-clipboard.ps1
+./native/test-tuplets.ps1
+./native/test-connections.ps1
+```
+
+检查覆盖实时音符读取、品位与音高变化、中文元数据、光标、撤销重做、保存后的实际 GPIF 内容，以及窗口保持隐藏和宿主不在前台的状态。输出与验证记录保存在 `artifacts/native-verification-*/`。测试最后恢复曲谱内容，并将恢复后的文档另存为测试文件；原始测试副本保持不变。
+
+编辑检查涵盖和弦增音、删除音符、休止上输入、时值与附点、清空/删除节拍、撤销重做及保存后的 GPIF。输出在 `artifacts/native-editing-*/`。生命周期检查涵盖定向关闭、未保存修改保护、旧 ID 失效、关闭全部文档后重开，以及窗口恢复再隐藏；输出在 `artifacts/native-lifecycle-*/`，结束时重开测试夹具。会话检查涵盖运行中打开、重复打开、反复切换、第二声部编辑隔离、不同速度曲谱的播放控制器关联、定位及真实时间线推进；输出在 `artifacts/native-session-*/`。最后运行结构检查，覆盖模板重复新建、首音输入、节拍插入、小节增删、多音轨及钢琴上下谱表编辑隔离；输出在 `artifacts/native-structure-*/`。后两组会保留多份干净测试文档。
+
+音轨检查覆盖新增、复制、删除、交换、跨文档配置复用、零轨恢复、中文名称、颜色、音量、声像、独奏/静音以及撤销和保存。颜色和混音参数还通过保存后的 GPIF 独立检查，输出在 `artifacts/native-tracks-*/`。
+
+小节记谱检查覆盖拍号和实音调号边界、相邻小节隔离、升降号拼写与音高、反复起止/次数、双小节线、自由拍号、撤销及保存后的 GPIF。反复 3 次和 100 次时还核对时间线长度、最后有效 tick 和小节偏移越界；输出在 `artifacts/native-measures-*/`。
+
+音符技法检查覆盖 21 种非默认取值、关闭或清除、重复设置、撤销重做、同拍/声部/音轨隔离及光标不变。逐项核对保存后的 GPIF，并重新打开包含组合技法的曲谱检查持久化；输出在 `artifacts/native-effects-*/`。测试最后重开原始夹具，恢复精确的初始模型。
+
+选区检查覆盖正反向范围、模式切换、单音和跨小节定位、无效输入、钢琴谱表隔离，以及跨声部/音轨批量时值和附点的撤销、重做及原生重开。四声部混合时值检查独立核对每个选中节拍的位置，另验证整曲、单小节、范围外隔离和 128 小节限制；输出在 `artifacts/native-selection-*/`。导航会清理空临时占位拍，重开时空声部可能重新生成一个占位拍；检查单独记录并核对这些变化，见 [选区说明](native/README.md#原生选区)。
+
+文档/播放检查还覆盖初始速度、五种速度单位、中文速度标记、撤销重做和无效参数。它同时核对保存后的 GPIF 与原生播放帧数，确认初始速度修改不会覆盖后续独立变速点。
+
+剪贴板检查覆盖独立快照、源文档关闭后粘贴、单小节插入和选区替换、多声部补齐与精确撤销、多轨及跨小节插入、原内容顺移、空白目标、钢琴下谱表隔离、兼容性拒绝及保存重开；输出在 `artifacts/native-clipboard-*/`。检查精确核对原生补入的休止或末尾占位拍，不把它们混同于原选区的节拍数。
+
+2026-09-06 本机验证结果：协议 **26 项**、原生后台操作 **26 项**、音符和节拍编辑 **58 项**、音轨 **90 项**、小节记谱与反复定位 **118 项**、音符技法 **254 项**、选区和批量时值 **980 项**、文档生命周期 **40 项**、文档和播放 **103 项**、结构和模板 **60 项**、剪贴板 **112 项**，合计 **1867 项通过**。这些结果只证明列出的测试场景，不代表全部软件功能已覆盖。
+
+2026-09-07 新增连音专项 **175 项通过**，累计 **2042 项**。本轮运行协议、原生后台、节拍编辑、选区、插件独立剪贴板和连音六组，共 **1377 项通过**。连音证据在 `artifacts/native-tuplets-*/verification.json`，包括十种比例、两层独立设置/清除、嵌套与单独次层保存重开、选区外隔离、跨小节/声部/音轨、钢琴谱表、宏命令撤销，以及 GPIF 和插件内复制粘贴；没有运行真实系统剪贴板测试。
+
+同日新增连奏与延音线专项 **153 项通过**，十三组累计 **2195 项**。专项核对单拍、和弦单音、反向跨小节、多声部/音轨、钢琴下谱表隔离、音高/升降号变化、缺失弦音符补入、原生命令重复执行、撤销重做、GPIF 和保存重开。证据在 `artifacts/native-connections-*/verification.json`。
+
+连接编辑实现后的最新回归运行了协议、原生后台、节拍编辑、音符技法、选区、插件独立剪贴板、连音和连接八组，共 **1784 项通过**。汇总及当前 DLL/源码哈希在 `artifacts/native-connections-ce6b417d13c046e0a4703353b0121ca9/regression.json`；没有执行真实系统剪贴板测试。
+
+早期发现的隐藏窗口请求前台问题已通过同步 `QWidget` / `QWindow` 的焦点策略修复；上述通过记录无需预先最小化窗口。`gp_capabilities.foreground_window` 可读取当时窗口的句柄、类名、标题及可见性，检查脚本不会忽略前台断言失败。其他模态窗口、复杂操作和长时间运行仍需扩大验证。
+
+音轨回归还暴露了事件观察列表中的失效裸指针：现在从首次观察起保存 `QPointer`，服务快照直接复制已有的受保护引用，避免对象销毁后重新构造引用。上述回归已通过；长期稳定性仍需继续验证。
+
+## 项目内的开发资源
+
+| 目录 | 内容 |
+| --- | --- |
+| `native/` | C++ 插件、ABI 声明、构建脚本、PowerShell 检查和测试曲谱 |
+| `.tools/` | Qt 开发包、插件构建产物和原生接口开发探针 |
+| `.cache/` | MCP 配置、访问令牌、日志和临时文件 |
+| `artifacts/` | 测试曲谱、导出文件和验证证据 |
+
+新增临时工具、库、缓存和产物均保存在项目内；后三个目录已被 Git 忽略。早期 Python、Node.js 和界面自动化实现及其环境、包缓存、一次性探针和下载归档已清理。当前构建和运行只需要上述 C++/Qt 环境。
+
+`artifacts/` 保留各原生测试组的最新记录、文档明确引用的证据及其关联曲谱；重复的旧测试输出已清理。连接凭据和 MCP 客户端配置保留在 `.cache/`。宿主版本哈希见[私有接口的版本约束](native/README.md#私有接口的版本约束)，当前实现状态以本说明及覆盖清单为准。

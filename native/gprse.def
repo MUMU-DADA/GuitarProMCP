@@ -1,0 +1,26 @@
+LIBRARY GPRSE
+EXPORTS
+?seek@ConductorController@rse@gp@@QEAAXH@Z
+?barCount@Conductor@rse@gp@@QEBAIXZ
+?conductor@ConductorController@rse@gp@@QEBAAEBV?$shared_ptr@VConductor@rse@gp@@@std@@XZ
+?countdownBarCount@Metronome@rse@gp@@QEBAIXZ
+?frameOffset@Conductor@rse@gp@@QEBA_JXZ
+?isCountdownEnabled@Metronome@rse@gp@@QEBA_NXZ
+?isCountingDown@ConductorController@rse@gp@@QEBA_NXZ
+?isEnabled@Metronome@rse@gp@@QEBA_NXZ
+?isLoopEnabled@ConductorController@rse@gp@@QEBA_NXZ
+?isPlaying@ConductorController@rse@gp@@QEBA_NXZ
+?metronome@ConductorController@rse@gp@@QEAAAEBVMetronome@23@XZ
+?metronomeVolume@ConductorController@rse@gp@@QEBAMXZ
+?play@ConductorController@rse@gp@@QEAAXXZ
+?score@Conductor@rse@gp@@QEBAAEBV?$shared_ptr@VScore@core@gp@@@std@@XZ
+?seek@ConductorController@rse@gp@@QEAAXIH@Z
+?setCountdownBarCount@ConductorController@rse@gp@@QEAAXI@Z
+?setCountdownEnabled@ConductorController@rse@gp@@QEAAX_N@Z
+?setLoopEnabled@ConductorController@rse@gp@@QEAAX_N@Z
+?setMetronomeEnabled@ConductorController@rse@gp@@QEAAX_N@Z
+?setMetronomeVolume@ConductorController@rse@gp@@QEAAXM@Z
+?stop@ConductorController@rse@gp@@QEAAXXZ
+?tickCount@Conductor@rse@gp@@QEBAHXZ
+?tickOffset@Conductor@rse@gp@@QEBAHI@Z
+?tickOffset@Conductor@rse@gp@@QEBAHXZ
