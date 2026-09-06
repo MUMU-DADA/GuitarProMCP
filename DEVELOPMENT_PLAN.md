@@ -1,587 +1,236 @@
-# GuitarProMCP Development Plan
+# GuitarProMCP 完整开发计划
 
-Accepted scope: installable native MCP control of Guitar Pro, automatic loading
-with the application, reliable live editing, and completion of the operation
-coverage in `COVERAGE.md`. The scope is not reduced to currently passing tests.
-Implementation mode: ponytail ultra; reuse the C++/Qt runtime and native APIs.
-Commit each completed phase after its acceptance checks pass.
+更新日期：2026-09-07。已确认的交付范围是：可安装、随 Guitar Pro 启动自动加载的原生 MCP 插件，可靠地操作实时文档，并完成 [覆盖清单](COVERAGE.md) 中约定的全部操作。实现方式沿用 `ponytail ultra`，优先复用现有 C++/Qt 运行环境和宿主原生接口。
 
-Plan reconciled with the working tree on 2026-09-07. This is the full delivery
-plan, including unfinished functionality. A candidate package, successful build
-or historical passing suite does not complete a phase.
+本计划包含尚未实现及尚未验收的功能。候选安装包、编译成功和历史测试通过都不能代替阶段验收；不得把完整目标缩减为当前已经通过的测试。每个阶段通过验收后提交一次 Git，中间进展明确标记为检查点。
 
-## Status
+项目 Markdown 文档统一使用中文，命令、路径、API、协议字段、状态值及用于核验的原始界面文字保留原样。
 
-| Phase | Status | Required acceptance |
+## 阶段总览
+
+| 阶段 | 当前状态 | 必须交付并验收的内容 |
 | --- | --- | --- |
-| P0 Automatic loading | Complete | Direct EXE, real Windows shortcut, file-association command arguments, and removing the extension verified in an isolated host copy. See `native/AUTOLOAD.md`. |
-| P1 Installation | In progress; final installed-host verification pending | Prebuilt package, installation/update/disable/uninstall, normal visible startup, explicit background mode, persistent local configuration, MCP connection information. |
-| P2 Sessions and documents | In progress; connection and save checks passed, lifecycle and recovery gaps remain | Restart/reconnect, port conflicts, instance identity, multiple clients, asynchronous failure/cancellation, document lifecycle, save-current/overwrite/recovery, explicit save/discard/cancel on close. |
-| P3 Score and tracks | Pending | Missing notation/effects, keyboard/percussion notes, cross-track operations, instrument/tuning/capo/transposition, complex repeats/endings/jumps, verified read/write/undo/persistence/playback. |
-| P4 Selection and clipboard | Pending | Partial track sets, complex voice ranges, batch commands, special/repeated paste, complex cut/replace, tuning/transposition/percussion compatibility, isolated system-clipboard verification. |
-| P5 Playback and audio | Pending | Tempo points/ramps, loop ranges, mixing/effects/sounds/devices, repeat/jump timeline, accurate seeking and multi-document isolation. |
-| P6 Exchange and workspace | Pending | MIDI/MusicXML/other GP import/export, PDF/image/audio output, printing/layout/staff display, document versus global preferences, actual output verification. |
-| P7 Release | Pending | Supported-build matrix, diagnostics/recovery/upgrades, complex scores, long runs, multiple clients/documents, modal states, install/update/uninstall, complete applicable regression on the release binary. |
+| P0 自动加载 | 已完成 | 隔离宿主中验证直接启动 EXE、真实 Windows 快捷方式、文件关联启动参数和移除扩展；见 [自动加载方案](native/AUTOLOAD.md) |
+| P1 安装集成 | 进行中，真实安装目录最终验收待完成 | 预编译包，安装、更新、启停、卸载，可见及显式后台启动，持久配置与客户端连接信息 |
+| P2 会话与文档 | 进行中，连接和保存已有验证，生命周期及恢复仍有缺口 | 重启重连、端口冲突、实例身份、多客户端、异步失败与取消、文档生命周期、保存及恢复、关闭时保存/丢弃/取消 |
+| P3 曲谱与音轨 | 待完成 | 剩余记谱及技法、键盘/打击乐音符、跨轨编辑、乐器/调弦/变调夹/移调、复杂反复与跳转；验证读取、修改、撤销、持久化及播放 |
+| P4 选区与剪贴板 | 待完成 | 部分音轨集合、复杂声部范围、批量命令、特别及重复粘贴、复杂剪切/替换、调弦/移调/打击乐兼容、隔离的系统剪贴板验证 |
+| P5 播放与音频 | 待完成 | 变速点及渐变、循环范围、混音/效果/音色/设备、反复跳转时间线、准确定位与多文档隔离 |
+| P6 导入导出与工作区 | 待完成 | MIDI/MusicXML/其他 GP 格式、PDF/图片/音频、打印排版与谱表显示、文档及全局设置、实际输出验证 |
+| P7 发布验收 | 待完成 | 版本兼容矩阵、诊断恢复与升级、复杂曲谱、长时间运行、多客户端/文档、模态状态、安装生命周期和发布二进制完整回归 |
 
-P0 -> P1 -> P2 establishes the foundation for feature expansion P3-P6. Independent
-P2 work may continue in isolated hosts while the actual P1 installation awaits
-administrator access; this does not complete P1. Execute feature phases in order,
-reusing earlier capabilities, then qualify the complete package in P7.
-Reliability checks run during every phase, not only at the final release gate.
+P0、P1、P2 为 P3–P6 提供基础，随后由 P7 对完整安装包进行发布验收。P1 真实安装步骤等待管理员权限期间，可以继续在隔离宿主中执行不依赖它的 P2 工作，P1 仍保持未完成。可靠性检查贯穿每个阶段。
 
-## User Workflow And Architecture
+## 用户使用流程与架构
 
-Install the compiled package once, launch Guitar Pro through its normal entry
-points, and connect an MCP client using the published local configuration. The
-client operates the documents already open in that plugin-enabled process.
-Manual edits and MCP edits must use the same native document and undo history.
-Ordinary use must not require the repository, a developer launcher or compilation.
+用户只需安装一次预编译包，之后通过 Guitar Pro 原有入口启动软件，插件随软件自动加载。MCP 客户端根据本地生成的配置连接，操作该进程中已经打开的曲谱。手工编辑和 MCP 编辑共享原生文档、未保存状态和撤销历史，日常使用无需源码仓库、开发启动脚本或编译环境。
 
-The runtime path is MCP client -> authenticated loopback HTTP -> in-process
-C++/Qt bridge -> Guitar Pro native model and commands. Reuse the host event loop
-for mutation ordering and existing status/configuration helpers. Add no external
-resident service or scripting runtime without a demonstrated requirement.
+运行链路为：
 
-This repository provides an application-local extension; it does not control
-what the vendor bundles in Guitar Pro. Automatic loading takes effect after
-installation and restart. A process opened before installation has not loaded
-the extension; hot attachment is separate research, not a promised first-release
-capability. Explicit background operation is a separate launch mode from normal
-visible startup.
+```text
+MCP 客户端
+  -> 经过鉴权的本机 HTTP
+  -> GuitarPro.exe 内的 C++/Qt 桥接层
+  -> Guitar Pro 原生文档模型与命令
+```
 
-## Product Requirements
+通过宿主事件循环按顺序执行修改，复用现有状态及配置工具；确有需求前不增加外部常驻服务或脚本运行时。
 
-- Normal application startup should load the installed plugin without a manual
-  PowerShell command. Test direct `GuitarPro.exe`, Windows shortcuts and opening
-  an associated score independently. Shortcut replacement alone does not prove
-  direct executable loading.
-- Normal launches retain the visible application and normal focus behavior.
-  Explicit background launches preserve the existing hidden-mode guarantees.
-- Installation provides compiled binaries; users do not need the compiler or
-  Qt development kit. Keep runtime credentials/configuration out of the source
-  checkout and out of logs. Installation and uninstall are reversible.
-- The host process contains the native MCP server. No external language runtime,
-  input simulation, or foreground window is required for native score work.
-- The initial supported host is Windows x64 Guitar Pro 8.1.1.17. Each additional
-  host build requires independent ABI validation and regression evidence.
-- A running ordinary instance that predates installation must restart to load
-  the plugin. Hot attachment remains separate research, outside the first
-  release prerequisite.
-- Manual editing and MCP share the actual host document. Multiple clients and
-  instances must not silently redirect commands to the wrong score/process.
+本仓库提供安装到软件目录的扩展，不能决定厂商出厂预装内容。安装并重启后自动加载；安装前已打开的普通进程需要重启。向已有普通进程热附加属于单独研究，不承诺为首版能力。正常可见启动和显式后台启动分别验收。
 
-## Phase Details
+## 产品要求
 
-### P0: Establish automatic loading
+- 正常启动软件即加载已安装插件，无需手动执行 PowerShell。直接 EXE、原有快捷方式和关联曲谱分别测试，修改快捷方式不能证明直接启动已通过。
+- 正常启动保留可见窗口及正常焦点行为；显式后台启动保持现有隐藏、不抢焦点的保证。
+- 提供预编译安装包，用户无需编译器或 Qt SDK。正式运行的凭据与配置独立于源码目录，凭据不得写入日志。安装和卸载可恢复。
+- 原生 MCP 服务运行于宿主进程内，曲谱操作不依赖外部语言运行时、输入模拟或前台窗口。
+- 首个支持版本为 Windows x64 Guitar Pro 8.1.1.17。每增加一个宿主构建，单独验证 ABI 并记录回归证据。
+- 安装前已经运行的普通实例必须重启才能加载插件；热附加不属于首版交付前提。
+- 手工操作与 MCP 共用真实宿主文档。多客户端及多实例操作不得静默指向错误曲谱或进程。
 
-Inspect the host's existing plugin discovery and test an application-local
-extension in an isolated installation copy before touching the installed host.
-Do not replace host executables or Qt DLLs. Record the mechanism, actual loading
-point, startup variants, compatibility checks and uninstall behavior. A loading
-candidate is not accepted based only on metadata discovery or file placement.
+## 分阶段任务与验收
 
-Deliverable: documented loader, compatibility checks and reversible installation
-proof. Exit gate: the isolated host loads the actual bridge from direct EXE,
-Windows shortcut and associated-score command arguments; removal restores the
-baseline startup behavior. Already accepted in `c945e42`. Actual installed
-Windows entry points are additionally checked in P1.
+### P0：确认自动加载入口
 
-### P1: Package and integrate
+在隔离的安装副本中研究并验证宿主现有插件发现机制，不替换宿主 EXE 或 Qt DLL。记录实际加载入口、加载时机、启动方式、兼容性检查及卸载行为，不能仅凭元数据被发现或 DLL 已放入目录就确认可用。
 
-Separate developer compilation from end-user installation. Provide bounded
-installation detection, staged updates, persistent configuration, status and
-disable controls, credential handling and uninstall recovery. Detect running
-hosts before replacing loaded binaries. Check compatibility before invoking
-private ABI functions. Verify the application remains usable if configuration
-or the local MCP endpoint is unavailable.
+交付加载机制说明、兼容性检查和可恢复安装证据。隔离宿主必须从直接 EXE、Windows 快捷方式、关联曲谱启动参数加载桥接层，移除扩展后恢复基线启动行为。
 
-- Deliver a prebuilt ZIP with install/update/enable/disable/uninstall commands,
-  persistent per-user configuration, local credentials and in-app MCP status.
-- Verify ownership checks, staged replacement, rollback, unsupported versions,
-  unavailable configuration/port and a host running during update. Failure must
-  leave ordinary Guitar Pro usable and report the actual service state.
-- Install the accepted candidate into the real installation directory and check
-  direct EXE, existing shortcut and file association independently. Verify
-  visible startup, explicit background startup, connection and clean shutdown.
-- Exercise install -> update -> disable -> enable -> uninstall and retained
-  user configuration. Bind the evidence to the exact packaged binaries.
+状态：已由 `c945e42` 完成验收。真实安装目录的 Windows 入口仍需在 P1 中另行验证。
 
-Exit gate: all of the above pass on the supported host. `974e4e0` is a candidate
-checkpoint, not a P1 completion commit. The actual installation still contains
-older binaries. Writing to Program Files needs Windows administrator access;
-removing the execution sandbox does not supply it. The prior UAC cancellation
-and pending retry decision remain relevant only to this installed-host step.
+### P1：打包与软件集成
 
-### P2: Make everyday work reliable
+区分开发者编译与最终用户安装。提供限定范围的安装检测、分阶段替换、持久配置、状态与启停控件、凭据管理及卸载恢复。替换 DLL 前检测占用它的宿主进程；调用私有 ABI 前检查兼容性；配置或本机服务不可用时，普通软件功能仍应可用。
 
-Provide instance discovery, reconnect, stable identity, collision handling and
-serialized mutations. Complete operation status for open/new/close/save,
-including failure, cancellation and timeout. Cover tab reordering, stale IDs,
-manual edits, save-current, explicit overwrite, failed-save recovery and
-save/discard/cancel on close. Never silently discard user changes.
+- 提供预编译 ZIP，以及安装、更新、启用、停用、卸载命令；包含每用户配置、本机凭据和软件内 MCP 状态入口。
+- 验证文件归属、分阶段替换、回滚、不支持的版本、配置及端口不可用、更新时宿主仍在运行等情况。失败后准确报告服务状态，并保留普通 Guitar Pro 的可用性。
+- 将验收候选包安装到真实目录，分别测试直接 EXE、原有快捷方式和文件关联，包括可见启动、显式后台启动、连接与正常退出。
+- 完整执行“安装 -> 更新 -> 停用 -> 启用 -> 卸载”，核对用户配置保留情况，证据绑定准确的安装包二进制。
 
-- P2.1 Connection ownership: discover live instances using UUID, PID and process
-  start time; bind requests to the selected instance; reject stale descriptors
-  and mismatched identity before native work. Remove only owned runtime files.
-- P2.2 Connection lifecycle: reconnect to the same process, explicitly select a
-  replacement after restart, preserve credentials and invalidate old document
-  IDs. Never automatically replay a mutation after a transport failure.
-- P2.3 Port and client behavior: use the default port when available, test
-  fallback when it is occupied, and fail clearly when an explicitly requested
-  port is unavailable. Test real MCP clients importing configuration, including
-  restart and changed URLs; a rewritten configuration file alone is not proof
-  that a running client follows it. Align protocol/package version reporting.
-- P2.4 Concurrency and host boundary: exercise at least two client sessions with
-  overlapping requests and verify mutation ordering and document isolation.
-  Verify repeated host launches and file forwarding. Test independent GUI
-  processes only through a supported host mode; protocol-level server isolation
-  cannot substitute for actual host-process evidence.
-- P2.5 Document lifecycle: complete new/open/activate/close and expose a request
-  identity and observed completion, error, cancellation or timeout. A timeout
-  must not imply that a native operation was rolled back. Resolve outstanding
-  work before retrying an action whose outcome is uncertain.
-- P2.6 Save and recovery: save the current path, save a copy, adopt a Save As
-  path, explicitly authorize overwrite, and preserve original file/path/dirty
-  state after failure. A new document must have a destination before saving.
-- P2.7 Close and shared editing: implement explicit save/discard/cancel, with a
-  conservative default; verify manual edits, tab reorder, multiple dirty
-  documents, stale IDs, modal dialogs and closing the last document.
+验收标准：上述场景在支持的宿主上全部通过。`974e4e0` 只是候选检查点，不是 P1 完成提交。真实安装目录仍包含旧版二进制；写入 Program Files 需要 Windows 管理员权限，解除执行沙箱不等于取得管理员权限。先前 UAC 已取消，重试决定仍待处理，此限制只影响真实安装步骤。
 
-Exit gate: successful and failed workflows are verified against actual files and
-native state, wrong-target writes are rejected, and request completion matches
-what happened in the host. Connection checks cover two clients, identity,
-restart and port fallback. Save-current, explicit overwrite, tracked new/open/
-close, save/discard/cancel close policies, native close-dialog cancellation and
-malformed ZIP/GPIF rejection are verified. Windows file-association opening
-requires the registered DDE command as well as process startup. Isolated DDE
-opening has passed; repeated CLI-only startup carries no file path on this host
-build. The original CLI-only test did not exercise the registered protocol.
-Actual installed Explorer entry points remain a P1 gate.
-Injected native partial-write failures, post-save validation recovery,
-save-error dialog handling and retained recovery backups are verified.
-Independent GUI processes, complete native save-progress cancellation,
-manual tab reorder, real-client configuration reload and complete
-unknown-native-outcome recovery remain open. P2 is not accepted.
+### P2：会话与日常文档操作可靠性
 
-### P3: Complete musical editing
+完成实例发现、重连、稳定身份、冲突处理及按顺序执行的修改。新建、打开、关闭和保存均需跟踪真实完成、失败、取消及超时，覆盖手工编辑、标签重排、过期 ID、当前路径保存、覆盖与恢复。不得静默丢弃修改。
 
-Use the operation inventory in `COVERAGE.md` to track grace notes, bends, slides,
-remaining effects, long connection chains, advanced tuplets, keyboard and
-percussion notes, track instrument/configuration, tuning/capo/transposition,
-cross-track notes, complex repeats, alternate endings and navigation marks.
-Every supported operation needs structured state and a native edit path.
+| 子任务 | 工作内容 | 当前边界 |
+| --- | --- | --- |
+| P2.1 连接归属 | 通过 UUID、PID、启动时间发现有效实例；绑定目标；执行前拒绝过期描述和身份不符；只清理属于本实例的文件 | 已有专项验证 |
+| P2.2 连接生命周期 | 同进程重连；重启后显式选择新实例；保留凭据并使旧文档 ID 失效；传输失败不自动重放修改 | 脚本客户端已验证，实际 MCP 客户端集成待完成 |
+| P2.3 端口与客户端 | 默认端口冲突时回退；明确指定端口时冲突报错；真实客户端导入配置、重启及 URL 变化后重新连接；协议与安装包版本一致 | 端口场景已验证；写出新配置不能证明运行中的客户端会重读 |
+| P2.4 并发与宿主边界 | 至少两个会话重叠请求，验证修改顺序和文档隔离；重复启动及文件转发；通过受支持模式验证独立 GUI 进程 | 双客户端和隔离 DDE 已验证；独立 GUI 进程仍待确认，协议隔离不能替代宿主证据 |
+| P2.5 文档生命周期 | 新建、打开、激活、关闭；请求 ID 和真实终态；对结果不明的原生操作持续观察，确认结果后再决定是否重试 | 已有请求跟踪；未知原生结果的完整恢复待完成，超时不代表回滚 |
+| P2.6 保存与恢复 | 当前路径保存、保存副本、另存并采用新路径、明确覆盖；失败后恢复文件/路径/未保存状态；新文档必须指定目的地 | 常规保存与故障恢复已验证；完整原生保存进度取消待完成 |
+| P2.7 关闭与共同编辑 | 明确保存/丢弃/取消，采用保守默认；验证手工编辑、标签重排、多份未保存文档、过期 ID、模态对话框及关闭最后文档 | 基础关闭策略已验证；手工标签重排及全部模态上下文待完成 |
 
-- P3.1 Complete structured read/write coverage for grace notes, bends, slides,
-  remaining note/beat effects, advanced tuplets and grouping, and long
-  legato/tie chains. Include interactions between effects, not just toggles.
-- P3.2 Add keyboard and percussion note addressing/editing and cross-track
-  operations, with correct staff, voice, instrument and pitch interpretation.
-- P3.3 Complete track instrument configuration, tuning, capo and transposition;
-  distinguish notation changes from sounding-pitch changes.
-- P3.4 Complete alternate endings, nested/complex repeats and navigation marks;
-  preserve references and automation when bars or tracks are inserted/deleted.
+验收标准：成功与失败均通过实际文件和原生状态核实，错误目标写入被拒绝，请求终态与宿主真实结果一致。连接覆盖双客户端、身份、重启和端口回退；文档覆盖新建/打开/关闭、保存/丢弃/取消、原生关闭对话框取消、损坏 ZIP/GPIF 拒绝、保存故障及恢复。
 
-Exit gate: a mixed-instrument score can be read, edited, undone/redone, saved
-and reopened with the intended notation and pitch. Verify affected playback in
-P3 where available; advanced timeline/audio interactions also enter P5 tests.
-Expand each feature family into named operations in `COVERAGE.md` as interfaces
-are identified; unresolved operations remain visible rather than disappearing
-behind a family-level completion label.
+Windows 文件关联同时使用进程启动和注册的 DDE 命令。隔离 DDE 打开已通过，该宿主单独重复命令行启动的消息不携带文件路径，旧测试未覆盖完整注册协议。真实资源管理器入口归 P1 验收。
 
-### P4: Complete ranges and transfer
+原生部分写入故障、保存后校验恢复、保存错误对话框及恢复备份保留已有验证。独立 GUI 多进程、完整保存进度取消、手工标签重排、真实客户端配置重载和未知原生结果恢复仍未完成，P2 尚未验收。
 
-Handle selected track subsets, complex voice/staff ranges and remaining batch
-commands. Add special/repeated paste and complex cut/replacement. Verify content
-mapping for different tunings, transposing instruments and percussion. Keep
-native system-clipboard operations experimental until isolated tests pass;
-tests must not replace the user's existing clipboard.
+### P3：完整曲谱与音轨编辑
 
-- P4.1 Extend selection to partial track sets, complex voice/staff ranges,
-  keyboard/percussion notes and remaining applicable batch commands.
-- P4.2 Complete special paste, repeated paste and complex cross-bar cut/replace,
-  using the existing native score snapshot and undo infrastructure.
-- P4.3 Verify duration, staff, voice, tuning, transposing-instrument and
-  percussion mapping. Incompatible content must fail before partial edits.
-- P4.4 Verify system clipboard exchange in a disposable desktop/user environment
-  with isolation that actually works. The existing failed isolation attempt is
-  not evidence of interoperability; keep these tools experimental until passed.
+按 [覆盖清单](COVERAGE.md) 逐项补齐装饰音、弯音、滑音、其他技法、长连接链、高级连音、键盘及打击乐音符、乐器配置、调弦、变调夹、移调、跨轨编辑、复杂反复、反复房子及跳转记号。每项能力都要有结构化状态和原生修改路径。
 
-Exit gate: exact destination content, unaffected ranges, source independence,
-undo/redo and save/reopen all match expectations. Record bounded batch sizes and
-test their rejection behavior. System clipboard interoperability remains an
-open requirement until verified; plugin-local clipboard tests do not satisfy it.
+- P3.1：补齐音符/节拍技法、高级连音及分组、长连奏/延音链，验证技法之间的组合影响。
+- P3.2：支持键盘与打击乐音符定位和编辑、跨音轨操作，正确解释谱表、声部、乐器与音高。
+- P3.3：完成乐器配置、调弦、变调夹和移调，区分记谱音高变化与实际发声音高变化。
+- P3.4：完成反复房子、嵌套及复杂反复、跳转记号；增删音轨和小节后保持引用及自动化关系。
 
-### P5: Complete playback
+验收标准：混合乐器曲谱能够读取、编辑、撤销重做、保存重开，记谱与音高符合预期。P3 验证已有能力影响的播放结果，复杂时间线与音频交互同时进入 P5。发现接口后，将功能类别细化为覆盖清单中的具名操作，保留所有未解决项。
 
-Edit tempo events and ramps, loop ranges, mixers/effect chains, sound selection
-and devices. Validate actual timing and audio where applicable, including
-repeat/jump expansion, seek positions, cancellation and document isolation.
+### P4：复杂选区与内容转移
 
-- P5.1 Read/edit tempo points and ramps, loop boundaries and the expanded
-  repeat/ending/jump timeline; distinguish score positions from playback ticks.
-- P5.2 Complete mixer settings, sound selection, effect chains and available
-  audio-device controls, including persistence and their native undo behavior.
-- P5.3 Verify start/stop/seek/loop transitions, device changes and failures,
-  cancellation and switching documents while playback work is pending.
+补齐部分音轨集合、复杂声部/谱表范围、剩余批量命令、特别及重复粘贴、复杂剪切和替换。验证不同调弦、移调乐器及打击乐之间的内容映射。系统剪贴板工具在隔离测试通过前保持实验状态，测试不得覆盖用户现有剪贴板。
 
-Exit gate: measured timeline/frame progression and rendered or captured audio
-agree with expected tempo, repeats and sound changes. State readback alone does
-not establish audible correctness. Device-dependent capabilities and available
-soundbanks are listed explicitly in the acceptance environment.
+- P4.1：扩展部分音轨集合、复杂声部/谱表范围、键盘/打击乐单音选择及剩余批量命令。
+- P4.2：复用原生曲谱快照与撤销机制，完成特别粘贴、重复粘贴、跨小节复杂剪切和替换。
+- P4.3：验证时值、谱表、声部、调弦、移调乐器和打击乐映射；不兼容内容必须在产生部分修改前拒绝。
+- P4.4：在具备有效隔离的临时桌面或用户环境验证系统剪贴板交换。已有隔离失败不能作为互通证据，未通过前保留实验标记。
 
-### P6: Complete file and workspace workflows
+验收标准：目标内容精确、范围外内容不变、源快照独立、撤销重做及保存重开正确。记录批量上限并验证超限拒绝。插件内部剪贴板通过不能代替系统剪贴板互通。
 
-Add native imports/exports and parameterized layout/printing/settings operations.
-Verify exported musical structure independently, render PDF/image output and
-inspect it, and validate audio duration/content. Settings must read back and
-declare whether their scope is the current document or the whole application.
+### P5：完整播放与音频控制
 
-- P6.1 Implement supported native MIDI, MusicXML and other GP import/export
-  paths; surface format capabilities, options and expected conversion losses.
-- P6.2 Implement PDF, image and audio output plus printing, page setup, layout,
-  staff display and other document presentation controls.
-- P6.3 Expose the remaining requested workspace/preferences, sound/plugin and
-  dialog settings through parameterized native operations with declared scope.
-- P6.4 Reuse P2 completion, overwrite, cancellation and failure handling for all
-  output workflows; restore global settings modified by verification.
+编辑变速点与渐变、循环范围、混音及效果链、音色和设备。验证真实时间和声音，包括反复/跳转展开、定位、取消和文档隔离。
 
-Exit gate: independently parse supported interchange outputs, reopen applicable
-scores, render and inspect PDF/images, and check audio content/duration. Verify
-print output through a controlled destination. Each requested format/setting
-gets an operation-level result; unavailable host features are reported as
-host-limited with evidence, not as successful exports or completed operations.
+- P5.1：读取及修改变速点、渐变、循环边界，完成反复/反复房子/跳转展开时间线，区分曲谱位置和播放 tick。
+- P5.2：补齐混音、音色选择、效果链及宿主提供的音频设备控制，验证持久化和各项原生撤销行为。
+- P5.3：验证播放/停止/定位/循环切换、设备更换及失败、取消，以及播放操作未完成时切换文档。
 
-### P7: Qualify the release
+验收标准：实际时间线和帧数推进、渲染或采集的音频，与预期速度、反复和音色变化一致。仅读回状态不能证明声音正确；明确记录验收环境中的设备依赖能力及可用音色库。
 
-Exercise the supported version matrix, restart/update/uninstall, modal dialogs,
-port failures, concurrent clients, large and complex scores, repeated document
-destruction and long-running sessions. Publish diagnostic instructions and
-version-bound evidence with the compiled package.
+### P6：文件交换与工作区
 
-- Freeze the release source and record source, core, bootstrap and host hashes.
-  Run all applicable existing and new suites against that exact package.
-- Initially qualify Windows x64 Guitar Pro 8.1.1.17. Reject unsupported ABI
-  builds cleanly; each added build needs its own full applicable evidence.
-- Cover guitar, keyboard, percussion and transposing-instrument scores with
-  multiple voices/staves, nested tuplets, long connections, repeats/jumps and
-  automation. Include a generated large score and record its actual dimensions.
-- Planned minimum endurance matrix: two concurrent clients, ten open documents,
-  100 open/edit/save/close cycles and a two-hour mixed-use session. Record
-  process memory, handle counts, failures and cleanup trends; investigate
-  unexplained growth and do not silently reduce a failing test envelope.
-- Test modal interruption, malformed requests, port contention, denied output
-  paths, stale descriptors, reconnect, upgrade/rollback and application exit.
-  Controlled abrupt termination applies only to disposable test hosts/files.
-- Re-run the actual installed entry points and package lifecycle, publish
-  diagnostics, recovery instructions, support limits and release notes.
+实现原生导入导出和参数化的排版、打印、设置操作。独立检查导出曲谱结构，渲染并检查 PDF/图片，验证音频内容与时长。设置需可读回并明确属于当前文档还是整个软件。
 
-Exit gate: no unresolved plugin-caused crash, corruption, wrong-document write,
-silent data loss or mandatory functional acceptance gap. Reproducible vendor
-limitations remain explicitly open and version-bound. The observed rapid-start
-shutdown deadlock needs a verified supported mitigation or an explicit release
-scope decision; a five-second settling interval cannot make that test pass.
+- P6.1：完成宿主支持的 MIDI、MusicXML、其他 GP 格式导入导出，说明格式能力、选项及预期转换损失。
+- P6.2：完成 PDF、图片、音频输出，打印、页面设置、排版、谱表显示和其他文档呈现控制。
+- P6.3：为剩余约定的工作区/偏好、声音/插件及对话框设置提供带明确作用域的参数化原生接口。
+- P6.4：所有输出复用 P2 的完成跟踪、覆盖、取消及失败恢复；测试后恢复被修改的全局设置。
 
-## Definition of Done
+验收标准：独立解析交换格式，重开适用曲谱，渲染并检查 PDF/图片，验证音频内容及长度，通过受控目标验证打印输出。每个约定格式和设置都有操作级结果；宿主不可用的功能标记“宿主受限”并附证据，不能记为导出成功或操作完成。
 
-For each real user operation record implemented, verified, experimental,
-unimplemented, or host-limited status. Distinguish blockers from completed work.
-Exports/menu enumeration/JSON success do not prove a functioning native edit.
+### P7：发布验收
 
-For mutations check actual state, target isolation, undo/redo where supported,
-and save/reopen persistence. Test playback for changes that affect sound. For
-asynchronous operations verify completion rather than merely `scheduled`.
-Bind regression evidence to source, plugin and host hashes. Run all applicable
-checks against the final binary before claiming full release completion.
+对支持版本、重启更新卸载、模态窗口、端口失败、并发客户端、大型复杂曲谱、反复销毁文档和长时间运行进行验证。编译包同时提供诊断说明和绑定版本的证据。
 
-Every mandatory operation needs a named coverage entry, target/parameter
-contract, observed outcome and verification artifact. Host-limited, experimental
-and unverified are not synonyms for complete. A host limitation requires a
-reproducer and a documented release consequence; changing accepted scope must
-be explicit. Do not declare the full project complete while mandatory gaps
-remain unresolved.
+- 冻结发布源码，记录源码、核心、自动加载器和宿主哈希；全部适用的新旧检查均运行在该准确安装包上。
+- 首先验收 Windows x64 Guitar Pro 8.1.1.17；不支持的 ABI 必须明确拒绝，每个新增版本独立完成适用检查。
+- 覆盖吉他、键盘、打击乐、移调乐器、多声部/谱表、嵌套连音、长连接链、反复跳转和自动化；生成大型曲谱并记录实际规模。
+- 最低持续运行矩阵：两个并发客户端、十份打开的文档、100 次打开/编辑/保存/关闭循环、两小时混合使用。记录内存、句柄、失败和清理趋势，调查无法解释的增长，不得静默降低失败用例的规模。
+- 检查模态中断、错误请求、端口占用、输出权限不足、过期描述、重连、升级回滚及退出。受控强制终止仅用于临时测试宿主和文件。
+- 重新验收真实安装入口及完整安装生命周期，发布诊断、恢复步骤、支持边界和版本说明。
 
-Reuse the existing PowerShell verification scripts and `native/test-all.ps1`;
-add focused checks where new behavior requires them. Phase work ends with updated
-coverage/docs, package evidence where relevant, and a phase completion commit.
-Intermediate commits must identify themselves as checkpoints. Do not mix
-unfinished code into a documentation-only or completed-phase commit. Keep
-runtime tokens, temporary hosts and generated evidence out of Git.
+验收标准：不存在未解决的插件引起的崩溃、损坏、错误文档写入、静默数据丢失或强制功能缺口。可复现的厂商限制按版本保留，必须有已验证的受支持缓解方式或明确的发布范围决定。已观察到的快速启动后退出死锁仍未解决，等待五秒不能使该用例通过。
 
-## Immediate Execution Order
+## 完成标准与提交规则
 
-1. Preserve the archived P1 candidate and its evidence. The development DLLs now
-   contain P2 changes and must not be represented as the tested P1 package.
-2. Retain the verified native DDE file-association protocol and establish the
-   supported independent-GUI-process boundary. Retain the passing port-contention,
-   explicit-port, two-client, stale-identity, reconnect/restart and cleanup checks. A normally
-   exited second launch does not prove that its requested document was opened.
-3. Complete the remaining P2 unknown-outcome paths, native save-progress
-   cancellation, manual tab reorder and real-client integration.
-   Basic request tracking, close policies and malformed archive errors now have
-   coverage; retain and extend those checks when completing the remaining work.
-4. Complete the pending real P1 update/entry-point check once Windows elevation
-   is available. Independent repository work can proceed while it is pending.
-5. Complete P3, P4, P5 and P6 in order, committing each accepted phase, then run
-   P7 on the resulting release package. Report blockers with their actual
-   affected phase, rather than treating installation alone as the project.
+每项真实用户操作分别记录“已实现、已验证、实验性、未实现、宿主受限”等状态，区分阻塞与完成。导出符号存在、菜单可枚举或返回 JSON 成功都不能证明原生操作生效。
 
-Fixed calendar estimates are not yet justified for unverified private APIs.
-Track progress by accepted operations and phase gates; after P2, reassess effort
-using the concrete remaining operation inventory without reducing its scope.
+修改操作必须检查实际状态、目标隔离、宿主支持的撤销重做和保存重开；影响声音的修改还需验证播放。异步操作必须观察完成，不能停在 `scheduled`。回归证据绑定源码、插件和宿主哈希，完整发布前对最终二进制运行所有适用检查。
 
-## Existing Evidence
+每项强制要求必须有具名覆盖记录、目标与参数约定、观察结果及验证产物。“宿主受限”“实验性”“未验证”均不等于完成。宿主限制必须提供复现方式和发布影响，调整已接受范围必须明确处理；存在强制缺口时不得宣布完整项目完成。
 
-`COVERAGE.md` records thirteen suites with 2195 historical passing checks and an
-eight-suite regression of 1784 checks for the prior DLL. Those results are the
-starting baseline, not proof of the phases above. The system clipboard and
-other explicit gaps in that file remain open.
+复用现有 PowerShell 验证脚本及 `native/test-all.ps1`，新行为需要时补充针对性检查。阶段验收后更新覆盖清单、文档及相关安装包证据，再提交阶段完成记录。中间提交标记为检查点，文档提交或阶段完成提交不得混入未完成代码。运行令牌、临时宿主和生成的验证产物不提交 Git。
 
-## Execution Log
+## 接下来的执行顺序
 
-- Baseline preserved in commit `2b97686` on `codex/full-development`.
-- P0: `native/test-autoload-probe.ps1` passed direct EXE, Windows shortcut,
-  score-open and uninstall variants. Evidence:
-  `artifacts/autoload-probe-724964da0f7740f991172f092da7b43f/verification.json`.
-- P0 completion commit: `c945e42`.
-- P1: production bootstrap, visible/background startup, persistent data, status
-  dialog, install/update/disable/uninstall and a standalone package implemented.
-  Installation checks: 35 plus 26 protocol checks at
-  `artifacts/installation-716ffefd35114ea3b57b55abe6d5f53d/verification.json`.
-  The package also installed using Windows PowerShell 5.1. The actual host now
-  has an installer-owned plugin; final installed-entrypoint verification and
-  the updated package remain outstanding.
-- P1 validation exposed empty `GPMCP_PORT` handling (fixed), request timeouts
-  (added), and native autosave failures when test hosts inherit the restricted
-  filesystem. Full application tests must run with permission for the host's
-  own user configuration/autobackup directory. The modal dialog was observed
-  as `am::gui::MessageDialog`, title "Save error" (localized), not inferred from
-  a timeout. `gp_dialogs` and central modal guards now prevent native writes
-  while it is active; dialog-scoped controls remain available.
-- Thirteen suites passed all 2195 checks in
-  `artifacts/regression-f4364a58c78f42b1ac85cff266581cf6/regression.json`, but
-  clean exit failed with a Qt5Gui access violation. This is NOT a passing
-  release regression. Testing cleanup on `aboutToQuit` before host/Qt teardown.
-  P1 remains in progress; no P1 completion commit has been made.
-- P1: corrected Qt ownership of generic-plugin return values and explicit
-  ownership of the manually created bootstrap bridge. Cleanup on aboutToQuit
-  releases the registry, local listener, callbacks and native score snapshot.
-  Hidden main-window destruction now exits the process even though hidden mode
-  disables Qt's last-visible-window exit. Eight visible/background, generic/
-  automatic-loader, window/menu shutdown cases passed with zero exit codes:
-  `artifacts/shutdown-aa809b7b3dfe40168058de228ec24b91/verification.json`.
-- P1: the current core also removes its descriptor when client-configuration
-  publication fails. Installation checks: 43 plus 26 protocol checks at
-  `artifacts/installation-9d9bdc780adb4e208e9dd3e028fe8b84/verification.json`;
-  ownership/configuration checks: 23 at
-  `artifacts/installer-files-8a4322bc4d2146cdab657626cf78ed5e/verification.json`.
-- P1: all thirteen suites, 2195 checks, completed with exit code 0 and descriptor
-  removal on the current binary:
-  `artifacts/regression-f1463f227d554ba0b74060538e9ff651/regression.json`.
-  The source/plugin/host hashes are recorded there. The current candidate is
-  `artifacts/GuitarProMCP-0.3.0-7090f898224d4949a54d798a0ff647d5.zip`.
-  PowerShell 5.1 compatibility fixes use a UTF-8 BOM for the Chinese developer
-  launcher and basic HTTP parsing for the packaged JSON client.
-- P1: packaged installer/client and all eight visible/background shutdown paths
-  passed Windows PowerShell 5.1.19041.6456 with a recorded 5000 ms startup
-  settling interval:
-  `artifacts/shutdown-6ba484f7661a401a95aaa47244f8cd03/verification.json`.
-  The final package adds the documented rapid-exit limitation; its DLLs and
-  executable scripts are identical to the package used by this check.
-- Open host limitation: rapid close during startup can deadlock in the vendor's
-  AMNetwork shutdown. A minimal Qt-only closing probe, without the MCP core,
-  registry or native score snapshot, reproduced the same wait. The main thread
-  waits for NetworkServiceGuard while its network thread waits on a semaphore
-  during an error callback. Evidence and all thread stacks:
-  `artifacts/exit-baseline-ee2f813e0b8343d7856fa611439c315e/`.
-  This is not a passing rapid-exit test. A recorded startup settling interval
-  may be used to test ordinary installed operation separately; it does not
-  close the rapid-exit reliability issue. P7 must retain this limitation.
-- Actual installation still contains an older P1 binary. The previous Windows
-  administrator prompt was cancelled. A fresh user decision on retrying that
-  update is pending; no repeated UAC launch or installed-entrypoint success is
-  assumed. P1 remains in progress, and P2-P7 are not marked complete.
-- P1 candidate checkpoint: `974e4e0`. An update attempt without elevation after
-  sandbox removal failed with Access Denied when creating its staging directory;
-  it did not update the installed binaries.
-- P2 working tree: instance UUID/start-time descriptors, owned configuration
-  cleanup, default-port fallback, instance-bound requests and explicit client
-  reconnection implemented; build and a single-host handshake succeeded. Full
-  verification is pending, and no P2 completion commit exists.
-- P2 investigation: `native/test-instances.ps1` currently fails because a second
-  GUI launch exits normally instead of providing an independent host, including
-  when launched from a different isolated installation. The host inherits
-  QtSingleApplication; no supported independent-instance mode has been verified.
-  Preserve this boundary while testing concurrent clients and connection
-  isolation independently.
-- P2: document IDs are now UUIDs stored on the native document, replacing
-  reusable view names. All document tools use that identity, including clipboard
-  metadata and cross-document operations. Restart and reopen reject old IDs.
-- P2: `gp_save_current` and explicit `overwrite=true` for copy/Save As implemented.
-  Existing destination bytes are backed up before native writing; failed native
-  writes attempt file/path recovery and retain the backup if file recovery
-  fails. Thirty checks verify save-current, overwrite, protected open documents,
-  locked/missing destinations, native state, GPIF and reopening. Failure during
-  the native write itself has not yet been injected or verified.
-- P2: full fourteen-suite regression passed 2225 checks with exit code 0 and
-  descriptor cleanup at
-  `artifacts/regression-a5bf1961faf441cfa42eabf4782296e9/regression.json`.
-  Installation 43 plus protocol 26 passed at
-  `artifacts/installation-8253afa705c0458bad1fe25ea708b534/verification.json`.
-  These runs precede the subsequent exited-process identity fix below.
-- P2: retaining a terminated process handle reproduced stale alias ownership:
-  Windows still returns its creation time. Identity probing now also checks
-  the exit timestamp. All 53 connection checks passed after this fix:
-  `artifacts/instances-d32b829a0032440a86a001624a5d01df/verification.json`.
-- P2: `test-instances.ps1 -CheckLaunchForwarding` remains a separately runnable
-  failing workflow, not counted among the passing connection checks. The second
-  process exits with code 0 but its score does not appear in the existing host;
-  native `gp_open` does open that same kind of fixture. Visible-mode evidence:
-  `artifacts/instances-fa5b0650158348838bc0f681a3f46daa/verification.json`.
-  Earlier statements that it forwarded successfully were not supported by file
-  readback. This still requires investigation and is not a completed P2 gate.
-- P2 checkpoint validation after the exited-process fix: all fourteen suites,
-  2225 checks, passed with exit code 0 and descriptor removal:
-  `artifacts/regression-dd6830958c334f7cb5ad42add6e4bd4d/regression.json`.
-  Core SHA-256:
-  `00470B0D0F90015EF32076A37002BFC865DF0F43989FA954BF4585CB830F356C`.
-  The same core passed all 53 connection checks under Windows PowerShell 5.1:
-  `artifacts/instances-5524513fd40d4b2b988926b4abf5fd92/verification.json`.
-  This is an intermediate P2 checkpoint; P1 installed-host acceptance and the
-  remaining P2-P7 requirements are still open.
-- P2: native close now supports explicit save/discard/cancel and prompt policies.
-  Discard/cancel bind to standard native buttons in the target window's dialog
-  during the matching close request; they do not forge a saved state. Save on
-  close uses current-path saving or explicit Save As and retains the document
-  on failure. Fifty operation checks cover these flows, request history,
-  stale-cancel isolation and archive/XML errors.
-- P2: `gp_operation` reads current new/open/close results and the last 64 replaced
-  records. `gp_cancel` reports pending cancellation until native completion is
-  observed. Incomplete native outcomes after ten seconds remain explicitly
-  unknown, continue being observed and block new mutations. Full recovery for
-  such outcomes still needs a native completion/error adapter.
-- P2: a malformed non-ZIP `.gp` file was silently ignored by the host, with no
-  dialog or document. The first tracking test recorded a timeout rather than
-  claiming failure/cancellation. A Qt ZIP/XML precheck now rejects malformed
-  containers, duplicate/missing GPIF entries, invalid XML, wrong root and DTD
-  before dispatch. The same check validates saved output. The GPIF entry limit
-  is 64 MiB; semantic GPIF validity is not claimed. `Qt5Gui.dll` is now hash-bound
-  in the native adapter and installer manifest.
-- P2: installation checks including a modified Qt GUI DLL passed 46 checks plus
-  26 protocol checks:
-  `artifacts/installation-3bf209454bc545ca8e5eb1df9d841f91/verification.json`.
-  This run precedes the final conservative dirty-state restoration adjustment.
-- P2: failure recovery now restores an originally dirty document to dirty if a
-  successful native save cleared that flag before output validation failed.
-  It never clears a dirty flag during failure recovery. Injected mid-write and
-  recovery-failure checks remain open; normal passing saves do not prove them.
-- P2: regression `artifacts/regression-d55d5d21f0cb4eaa81a816918169e7cb/`
-  stopped during template creation after 1775 passing checks. The retained host
-  showed the requested template had been created with empty file paths and no
-  active dialog. The structure test incorrectly stopped polling on any status
-  other than `scheduled`, including the new intermediate `requested` status.
-  It now waits for an explicit terminal state and includes state in failures.
-  All 60 structure checks then passed in the retained host:
-  `artifacts/native-structure-a18fde20b1124e9381a69ce464736bda/verification.json`.
-  The original failed regression remains recorded as incomplete.
-- P2 checkpoint: all fifteen suites, 2275 checks, passed against the current
-  native source and binary, with exit code 0 and descriptor cleanup:
-  `artifacts/regression-ad790d076ad54c85aae881bcf2b63b33/regression.json`.
-  Core SHA-256:
-  `99680BF0C99959EFE8A229346ED7EAA999AC7F2D0B6C486A3B385ECE89935D77`.
-  The same binary passed the 50 document-operation checks under Windows
-  PowerShell 5.1 with clean host shutdown:
-  `artifacts/document-operations-13ae4ad7835248bf99eaa1eee823fa15/verification.json`.
-  All 53 connection/concurrent-client checks also passed:
-  `artifacts/instances-149583ef2ed448dcbbce0a0dad2110e4/verification.json`.
-  This does not verify launch forwarding, independent GUI instances, real
-  MCP-client configuration reload, manual tab reorder, save-time cancellation,
-  injected save/recovery failures or complete unknown-native-outcome recovery.
-  P1 remains pending installed-host acceptance; P2-P7 remain unfinished.
-- P2: injected native save failures exposed a synchronous-dispatch defect:
-  while the host displayed its save-error dialog, every MCP native tool was
-  rejected as another native operation already running. Saves now run as
-  tracked Qt callbacks outside the tool invocation, retaining document reads
-  and observed-dialog controls while blocking other mutations. Copy, Save As
-  and current-path save return a request and expose their result through
-  `gp_operation`; the PowerShell client polls by default without replaying a
-  save on timeout. Save-and-close uses the same native save wrapper.
-- P2: the separate test-only save probe injects real partial writes, corrupt
-  output and a replacement-blocking file lock into disposable hosts. The host
-  retries backup writes before direct destination writing; the fault covers
-  those retries. Post-save validation cases observe native clean state before
-  corruption, then verify restored file/path/dirty state, undo/redo and reopening.
-  Recovery failure retains the original backup. Acknowledging an error-only
-  dialog remains an error, not a successful cancellation. The earlier retained
-  synchronous host required termination after its original backup was checked:
-  `artifacts/save-recovery-13e0c22d8f93492fb219697ac340350c/termination.json`.
-  That failed run is not passing recovery evidence.
-- P2 checkpoint validation: the final core SHA-256 is
-  `4DAE75091EB5ABBDB2F88FE698983E31B9B85A1150ECDBA0F358E69413F482C3`.
-  All fifteen regression suites, 2275 checks, passed with exit code 0 and
-  descriptor removal; recorded native source hashes match the working tree:
-  `artifacts/regression-7b51b29bd97f426f9d162f6f70efa42a/regression.json`.
-  The same core passed 167 fault checks under Windows PowerShell 5.1.19041.6456:
-  `artifacts/save-recovery-1074077d21354e4ab0ecb526cfa71680/verification.json`.
-  Probe SHA-256:
-  `F17252BF64CED3F6218A0B4609E68C693319C773B484627C07A32BF0AFB2B45F`.
-  All 53 connection/concurrent-client checks passed on that core:
-  `artifacts/instances-b41dfdb2831a4167be7453cf8d4907d9/verification.json`.
-  Full native save-progress cancellation and unknown-outcome recovery remain
-  open, alongside launch forwarding, independent GUI process support, manual
-  tab reorder and real-client integration. P1 installed-host acceptance remains
-  pending; this checkpoint completes neither P2 nor the full project.
-- P2: file-association investigation found the omitted native DDE contract in
-  the Windows registry: service `Guitar Pro 8`, topic `system`, execute command
-  `[open("%1")]`. The ordinary second process receives the correct CLI path but
-  sends an empty Qt single-instance message. In a probe-only host with no MCP
-  core loaded, the subsequent DDE command produces a file-open event and the
-  correct second document. Baseline, events and probe sources are preserved in
-  `artifacts/forwarding-probe-7e502806f8224290bbf07076d1299123/`.
-  This corrects the CLI-only test's interpretation; it does not add CLI file
-  forwarding to the host. Real installed Explorer acceptance remains P1 work.
-- P2: `test-instances.ps1 -CheckLaunchForwarding` now verifies registered DDE
-  settings, secondary process exit, recipient PID, Unicode/spaced paths,
-  duplicate-open identity, background focus and the existing connection checks.
-  The test-only client rejects a mismatched recipient before sending a command
-  and is built outside production plugin directories. Failed tests now retain
-  live hosts and their installed files for inspection instead of killing them.
-- P2: Windows PowerShell 5.1 decoded HTTP JSON with its legacy default encoding
-  because the response did not declare UTF-8. The DDE-opened Chinese path was
-  correct in the native host and PowerShell 7, but garbled in the 5.1 client:
-  `artifacts/instances-dc1ac592ad984e23965e111b8f4f3e3e/inspection.json`.
-  The new raw-UTF-8 versus HTTP-client protocol assertion failed before the fix.
-  The shared response now declares `charset=utf-8`; both descriptor-reading
-  entry points explicitly read UTF-8. Unicode session-directory checks cover
-  discovery, ownership, stale identity and restart with valid JSON fixtures.
-- P2: made the full regression runner usable in Windows PowerShell 5.1: load
-  its standard compression assembly, retain UTF-8 BOMs for four Chinese test
-  scripts, use the available base-two logarithm, preserve JSON arrays through
-  object properties, and parse expected JSON error codes rather than matching
-  whitespace. The tested assertions and musical scope are retained.
-  Incomplete runs remain failed; retained dirty fixtures were saved for
-  inspection and all retained hosts were closed before a fresh full run.
-- P2 checkpoint validation: the final core SHA-256 is
-  `A22ECD07B9C48776CF25CA1E9FA4A8C650CF9E93841F511380FF97FE7F73227F`.
-  All fifteen suites, 2276 checks, passed independently on Windows PowerShell
-  5.1.19041.6456 and PowerShell 7.6.5 with exit code 0 and descriptor removal:
-  `artifacts/regression-9e09be6fb7784486bc7423a8a50cd9f5/regression.json` and
-  `artifacts/regression-b7fb07a5f6c14bd5abe4811a36c14159/regression.json`.
-  Native source hashes were checked against the final working tree.
-  On that core, DDE/connection checks passed 61 cases in background PowerShell 7
-  and 60 cases in visible Windows PowerShell 5.1:
-  `artifacts/instances-3833810d444349888852106424949221/verification.json` and
-  `artifacts/instances-3b540bd0135545bc965d08b618631733/verification.json`.
-  Both record a 15000 ms startup settling interval. The default 5000 ms runs
-  still reproduced the vendor network shutdown deadlock after a restart:
-  `artifacts/instances-69d4f4d62d6141b6b52b1c3fc4271ebd/` and
-  `artifacts/instances-70832e139e884a3c895c1ceb8b32c41e/` contain the failed
-  results, thread stacks and justified disposable-host termination records.
-  Longer settling is not a verified fix; P2/P7 retain this issue. P1 actual
-  installation, independent GUI instances, real-client integration, manual tab
-  reorder, native save-progress cancellation and unknown-outcome recovery
-  remain open. No phase completion is claimed by this checkpoint.
-- The same final core passed all 167 injected save/recovery checks under Windows
-  PowerShell 5.1 with clean shutdown and descriptor cleanup:
-  `artifacts/save-recovery-a9adcab860bc4afd944359d371399572/verification.json`.
-  Native save-progress cancellation is explicitly still unverified. No test
-  hosts remain running after the checkpoint's verification and inspections.
+1. 保留归档 P1 候选包和证据。开发 DLL 已包含 P2 改动，不能冒充已测试的 P1 包。
+2. 继续 P2 文档标签重排与身份稳定性：确认原生标签、文档页面和活动文档之间的对应关系，验证手工重排后的编辑、撤销、保存、关闭及错误目标拒绝。当前已观察到自定义 `am::gui::Tab`，不能未经确认就按 `QTabBar` 处理。
+3. 补齐 P2 未知原生结果恢复、原生保存进度取消及真实客户端集成。保留并扩展已有请求跟踪、关闭策略、ZIP/GPIF 错误和保存故障验证。
+4. 保留已验证的原生 DDE 流程，确认独立 GUI 进程的受支持边界；继续保留端口占用、显式端口、双客户端、过期身份、重连重启和清理检查。第二进程正常退出不能证明所请求文档已打开。
+5. Windows 提权条件具备后完成 P1 真实更新、启动入口和安装生命周期验收；期间继续不受该步骤影响的仓库工作。
+6. 按顺序完成 P3、P4、P5、P6，每个阶段验收后提交，再在最终发布包上执行 P7。按实际受影响阶段报告阻塞，安装只是完整项目的一部分。
+
+尚未验证的私有接口不足以支撑固定日历工期。按具名操作验收和阶段门槛衡量进展，P2 完成后依据剩余操作清单重新估算工作量，不减少范围。
+
+## 当前证据与历史基线
+
+截至 `09185ab` 检查点，当前核心在 Windows PowerShell 5.1 与 PowerShell 7 下分别完整通过十五组、2276 项回归。另通过后台 DDE/连接 61 项、可见 DDE/连接 60 项，以及原生保存故障/恢复 167 项。路径、二进制哈希和启动等待条件见下方记录及 [覆盖清单](COVERAGE.md#当前验证证据)。
+
+此前十三组 2195 项和旧 DLL 八组 1784 项为历史基线，不能当作当前完整阶段验收。系统剪贴板及其他已列缺口持续保留。DDE 专项使用 15000 ms 启动等待；5000 ms 仍复现厂商网络退出死锁，延长等待不是已验证的修复。
+
+## 执行记录
+
+以下按检查点记录当时的结果。历史失败保留原结论；后续修复及新增验证另列，不能把旧构建的通过结果转移到新构建。
+
+### P0 与 P1
+
+- 基线已保存在 `codex/full-development` 分支的 `2b97686` 提交。
+- P0：`native/test-autoload-probe.ps1` 通过直接 EXE、Windows 快捷方式、打开曲谱和卸载场景。证据：`artifacts/autoload-probe-724964da0f7740f991172f092da7b43f/verification.json`。完成提交为 `c945e42`。
+- P1：已实现生产加载器、可见/后台启动、持久数据、状态对话框、安装/更新/停用/卸载和独立安装包。安装 35 项及协议 26 项通过：`artifacts/installation-716ffefd35114ea3b57b55abe6d5f53d/verification.json`。安装包也通过 Windows PowerShell 5.1 安装。真实宿主已有安装器管理的插件，更新包及最终真实入口验收仍未完成。
+- P1 验证暴露了空 `GPMCP_PORT` 处理和请求超时问题，已分别修复和补充。受限文件系统还导致测试宿主的原生自动保存失败，因此完整软件测试需要宿主自身用户配置及自动备份目录的访问权限。实际观察到的错误框为 `am::gui::MessageDialog`，标题为本地化的 `Save error`，不能仅从超时推断。已加入 `gp_dialogs` 与统一模态保护，阻止错误框存在期间的原生写入，同时保留对话框内控件操作。
+- P1：十三组共 2195 项通过，但退出时发生 Qt5Gui 访问异常：`artifacts/regression-f4364a58c78f42b1ac85cff266581cf6/regression.json`。该轮不是通过的发布回归；当时开始验证在 `aboutToQuit` 中、宿主/Qt 销毁前清理资源，P1 未完成。
+- P1：修正 Qt 通用插件返回对象的归属，并明确手工创建的自动加载桥接对象的所有权。在 `aboutToQuit` 释放注册表、本机监听、回调和原生曲谱快照；隐藏模式虽然关闭 Qt 的最后可见窗口退出行为，销毁主窗口仍会退出进程。可见/后台、通用/自动加载、窗口/菜单退出共八种场景退出码均为 0：`artifacts/shutdown-aa809b7b3dfe40168058de228ec24b91/verification.json`。
+- P1：客户端配置发布失败时清理连接描述。安装 43 项及协议 26 项通过：`artifacts/installation-9d9bdc780adb4e208e9dd3e028fe8b84/verification.json`；文件归属和配置 23 项通过：`artifacts/installer-files-8a4322bc4d2146cdab657626cf78ed5e/verification.json`。
+- P1：该检查点二进制通过十三组、2195 项回归，退出码为 0，连接描述已删除：`artifacts/regression-f1463f227d554ba0b74060538e9ff651/regression.json`，其中记录源码/插件/宿主哈希。对应候选包：`artifacts/GuitarProMCP-0.3.0-7090f898224d4949a54d798a0ff647d5.zip`。PowerShell 5.1 兼容修复为中文开发启动脚本保留 UTF-8 BOM，并为随包 JSON 客户端使用基本 HTTP 解析。
+- P1：随包安装器/客户端及八种可见/后台退出路径在 Windows PowerShell 5.1.19041.6456 通过，记录的启动等待为 5000 ms：`artifacts/shutdown-6ba484f7661a401a95aaa47244f8cd03/verification.json`。最终候选包补充快速退出限制说明，其 DLL 与可执行脚本和本轮测试包一致。
+- 未解决的宿主限制：启动后快速关闭可能在厂商 AMNetwork 退出逻辑中死锁。不加载 MCP 核心、注册表或原生曲谱快照，仅使用最小 Qt 关闭探针也复现同一等待：主线程等待 NetworkServiceGuard，网络线程在错误回调中等待信号量。证据及全部线程栈：`artifacts/exit-baseline-ee2f813e0b8343d7856fa611439c315e/`。该结果不是快速退出通过；明确记录的启动等待可用于另行验证普通安装操作，但不解决此问题，P7 必须保留。
+- 真实安装目录仍为较早 P1 二进制。先前 Windows 管理员提示已取消，是否重试该更新仍待处理；没有重复弹出 UAC，也未宣称真实入口通过。P1 进行中，P2–P7 未完成。
+- P1 候选检查点为 `974e4e0`。解除沙箱后的一次未提权更新，在创建暂存目录时返回 `Access Denied`，没有更新已安装的二进制。
+
+### P2：身份、连接与基础保存
+
+- P2 初始实现：实例 UUID/启动时间描述、按归属清理配置、默认端口回退、请求绑定实例及显式重连。编译和单宿主握手通过，当时完整验证尚未完成，没有 P2 完成提交。
+- 独立进程调查：`native/test-instances.ps1` 最初要求第二个独立 GUI 宿主，但第二次启动正常退出，从另一个隔离安装目录启动也相同。宿主继承 QtSingleApplication，尚未确认受支持的独立实例模式。该边界持续保留，双客户端和连接隔离单独验证。
+- 文档 ID 改为保存在原生文档上的 UUID，替代可复用的视图名称。所有文档工具、剪贴板元数据和跨文档操作共用该身份；重启和关闭重开后拒绝旧 ID。
+- 实现 `gp_save_current`，副本/另存为覆盖必须明确 `overwrite=true`。原生写入前备份已有目标内容，失败时尝试恢复文件和路径，文件恢复失败则保留备份。30 项检查覆盖当前路径保存、覆盖、保护已打开文档、被锁定/缺少的目标、原生状态、GPIF 和重开；该检查点尚未注入原生写入过程中的故障。
+- 当时十四组回归通过 2225 项，退出码为 0，连接描述已清理：`artifacts/regression-a5bf1961faf441cfa42eabf4782296e9/regression.json`。安装 43 项及协议 26 项通过：`artifacts/installation-8253afa705c0458bad1fe25ea708b534/verification.json`。这两轮均早于后续已退出进程身份修复。
+- 保留已终止进程句柄后，Windows 仍返回创建时间，复现了过期别名被错误视为仍有归属的问题。身份检查补充退出时间后，53 项连接检查通过：`artifacts/instances-d32b829a0032440a86a001624a5d01df/verification.json`。
+- 旧版 `test-instances.ps1 -CheckLaunchForwarding` 是单独保留的失败流程，不计入已通过连接检查。第二进程退出码为 0，但曲谱未出现在已有宿主中，同类夹具通过原生 `gp_open` 可以打开。可见模式证据：`artifacts/instances-fa5b0650158348838bc0f681a3f46daa/verification.json`。此前转发成功的说法缺少文件读回支持，后续 DDE 调查修正了测试解释。
+- 修复已退出进程身份后，十四组、2225 项回归通过，退出码为 0，连接描述已删除：`artifacts/regression-dd6830958c334f7cb5ad42add6e4bd4d/regression.json`。核心 SHA-256：`00470B0D0F90015EF32076A37002BFC865DF0F43989FA954BF4585CB830F356C`。同一核心在 Windows PowerShell 5.1 通过 53 项连接检查：`artifacts/instances-5524513fd40d4b2b988926b4abf5fd92/verification.json`。这是 P2 中间检查点，P1 真实安装及剩余 P2–P7 要求仍开放。
+
+### P2：操作跟踪与关闭策略
+
+- 原生关闭支持显式保存、丢弃、取消和保留确认对话框。丢弃/取消只绑定匹配关闭请求期间、目标窗口对话框中的标准原生按钮，不伪造已保存状态。关闭前保存使用当前路径或明确的另存为，失败时保留文档。50 项操作检查覆盖这些流程、请求历史、过期取消隔离和压缩包/XML 错误。
+- `gp_operation` 返回当前新建/打开/关闭结果及最近 64 条被替换记录。`gp_cancel` 在观察到原生完成前报告取消进行中。十秒后仍无法确认的原生结果明确标记未知，继续观察并阻止新修改；完整恢复仍需原生完成/错误适配。
+- 宿主静默忽略一个非 ZIP 的损坏 `.gp`，没有对话框或文档。最初跟踪测试记录超时，没有宣称失败或取消。随后加入 Qt ZIP/XML 预检，在调度前拒绝损坏容器、重复/缺少 GPIF、错误 XML、错误根节点及 DTD，同样用于保存后校验。GPIF 入口上限 64 MiB，不承诺完整语义有效性；原生适配器和安装清单新增 `Qt5Gui.dll` 哈希约束。
+- 包含被修改 Qt GUI DLL 场景的安装 46 项及协议 26 项通过：`artifacts/installation-3bf209454bc545ca8e5eb1df9d841f91/verification.json`。该轮早于最终的保守未保存状态恢复调整。
+- 当原生保存先清除未保存标记、随后输出校验失败时，恢复逻辑会把原先未保存的文档恢复为未保存，失败恢复不会清除该标记。此时写入中断及恢复失败注入仍未验证，普通保存成功不能代替故障证据。
+- 回归 `artifacts/regression-d55d5d21f0cb4eaa81a816918169e7cb/` 通过 1775 项后停在模板新建。保留宿主中已创建所需模板，路径为空且没有活动对话框；结构测试错误地在任何非 `scheduled` 状态停止轮询，包括新增的中间状态 `requested`。修正为等待明确终态并在失败信息中附状态后，保留宿主内的结构 60 项全部通过：`artifacts/native-structure-a18fde20b1124e9381a69ce464736bda/verification.json`。原失败回归仍记为未完成。
+- 该 P2 检查点十五组、2275 项回归通过，退出码为 0，连接描述清理完成：`artifacts/regression-ad790d076ad54c85aae881bcf2b63b33/regression.json`。核心 SHA-256：`99680BF0C99959EFE8A229346ED7EAA999AC7F2D0B6C486A3B385ECE89935D77`。同一二进制在 Windows PowerShell 5.1 通过文档操作 50 项并正常退出：`artifacts/document-operations-13ae4ad7835248bf99eaa1eee823fa15/verification.json`；连接/双客户端 53 项通过：`artifacts/instances-149583ef2ed448dcbbce0a0dad2110e4/verification.json`。
+- 上述检查点尚未验证启动转发、独立 GUI 实例、真实 MCP 客户端配置重载、手工标签重排、保存时取消、保存/恢复故障注入或未知原生结果完整恢复。P1 等待真实安装验收，P2–P7 未完成。
+
+### P2：异步保存与故障恢复
+
+- 原生保存故障注入暴露了同步调度缺陷：宿主显示保存错误对话框期间，所有 MCP 原生工具都被当作另一个操作仍在运行而拒绝。保存改为工具调用之外的受跟踪 Qt 回调，保留文档读取及已观察对话框控件操作，并阻止其他修改。副本、另存为、当前路径保存返回请求，通过 `gp_operation` 读结果；PowerShell 客户端默认轮询，超时不重放保存。保存后关闭复用相同包装。
+- 单独的测试保存探针在临时宿主中注入真实部分写入、损坏输出及阻止替换的文件锁。宿主直接写入目标前会重试备份写入，故障覆盖这些重试。保存后校验用例先观察原生已保存状态，再损坏输出，随后核对文件/路径/未保存状态恢复、撤销重做和重开。恢复失败保留原备份；确认仅有错误提示的对话框后仍报告错误，不是取消成功。
+- 较早的同步保存宿主在核对原始备份后需要终止，记录：`artifacts/save-recovery-13e0c22d8f93492fb219697ac340350c/termination.json`。该失败轮次不能作为通过的恢复证据。
+- 该检查点最终核心 SHA-256：`4DAE75091EB5ABBDB2F88FE698983E31B9B85A1150ECDBA0F358E69413F482C3`。十五组、2275 项回归全部通过，退出码为 0，连接描述已清理，记录的原生源码哈希与工作区一致：`artifacts/regression-7b51b29bd97f426f9d162f6f70efa42a/regression.json`。
+- 同一核心在 Windows PowerShell 5.1.19041.6456 通过 167 项故障检查：`artifacts/save-recovery-1074077d21354e4ab0ecb526cfa71680/verification.json`。探针 SHA-256：`F17252BF64CED3F6218A0B4609E68C693319C773B484627C07A32BF0AFB2B45F`。连接/双客户端 53 项通过：`artifacts/instances-b41dfdb2831a4167be7453cf8d4907d9/verification.json`。
+- 该检查点仍未完成完整原生保存进度取消、未知结果恢复、启动转发、独立 GUI 进程、手工标签重排和真实客户端集成。P1 真实安装等待验收，本次既未完成 P2，也未完成整个项目。
+
+### P2：DDE、中文路径与 Windows PowerShell 兼容
+
+- 文件关联调查发现 Windows 注册表中被旧测试遗漏的原生 DDE 约定：服务 `Guitar Pro 8`、主题 `system`、执行命令 `[open("%1")]`。普通第二进程收到正确命令行路径，却发送空的 Qt 单实例消息。在没有加载 MCP 核心的探针宿主中，随后发送 DDE 才产生文件打开事件并打开正确的第二份文档。基线、事件及探针源码：`artifacts/forwarding-probe-7e502806f8224290bbf07076d1299123/`。
+- 上述发现修正了仅用命令行测试的解释，没有为宿主新增命令行文件转发功能。真实安装目录的资源管理器验收仍属 P1。
+- `test-instances.ps1 -CheckLaunchForwarding` 现在核对注册的 DDE 配置、第二进程退出、接收 PID、中文及空格路径、重复打开身份、后台焦点和原有连接检查。测试客户端发送前拒绝错误接收进程，构建产物位于生产插件目录之外。失败测试现在保留仍运行的宿主及其已安装文件供检查，不再直接终止它们。
+- HTTP 响应未声明 UTF-8 时，Windows PowerShell 5.1 用旧版默认编码解析 JSON。DDE 打开的中文路径在宿主和 PowerShell 7 中正确，在 5.1 客户端乱码：`artifacts/instances-dc1ac592ad984e23965e111b8f4f3e3e/inspection.json`。新增的原始 UTF-8 与 HTTP 客户端解码对照断言在修复前失败；共享响应改为声明 `charset=utf-8`，两个连接描述读取入口均显式使用 UTF-8。中文会话目录检查覆盖发现、归属、过期身份及重启，并使用有效 JSON 夹具。
+- 完整回归入口适配 Windows PowerShell 5.1：加载标准压缩程序集，为四份中文测试脚本保留 UTF-8 BOM，使用可用的以二为底对数，通过对象属性保留 JSON 数组，按 JSON 错误码而非空白格式匹配错误。保留原有断言和音乐功能范围。未完成轮次仍算失败；保留的未保存夹具已另存供检查，所有保留宿主关闭后才重新完整回归。
+- `09185ab` 检查点核心 SHA-256：`A22ECD07B9C48776CF25CA1E9FA4A8C650CF9E93841F511380FF97FE7F73227F`。十五组、2276 项在 Windows PowerShell 5.1.19041.6456 与 PowerShell 7.6.5 分别完整通过，退出码为 0，连接描述均删除：`artifacts/regression-9e09be6fb7784486bc7423a8a50cd9f5/regression.json`、`artifacts/regression-b7fb07a5f6c14bd5abe4811a36c14159/regression.json`。原生源码哈希已与最终工作区核对。
+- 同一核心的 DDE/连接检查在 PowerShell 7 后台模式通过 61 项，在 Windows PowerShell 5.1 可见模式通过 60 项：`artifacts/instances-3833810d444349888852106424949221/verification.json`、`artifacts/instances-3b540bd0135545bc965d08b618631733/verification.json`。两轮均记录 15000 ms 启动等待。
+- 默认 5000 ms 的两轮仍在重启后的宿主退出时复现厂商网络死锁：`artifacts/instances-69d4f4d62d6141b6b52b1c3fc4271ebd/`、`artifacts/instances-70832e139e884a3c895c1ceb8b32c41e/`。目录保留失败结果、线程栈和临时宿主终止依据。延长等待不是已验证的修复，P2/P7 继续保留此问题。
+- 同一最终核心在 Windows PowerShell 5.1 通过全部 167 项保存/恢复故障检查，宿主正常退出并清理连接描述：`artifacts/save-recovery-a9adcab860bc4afd944359d371399572/verification.json`。原生保存进度取消明确仍未验证；该检查点验证与检查结束时已关闭全部测试宿主。
+- 本检查点未完成 P1 真实安装、独立 GUI 实例、真实客户端集成、手工标签重排、完整原生保存进度取消及未知结果恢复，不宣称任何新增阶段完成。

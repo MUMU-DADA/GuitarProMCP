@@ -1,66 +1,42 @@
-# Automatic Loading Decision
+# 自动加载方案与验证
 
-P0 verified on Guitar Pro 8.1.1.17 x64 / Qt 5.15.3, 2026-09-07.
+P0 已于 2026-09-07 在 Guitar Pro 8.1.1.17 x64 / Qt 5.15.3 上通过验收。
 
-The installed `qt.conf` sets `[Paths] Plugins = Plugins`. During startup this
-host instantiates Qt image-format plugins. An additional `QImageIOPlugin` in
-`Plugins/imageformats/` is therefore an application-local bootstrap entry.
-It reports no read/write capabilities and never decodes or handles images.
-Its constructor queues work on the application's event loop, where a small
-loader can validate the host and load the existing generic MCP plugin.
+安装目录的 `qt.conf` 设置了 `[Paths] Plugins = Plugins`。该宿主在启动时会实例化 Qt 图像格式插件，因此可在 `Plugins/imageformats/` 中新增一个 `QImageIOPlugin`，作为软件目录内的自动加载入口。
 
-This is a Qt extension mechanism, not an Arobas business-plugin SDK. Discovery
-timing is host-version-dependent and must be reverified for each supported
-release. It requires neither modified executables/Qt DLLs, system environment
-variables, shortcut replacement, a background launcher nor process injection.
+加载器不声明任何图像读写能力，也不解码或处理图像。构造函数将任务排入软件事件循环，由小型加载器校验宿主后加载现有的 Qt 通用 MCP 插件。
 
-## Reproducible Probe
+这是 Qt 的扩展机制。Arobas 未为此提供业务插件 SDK，插件发现时机依赖宿主版本，每个支持版本都必须重新验证。该方案无需修改 EXE 或 Qt DLL，无需系统环境变量、替换快捷方式、后台启动器或进程注入。
 
-Run `native/build-autoload-probe.ps1` then `native/test-autoload-probe.ps1`.
-The test copies the installed runtime into a unique `.tools/autoload-host-*`
-directory and changes only that copy. The probe merely writes PID, executable,
-Qt version and generic-plugin environment to the copied directory. It does not
-change scores. Test-created processes are stopped after observation.
+## 可复现的探针验证
 
-Verified variants, with no `QT_PLUGIN_PATH`, `QT_QPA_GENERIC_PLUGINS`, or
-`GPMCP_SESSION_FILE`:
+先运行 `native/build-autoload-probe.ps1`，再运行 `native/test-autoload-probe.ps1`。测试把已安装运行文件复制到唯一的 `.tools/autoload-host-*` 目录，只修改该副本。探针仅向副本目录记录 PID、EXE 路径、Qt 版本和通用插件环境，不修改曲谱。观察结束后停止测试创建的进程。
 
-1. Direct execution of the unchanged copied `GuitarPro.exe` loads the probe.
-2. A real `.lnk` targeting that executable loads the probe.
-3. `GuitarPro.exe --open "<fixture>.gp"` loads the probe.
-4. Removing only the probe DLL stops loading it; the application stays running.
+在未设置 `QT_PLUGIN_PATH`、`QT_QPA_GENERIC_PLUGINS` 或 `GPMCP_SESSION_FILE` 的条件下，已验证：
 
-The actual registered `.gp` association was read from
-`HKEY_CLASSES_ROOT/Guitar Pro 8.AssocFile.gp/shell/open/command` and is
-`"C:\Program Files\Arobas Music\Guitar Pro 8\GuitarPro.exe" --open "%1"`.
-P0 verified those same arguments against the isolated executable; it did not
-change the user's association. Opening an associated file against the actual
-installed production plugin remains a P1 installation acceptance check.
+1. 直接运行未修改的副本 `GuitarPro.exe` 会加载探针。
+2. 通过实际指向该 EXE 的 `.lnk` 快捷方式启动会加载探针。
+3. 执行 `GuitarPro.exe --open "<fixture>.gp"` 会加载探针。
+4. 仅移除探针 DLL 后不再加载探针，软件仍保持运行。
 
-The association also registers `ddeexec = [open("%1")]`, application
-`Guitar Pro 8`, topic `system`, and `ifexec = []`. A later P2 investigation
-confirmed that repeated command-line startup sends an empty Qt single-instance
-message; the DDE command delivers the actual file-open event. Repeating only
-the EXE command is therefore not a complete file-association test. The native
-DDE test client verifies the recipient PID before sending any open command.
-Isolated protocol checks do not replace the pending real installed Explorer
-entry-point check in P1.
+实际 `.gp` 文件关联读取自 `HKEY_CLASSES_ROOT/Guitar Pro 8.AssocFile.gp/shell/open/command`，值为：
 
-Evidence: `artifacts/autoload-probe-724964da0f7740f991172f092da7b43f/verification.json`.
-The host SHA-256 equals the production allowlist. Probe results do not prove
-the MCP service itself works: P1 must verify the real DLL, protocol, live score,
-visible/background startup, uninstall and failure behavior.
+```text
+"C:\Program Files\Arobas Music\Guitar Pro 8\GuitarPro.exe" --open "%1"
+```
 
-## Production Decision
+P0 在隔离 EXE 上验证了相同的启动参数，没有修改用户的文件关联。通过文件关联启动真实安装目录中的正式插件，仍属于 P1 安装验收。
 
-Install a small Qt-only bootstrap in `Plugins/imageformats/` and the existing
-MCP implementation in `Plugins/generic/`. Check executable, GPCore, GPRSE and
-Qt5Core hashes before loading code that imports private interfaces. Queue the
-load until the Qt main event loop is running. Keep normal visible startup as
-the default and make background mode explicit.
+该关联还注册了 `ddeexec = [open("%1")]`、应用名 `Guitar Pro 8`、主题 `system` 和 `ifexec = []`。后续 P2 调查确认：重复命令行启动发送的 Qt 单实例消息为空，真正的文件打开事件由 DDE 命令传递。因此，仅重复运行 EXE 命令不能作为完整的文件关联测试。
 
-All configuration/diagnostic files belong to the current user's data directory.
-Invalid configuration, disabled state or an unsupported host must skip MCP
-startup and preserve application use. Uninstall removes only installer-owned
-files. Future Qt major-version changes can reject the bootstrap before its own
-checks run, so compatibility cannot be promised across arbitrary host updates.
+原生 DDE 测试客户端发送打开命令前会核对接收进程 PID。隔离环境的协议检查不能代替 P1 中尚未完成的真实资源管理器入口验收。
+
+验证证据：`artifacts/autoload-probe-724964da0f7740f991172f092da7b43f/verification.json`。宿主 SHA-256 与生产版本白名单一致。探针结果只证明加载入口；P1 还必须验证实际 DLL、MCP 协议、实时曲谱、可见和后台启动、卸载及异常行为。
+
+## 生产实现方案
+
+在 `Plugins/imageformats/` 安装仅依赖 Qt 的小型加载器，在 `Plugins/generic/` 安装现有 MCP 实现。加载使用私有接口的代码前，校验 EXE、GPCore、GPRSE 和 Qt5Core 的哈希；后续 ZIP/GPIF 接口还要求校验 Qt5Gui，完整列表见 [私有接口的版本约束](README.md#私有接口的版本约束)。加载任务等待 Qt 主事件循环运行后执行。正常可见启动为默认行为，后台运行需要显式选择。
+
+所有配置和诊断文件放在当前用户的数据目录。配置无效、已停用或宿主不受支持时跳过 MCP 启动，保留软件的正常使用能力。卸载只删除安装器管理的文件。
+
+未来 Qt 主版本变化可能在加载器自身校验前就拒绝加载，因此不能承诺任意宿主更新后的兼容性。

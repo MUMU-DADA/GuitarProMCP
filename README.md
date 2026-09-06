@@ -145,6 +145,8 @@ MCP 客户端
 
 ## 运行检查
 
+截至 `09185ab` 检查点，当前核心在 Windows PowerShell 5.1 和 PowerShell 7 下分别通过十五组、2276 项完整回归；另有 DDE/连接及保存故障专项。最新证据、启动等待条件和未完成项见 [当前验证证据](COVERAGE.md#当前验证证据)，完整 P0–P7 任务及验收标准见 [开发计划](DEVELOPMENT_PLAN.md)。下方按日期保留的检查结果属于对应历史构建。
+
 协议检查只需要一个已启用插件的宿主：
 
 ```powershell
@@ -193,7 +195,7 @@ Copy-Item ./native/testdata/minimal.gp ./artifacts/native-test.gp
 
 同日新增连奏与延音线专项 **153 项通过**，十三组累计 **2195 项**。专项核对单拍、和弦单音、反向跨小节、多声部/音轨、钢琴下谱表隔离、音高/升降号变化、缺失弦音符补入、原生命令重复执行、撤销重做、GPIF 和保存重开。证据在 `artifacts/native-connections-*/verification.json`。
 
-连接编辑实现后的最新回归运行了协议、原生后台、节拍编辑、音符技法、选区、插件独立剪贴板、连音和连接八组，共 **1784 项通过**。汇总及当前 DLL/源码哈希在 `artifacts/native-connections-ce6b417d13c046e0a4703353b0121ca9/regression.json`；没有执行真实系统剪贴板测试。
+连接编辑实现后的该轮回归运行了协议、原生后台、节拍编辑、音符技法、选区、插件独立剪贴板、连音和连接八组，共 **1784 项通过**。汇总及该轮 DLL/源码哈希在 `artifacts/native-connections-ce6b417d13c046e0a4703353b0121ca9/regression.json`；没有执行真实系统剪贴板测试。
 
 早期发现的隐藏窗口请求前台问题已通过同步 `QWidget` / `QWindow` 的焦点策略修复；上述通过记录无需预先最小化窗口。`gp_capabilities.foreground_window` 可读取当时窗口的句柄、类名、标题及可见性，检查脚本不会忽略前台断言失败。其他模态窗口、复杂操作和长时间运行仍需扩大验证。
 

@@ -1,39 +1,31 @@
-# Install GuitarProMCP
+# GuitarProMCP 安装说明
 
-Supported host: Guitar Pro 8.1.1.17, Windows x64. The installer verifies the
-executable and private-interface DLL hashes. No compiler, Qt SDK, Python or
-Node.js is needed to use the packaged DLLs.
+支持的宿主：Guitar Pro 8.1.1.17，Windows x64。安装器会校验宿主 EXE 和私有接口 DLL 的哈希。使用预编译包无需编译器、Qt SDK、Python 或 Node.js。
 
-1. Save your scores and close Guitar Pro.
-2. Extract the package and run `Install.cmd`. Windows may request administrator
-   access to the Guitar Pro installation directory.
-3. Start Guitar Pro using its existing shortcut, executable or a `.gp` file.
-4. Use the application's **MCP** menu entry for connection status and the
-   **Open client configuration** command. Add that configuration to an HTTP MCP
-   client. The file contains an access token and should remain private.
+## 安装与启动
 
-The normal window stays visible. To start an explicit background instance:
+1. 保存曲谱并关闭 Guitar Pro。
+2. 解压安装包，运行 `Install.cmd`。写入 Guitar Pro 安装目录时，Windows 可能要求管理员权限。
+3. 通过原有快捷方式、EXE 或关联的 `.gp` 文件启动 Guitar Pro。
+4. 打开软件中的 **MCP** 菜单查看连接状态，使用“打开客户端配置”（`Open client configuration`）命令，将配置接入支持 HTTP MCP 的客户端。该文件包含访问令牌，请勿公开。
+
+安装后随 Guitar Pro 启动自动加载插件。已经在安装前打开的普通实例需要重启；安装器不会向运行中的进程热加载插件。加载插件后，客户端可以直接操作该进程中已打开的文档，手工编辑与 MCP 编辑使用同一份曲谱。
+
+正常启动时窗口保持可见。显式后台启动使用：
 
 ```powershell
 ./start-installed.ps1 -Background -ScorePath C:/Scores/example.gp
 ```
 
-Preferred endpoint: `http://127.0.0.1:18432/mcp`. The development P2 build falls
-back to another loopback port when this default is occupied; read the generated
-configuration for the actual URL. An explicit `GPMCP_PORT` remains strict.
-Configuration and credentials are
-stored under `%LOCALAPPDATA%/GuitarProMCP`, independently of the source checkout.
-The files are `native-session.json`, `mcp-client.json`, `mcp-auth-token`,
-`settings.json` and a credential-free `status.json`. Developer scripts and
-isolated tests can override the data directory with `GPMCP_DATA_DIR`.
-P2 also publishes `native-session-<UUID>.json` and `mcp-client-<UUID>.json` for
-the current instance and removes them on exit. The instance-bound client file
-must be refreshed after a process restart. The archived P1 candidate retains its
-original fixed-port behavior and does not contain these P2 changes.
+默认端点为 `http://127.0.0.1:18432/mcp`。P2 开发构建在默认端口被占用时会改用其他本机端口，实际 URL 以生成的配置为准；显式指定 `GPMCP_PORT` 时，端口冲突会报错。
 
-## Update, Disable and Uninstall
+配置与凭据存放在 `%LOCALAPPDATA%/GuitarProMCP`，独立于源码目录。文件包括 `native-session.json`、`mcp-client.json`、`mcp-auth-token`、`settings.json`，以及不含凭据的 `status.json`。开发脚本和隔离测试可通过 `GPMCP_DATA_DIR` 指定其他数据目录。
 
-Run these commands from the extracted package:
+P2 还为当前实例生成 `native-session-<UUID>.json` 和 `mcp-client-<UUID>.json`，退出时清理。进程重启后，需要刷新绑定实例的客户端配置。归档的 P1 候选包仍使用原来的固定端口行为，不包含这些 P2 改动。
+
+## 更新、停用和卸载
+
+在解压后的安装包目录执行：
 
 ```powershell
 ./install-plugin.ps1 -Action Status
@@ -43,39 +35,29 @@ Run these commands from the extracted package:
 ./install-plugin.ps1 -Action Uninstall -Elevate
 ```
 
-Enable/disable takes effect on the next application start. The MCP status
-dialog also has a **Load at startup** checkbox, including when the service has
-been disabled. Updates and uninstall require the affected host to be closed.
-Uninstall retains user configuration and credentials and removes only verified
-installer-owned DLLs and its receipt. Modified/unrecognized files are not
-overwritten. A failed update rolls back replaced DLLs; if rollback cannot
-finish, its backup directory is retained and reported.
+启用或停用在下次启动软件时生效。MCP 状态对话框提供“随软件启动加载”（`Load at startup`）复选框，服务停用后也可使用。更新和卸载前必须关闭使用相关插件文件的宿主。
 
-For a non-default host directory, pass `-InstallDirectory C:/Path/To/GuitarPro`
-to the installation or launch command. Installation does not change the host
-EXE, vendor Qt DLLs, shortcuts, file associations, or system environment.
+卸载保留用户配置与凭据，只删除确认归安装器管理的 DLL 和安装记录。已被修改或无法识别的文件不会被覆盖。更新失败时回滚已替换的 DLL；回滚无法完成时保留并报告备份目录。
 
-## Loading and Diagnostics
+安装路径不同时，在安装或启动命令中传入 `-InstallDirectory C:/Path/To/GuitarPro`。安装器不修改宿主 EXE、厂商 Qt DLL、快捷方式、文件关联或系统环境变量。
 
-An application-local Qt image-plugin bootstrap queues the existing native MCP
-plugin onto the Qt event loop. It handles no images. Private-interface files
-are checked before loading the core plugin. An unsupported host or invalid
-configuration skips MCP and reports a status while preserving ordinary
-application use. This loading mechanism is version-dependent and must be
-reverified after Guitar Pro updates.
+## 加载与诊断
 
-The status dialog and `status.json` distinguish `running`, `disabled`,
-`unsupported_host`, `configuration_error`, `load_error` and `service_error`.
-An explicitly configured port already in use produces `service_error`. Discovery,
-two clients, reconnect and default-port fallback have P2 verification; independent
-GUI processes and forwarding a second launch to open a file remain unverified.
-Actual clients must also be checked for configuration reload after a URL change.
-The initial package is a development release: remaining
-functional and reliability scope is tracked in `DEVELOPMENT_PLAN.md` and
-`COVERAGE.md` in the source repository.
+软件目录内的 Qt 图像插件加载器将现有原生 MCP 插件的加载任务提交到 Qt 事件循环，自身不处理图像。加载核心前校验私有接口所依赖的宿主文件。不支持的宿主或无效配置会跳过 MCP 启动并报告状态，保留 Guitar Pro 的正常使用能力。加载机制与版本有关，Guitar Pro 更新后必须重新验证。
 
-Rapidly closing this host build during startup can leave its vendor AMNetwork
-thread waiting during shutdown. This was also reproduced with a minimal
-Qt-only closing probe without the MCP core. It remains an open reliability
-issue. The current complete editing regression exits normally with code 0;
-that result does not establish reliable rapid startup/exit behavior.
+状态对话框及 `status.json` 使用以下状态值：
+
+| 状态值 | 含义 |
+| --- | --- |
+| `running` | 服务正在运行 |
+| `disabled` | 已停用，下次启动时不加载核心 |
+| `unsupported_host` | 宿主版本或文件哈希不受支持 |
+| `configuration_error` | 配置无效 |
+| `load_error` | 核心插件加载失败 |
+| `service_error` | 服务启动失败，例如显式指定的端口已被占用 |
+
+实例发现、两个客户端、重连和默认端口回退已完成 P2 专项验证。隔离宿主已验证 Windows 文件关联的 DDE 打开流程；单独再次执行 `GuitarPro.exe --open ...` 不会传递文件路径，必须包含注册的 DDE 命令 `[open("%1")]`。真实安装目录的资源管理器入口、独立 GUI 多进程，以及实际 MCP 客户端在 URL 变化后重新加载配置，仍需验收。
+
+当前为开发版本，实际安装目录仍包含旧版插件。完整功能和可靠性要求见源码仓库的 [开发计划](DEVELOPMENT_PLAN.md) 与 [覆盖清单](COVERAGE.md)。已归档安装包的行为以随包文档和对应二进制为准。
+
+该宿主版本在启动期间快速关闭时，厂商 AMNetwork 线程可能在退出过程中持续等待。不加载 MCP 核心、仅使用最小 Qt 关闭探针也能复现，仍是未解决的可靠性问题。完整编辑回归正常退出、退出码为 0，并不能证明快速启动和退出已经可靠；延长启动等待也不是已验证的修复。
