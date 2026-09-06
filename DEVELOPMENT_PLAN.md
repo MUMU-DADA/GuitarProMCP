@@ -154,8 +154,10 @@ restart and port fallback. Save-current, explicit overwrite, tracked new/open/
 close, save/discard/cancel close policies, native close-dialog cancellation and
 malformed ZIP/GPIF rejection are verified. A second GUI launch exits, but opening
 its requested score in the existing host has not passed in visible or background
-mode. Independent GUI processes, native mid-write failure recovery, save-time
-cancellation, manual tab reorder, real-client configuration reload and complete
+mode. Injected native partial-write failures, post-save validation recovery,
+save-error dialog handling and retained recovery backups are verified.
+Independent GUI processes, complete native save-progress cancellation,
+manual tab reorder, real-client configuration reload and complete
 unknown-native-outcome recovery remain open. P2 is not accepted.
 
 ### P3: Complete musical editing
@@ -306,12 +308,12 @@ runtime tokens, temporary hosts and generated evidence out of Git.
 
 1. Preserve the archived P1 candidate and its evidence. The development DLLs now
    contain P2 changes and must not be represented as the tested P1 package.
-2. Complete P2 connection verification in isolated hosts: single-instance
-   forwarding, external port contention, strict explicit port, two clients,
-   stale identity, reconnect/restart and cleanup. Split tests by supported host
-   behavior; do not count a prematurely exited second launch as a passing host.
-3. Complete the remaining P2 unknown-outcome and mid-write recovery paths,
-   save-time cancellation, manual tab reorder and real-client integration.
+2. Resolve P2 single-instance file forwarding and establish the supported GUI
+   process boundary. Retain the passing port-contention, explicit-port,
+   two-client, stale-identity, reconnect/restart and cleanup checks. A normally
+   exited second launch does not prove that its requested document was opened.
+3. Complete the remaining P2 unknown-outcome paths, native save-progress
+   cancellation, manual tab reorder and real-client integration.
    Basic request tracking, close policies and malformed archive errors now have
    coverage; retain and extend those checks when completing the remaining work.
 4. Complete the pending real P1 update/entry-point check once Windows elevation
@@ -492,3 +494,36 @@ other explicit gaps in that file remain open.
   MCP-client configuration reload, manual tab reorder, save-time cancellation,
   injected save/recovery failures or complete unknown-native-outcome recovery.
   P1 remains pending installed-host acceptance; P2-P7 remain unfinished.
+- P2: injected native save failures exposed a synchronous-dispatch defect:
+  while the host displayed its save-error dialog, every MCP native tool was
+  rejected as another native operation already running. Saves now run as
+  tracked Qt callbacks outside the tool invocation, retaining document reads
+  and observed-dialog controls while blocking other mutations. Copy, Save As
+  and current-path save return a request and expose their result through
+  `gp_operation`; the PowerShell client polls by default without replaying a
+  save on timeout. Save-and-close uses the same native save wrapper.
+- P2: the separate test-only save probe injects real partial writes, corrupt
+  output and a replacement-blocking file lock into disposable hosts. The host
+  retries backup writes before direct destination writing; the fault covers
+  those retries. Post-save validation cases observe native clean state before
+  corruption, then verify restored file/path/dirty state, undo/redo and reopening.
+  Recovery failure retains the original backup. Acknowledging an error-only
+  dialog remains an error, not a successful cancellation. The earlier retained
+  synchronous host required termination after its original backup was checked:
+  `artifacts/save-recovery-13e0c22d8f93492fb219697ac340350c/termination.json`.
+  That failed run is not passing recovery evidence.
+- P2 checkpoint validation: the final core SHA-256 is
+  `4DAE75091EB5ABBDB2F88FE698983E31B9B85A1150ECDBA0F358E69413F482C3`.
+  All fifteen regression suites, 2275 checks, passed with exit code 0 and
+  descriptor removal; recorded native source hashes match the working tree:
+  `artifacts/regression-7b51b29bd97f426f9d162f6f70efa42a/regression.json`.
+  The same core passed 167 fault checks under Windows PowerShell 5.1.19041.6456:
+  `artifacts/save-recovery-1074077d21354e4ab0ecb526cfa71680/verification.json`.
+  Probe SHA-256:
+  `F17252BF64CED3F6218A0B4609E68C693319C773B484627C07A32BF0AFB2B45F`.
+  All 53 connection/concurrent-client checks passed on that core:
+  `artifacts/instances-b41dfdb2831a4167be7453cf8d4907d9/verification.json`.
+  Full native save-progress cancellation and unknown-outcome recovery remain
+  open, alongside launch forwarding, independent GUI process support, manual
+  tab reorder and real-client integration. P1 installed-host acceptance remains
+  pending; this checkpoint completes neither P2 nor the full project.

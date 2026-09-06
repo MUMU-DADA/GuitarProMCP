@@ -95,7 +95,9 @@ MCP 客户端
 
 曲谱工具调用 GPCore 的原生方法和命令，不发送鼠标或键盘输入。Qt 控件属性工具只保证控件属性操作：例如修改标题输入框的 `plainText` 不会自动提交曲谱标题，应使用 `gp_edit_metadata`。
 
-保存工具要求绝对路径、现有父目录以及尚不存在的 `.gp` 目标文件。`gp_set_fret` 当前只修改已有音符，品位范围为 0–36。弦编号使用宿主内部索引，应以 `gp_read_bars` 的返回值为准。
+保存工具要求绝对路径、现有父目录和 `.gp` 目标文件；副本和另存为覆盖已有文件须明确设置 `overwrite=true`。`gp_set_fret` 当前只修改已有音符，品位范围为 0–36。弦编号使用宿主内部索引，应以 `gp_read_bars` 的返回值为准。
+
+`gp_save`、`gp_save_as` 和 `gp_save_current` 现在均返回 `scheduled` 与 `request`。轮询 `gp_operation`，确认 `operation.status=saved` 后读取 `operation.result`；当前请求也见 `gp_documents.saving`。保存期间可查询文档及原生错误对话框，其他编辑会被拒绝。`native/mcp-client.ps1` 默认自动等待保存结果，传入 `-NoWait` 可直接取得请求 ID 并自行处理对话框。等待超时不会重试保存。
 
 `gp_open` 返回 `scheduled` 和 `request` 后，轮询 `gp_operation` 的 `operation` 或 `gp_documents.opening`，核对相同请求的 `opened` 状态及文档 ID。打开已存在的路径返回对应文档 ID。ZIP/GPIF 校验失败返回该请求的明确错误；原生结果无法确认时返回 `outcome_unknown=true` 并阻止后续写入，不能据此认为操作已取消。多文档播放前先调用 `gp_activate`，再调用 `gp_playback`。播放和停止可能异步完成，应轮询状态确认。
 
@@ -103,7 +105,7 @@ MCP 客户端
 
 `gp_close` 接受文档 ID，返回 `scheduled` 后轮询 `gp_operation` 或 `gp_documents.closing`，匹配请求 ID 并确认 `closed`。`unsaved` 默认为 `reject`；`save` 保存后关闭，可传 `path` 和 `overwrite` 完成另存为；`discard` 通过宿主明确的丢弃按钮关闭；`cancel` 保留文档；`prompt` 保留原生确认流程。`gp_cancel request=...` 可取消尚未调度的操作或当前识别到的原生对话框，应继续读回最终状态。后台关闭最后一份文档后，MCP 服务仍保持运行。
 
-文档 ID 是独立 UUID，在同一文档生命周期内稳定，关闭重开或宿主重启后失效。保存拒绝覆盖其他已打开文档；覆盖前备份原文件，写入失败时尝试恢复并返回恢复状态。已验证锁定文件和无效路径的拒绝及内容保留，原生写入中途失败的恢复仍待专项验证。
+文档 ID 是独立 UUID，在同一文档生命周期内稳定，关闭重开或宿主重启后失效。保存拒绝覆盖其他已打开文档；覆盖前备份原文件，写入失败时尝试恢复并返回恢复状态。故障专项已验证原生部分写入、损坏输出、校验失败后的未保存状态恢复，以及恢复失败时保留备份。关闭“保存错误”提示后仍报告 `error`，不会把已发生的保存失败当成取消成功；完整的保存进度取消仍待验证。
 
 打开前与保存后使用宿主 Qt 的 ZIP 读取器及 XML 解析器检查 `Content/score.gpif`，该入口限 64 MiB，拒绝重复入口、符号链接、错误 XML 根节点和 DTD。这些检查不等于完整 GPIF 语义验证；未知原生结果、所有模态窗口和长时间运行仍在开发计划中。
 

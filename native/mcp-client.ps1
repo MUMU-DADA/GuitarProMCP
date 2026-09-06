@@ -67,13 +67,30 @@ function New-McpSession {
     [pscustomobject]@{Url=$descriptor.url;Headers=$headers;Pid=$descriptor.pid;Version=$result.result.protocolVersion;InstanceId=$descriptor.instance_id;SessionFile=$SessionFile;DataDirectory=$directory}
 }
 function Invoke-McpTool {
-    param($Session,[string]$Name,[hashtable]$Arguments=@{},[switch]$AllowError)
+    param($Session,[string]$Name,[hashtable]$Arguments=@{},[switch]$AllowError,[switch]$NoWait)
     $body = @{jsonrpc='2.0';id=2;method='tools/call';params=@{name=$Name;arguments=$Arguments}} | ConvertTo-Json -Depth 12 -Compress
     try { $response = Invoke-RestMethod -Uri $Session.Url -Method Post -Headers $Session.Headers -ContentType 'application/json' -Body ([Text.Encoding]::UTF8.GetBytes($body)) -TimeoutSec 15 -MaximumRedirection 0 }
     catch { throw "MCP tool $Name failed: $($_.Exception.Message). Its outcome may be unknown; inspect the target before retrying a mutation." }
     if ($response.error) { throw ($response.error | ConvertTo-Json) }
     if ($response.result.isError -and -not $AllowError) { throw ($response.result.structuredContent | ConvertTo-Json -Depth 8) }
-    $response.result.structuredContent
+    $result = $response.result.structuredContent
+    if (-not $NoWait -and $Name -in @('gp_save','gp_save_as','gp_save_current') -and $result.status -eq 'scheduled') {
+        $request = $result.request
+        $deadline = [DateTime]::UtcNow.AddSeconds(12)
+        do {
+            $operation = (Invoke-McpTool $Session gp_operation @{request=$request}).operation
+            if ($operation.status -in @('saved','error','cancelled')) {
+                $result = if ($operation.result) { $operation.result } else { [pscustomobject]@{error="Save operation $($operation.status)"} }
+                $result | Add-Member -NotePropertyName request -NotePropertyValue $request -Force
+                $result | Add-Member -NotePropertyName status -NotePropertyValue $operation.status -Force
+                if ($result.error -and -not $AllowError) { throw ($result | ConvertTo-Json -Depth 8) }
+                return $result
+            }
+            Start-Sleep -Milliseconds 50
+        } while ([DateTime]::UtcNow -lt $deadline)
+        throw "Save request $request is still pending. Inspect gp_operation and gp_dialogs; do not repeat the save. Use -NoWait to manage it explicitly."
+    }
+    $result
 }
 function Close-McpSession {
     param($Session)
