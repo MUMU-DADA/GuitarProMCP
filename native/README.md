@@ -2,7 +2,7 @@
 
 本目录实现运行在 `GuitarPro.exe` 内的 C++ MCP 服务器。当前通过 Qt 通用插件入口加载，并直接使用 Qt 和经过验证的 GPCore 接口。Python、Node.js、UIA、输入模拟和外部转接服务不在运行链路中。
 
-当前协作规范、开发目标和范围决策见 [AGENTS.md](../AGENTS.md)；能力证据见 [覆盖清单](../COVERAGE.md)。以下仅描述当前代码提供的实现细节。
+当前协作规范、开发目标和范围决策见 [AGENTS.md](../AGENTS.md)；能力证据见 [覆盖清单](../docs/COVERAGE.md)。以下仅描述当前代码提供的实现细节。
 
 ## 源码结构
 
@@ -24,7 +24,7 @@
 
 ## 构建和加载
 
-正式安装使用根目录的 `Install.cmd` / `install-plugin.ps1`，说明见 [INSTALL.md](../INSTALL.md)。`autoload.cpp` 作为 Qt 图像插件加载器，在主事件循环中校验宿主并加载现有 MCP 核心；`host_build.h` 提供宿主检查，`plugin_config.h` 管理用户配置与诊断，`plugin_status.h` 提供软件内状态入口。它不参与图像编解码。正常安装默认可见，开发启动脚本默认后台。
+正式安装使用根目录的 `Install.cmd` / `install-plugin.ps1`，说明见 [INSTALL.md](../docs/INSTALL.md)。`autoload.cpp` 作为 Qt 图像插件加载器，在主事件循环中校验宿主并加载现有 MCP 核心；`host_build.h` 提供宿主检查，`plugin_config.h` 管理用户配置与诊断，`plugin_status.h` 提供软件内状态入口。它不参与图像编解码。正常安装默认可见，开发启动脚本默认后台。
 
 ```powershell
 ./native/build.ps1
@@ -70,6 +70,8 @@ Windows `.gp` 文件关联包含两个部分：启动命令 `--open "%1"`，以�
 本地配置位于 `.cache/mcp-client.json`。该文件包含访问令牌，已经被 Git 忽略。服务描述文件 `.cache/native-session.json` 不含令牌。
 
 ## 使用原生曲谱工具
+
+本节是 MCP 工具目录、参数和原生行为的唯一开发者参考。根目录 `README.md` 只保留功能分组和入口链接；新增或修改工具时只更新本节及对应源码。
 
 下面的 PowerShell 仅作为开发客户端；产品 MCP 服务器本身是 C++ DLL。
 
@@ -475,7 +477,7 @@ PDF 复用宿主原生排版和 QPrinter 打印流程，受控打印目标就是
 
 `gp_preferences` 只操作整个软件，`scope=application`，`model=general/gui/score`；允许属性由 `values` 列出，设置失败会尝试恢复旧值。`gp_presentation` 只操作返回 ID 对应的文档，一次修改页面、视图或谱表一组。页面边长 50..1000 毫米，边距须留下至少 20 毫米内容区域；尺寸、边距、方向和谱表显示可保存重开。缩放 0.25..4 及编辑视图属于会话状态，返回 `requested` 时应再次读取 `state` 确认。页面及显示设置不进入宿主撤销栈，同值页面设置不制造脏状态。声音和设备参数复用 P5 的 `gp_audio_track`/`gp_audio_device`。
 
-专项：`./native/test-p6.ps1 -SessionFile <session.json>`，使用 Windows 自带的 PowerShell/.NET 核验交换格式、PNG、PCM、设置恢复和临时文档隔离。`test-exchange.ps1` 仅解析本项目简单验收夹具，不是通用转换器。开发者可显式加 `-RenderPdf` 使用已准备的 Poppler 独立复核 PDF；该选项不是普通测试、插件安装或运行的前提，测试脚本不进入安装包。当前证据见 [P6 验收](../COVERAGE.md#p6-验收)。
+专项：`./native/test-p6.ps1 -SessionFile <session.json>`，使用 Windows 自带的 PowerShell/.NET 核验交换格式、PNG、PCM、设置恢复和临时文档隔离。`test-exchange.ps1` 仅解析本项目简单验收夹具，不是通用转换器。开发者可显式加 `-RenderPdf` 使用已准备的 Poppler 独立复核 PDF；该选项不是普通测试、插件安装或运行的前提，测试脚本不进入安装包。当前证据见 [P6 验收](../docs/COVERAGE.md#p6-验收)。
 
 ## 私有接口的版本约束
 
@@ -509,45 +511,29 @@ IDocumentsManager + 0x10 → 管理器实现对象
 
 开发时可在启动前设置 `GPMCP_DEVELOPMENT=1`，启用只读 `gp_debug_objects`。其 RTTI 扫描可能读到相邻分配，结果只能作为研究线索，不能直接当作稳定 ABI。原始地址不接受客户端回传执行，默认模式也不暴露该开发工具。
 
-## 验证
+## 验证与验收
 
-P1 已通过真实安装生命周期 48 项、生命周期内入口 108 项及普通用户四种入口 68 项；隔离安装 46 项及协议 27 项，文件归属、不同 DLL 回滚与 UTF-8 配置在 PowerShell 5.1/7 各通过 33 项。准确安装包、脚本哈希和具名记录见 [P1 验收](../COVERAGE.md#p1-验收)。
+本文件描述构建、连接、协议和原生 API；当前验收结果、候选包、构建哈希和保留边界统一维护在 [COVERAGE.md](../docs/COVERAGE.md)。历史阶段记录见 [DEVELOPMENT_PLAN.md](../docs/DEVELOPMENT_PLAN.md)，不在这里重复维护验收数字。
 
-P1 安装集成专项可直接验证解压后的候选包，避免误用开发目录中后来编译的 DLL：
+### 常用命令
 
-```powershell
-./native/test-installer-files.ps1 -HostDirectory .tools/隔离宿主 -PackageDirectory artifacts/候选包
-./native/test-installation.ps1 -HostDirectory .tools/隔离宿主 -PackageDirectory artifacts/候选包
-./native/test-installed-lifecycle.ps1 -PackageDirectory artifacts/候选包 -StartupSettleMs 30000 -Elevate
-./native/test-installed-entrypoints.ps1 -PackageDirectory artifacts/候选包 -StartupSettleMs 30000
-```
-
-真实目录测试前关闭所有 Guitar Pro 实例。生命周期脚本更新已有插件，执行安装、更新、停用、启用、卸载和重装，最终保留候选版本并恢复原有用户设置；检查凭据、厂商二进制、原有快捷方式和文件关联是否保留。入口脚本通过真实 Windows Shell 打开 EXE、原有快捷方式、中文/空格路径的关联曲谱，并验证运行中转发和显式后台启动。证据包含准确的包内 DLL、脚本哈希、PowerShell 版本、进程身份及退出结果；失败时保留宿主，不强制结束真实进程。
-
-`StartupSettleMs` 是验收条件，不是快速退出挂起的修复。该宿主在短时间启动/退出时的 AMNetwork 等待仍按用户确认保留到 P7。
-
-P3 已按用户确认的必要范围完成。最终构建在 PowerShell 7.6.5 通过 19 组、3732 项完整回归，包含记谱 627 项、混合乐器 210 项和结构 307 项；宿主退出码为 0，连接描述已清理。已验证原弦调弦预检、跨轨及长连接链移调、跳转清除与结构引用；乐器配置复用模板和现有音轨，保留两层连音。准确哈希、证据及边界见 [P3 验收](../COVERAGE.md#p3-验收)。
-
-P2 已按用户确认的单实例、多文档必要范围完成，独立 GUI 多开、原生标签拖动和原生保存进度取消列为宿主限制。P2 验收构建在 Windows PowerShell 5.1 和 PowerShell 7 下各通过功能回归 2588 项、保存恢复 380 项、标签/原生异常恢复 405 项、文档集合变化 397 项、连接/Inspector/DDE 72 项，合计执行 7684 项；另通过隔离安装 46 项及协议 27 项。准确构建哈希、证据和边界见 [当前验证证据](../COVERAGE.md#当前验证证据) 及 [开发计划](../DEVELOPMENT_PLAN.md)。下方旧轮次保留为历史，不代表 P1 或整个项目已完成。
-
-按根目录 [README](../README.md) 使用完整回归入口；可用 `-Exe` 指定隔离宿主：
+先关闭加载测试 DLL 的 Guitar Pro 实例。完整入口会在各组之间核对夹具、文档状态、源码哈希和 DLL 哈希；单项脚本必须满足自己的夹具前提。
 
 ```powershell
+# 完整原生回归；-Exe 可指定隔离宿主
 ./native/test-all.ps1
+
+# 协议和 HTTP 边界
+./native/test-mcp.ps1
+
+# 安装包文件归属、生命周期和入口
+./native/test-installer-files.ps1 -HostDirectory <host> -PackageDirectory <package>
+./native/test-installation.ps1 -HostDirectory <host> -PackageDirectory <package>
+./native/test-installed-lifecycle.ps1 -PackageDirectory <package> -StartupSettleMs 30000 -Elevate
+./native/test-installed-entrypoints.ps1 -PackageDirectory <package> -StartupSettleMs 30000
+
+# 文件交换和工作区
+./native/test-p6.ps1 -SessionFile <session.json>
 ```
 
-入口在各组之间核对夹具字节和所有文档的未保存状态；若上一组已另存并采用新路径，则按原 UUID 关闭对应的干净测试文档并重开原夹具，记录 `fixture_restorations`，同时核对其他文档未变。单项脚本需要独立满足其夹具前提，不应按旧命令列表连续执行。
-
-2026-09-06 的本机结果为 26 项协议、26 项原生后台、58 项音符/节拍编辑、90 项音轨、118 项小节记谱与反复定位、254 项音符技法、980 项选区和批量时值、40 项文档生命周期、103 项文档/播放、60 项结构/模板及 112 项剪贴板检查通过，共 1867 项。检查隐藏宿主窗口，验证内存模型、撤销重做、保存后的 GPIF，并核对源文件哈希。音轨检查还验证 RGB 顺序、音量/声像的持久化及无效输入、跨文档新增和克隆数据隔离。小节检查涵盖拍号/实音调号边界、相邻小节隔离、拼写与音高、反复次数 2/3/100、双小节线、自由拍号，以及展开时间线的定位和撤销。音符技法检查覆盖 21 种取值、清除、重复设置、单音/声部/音轨隔离、光标不变、撤销和 GPIF，以及组合技法原生重开。选区检查覆盖方向和模式、和弦单音、无效端点、占位拍清理和重建、单声部/四声部混合时值、跨轨整曲和单小节批量时值/附点、钢琴双谱表、128 小节限制及原生保存重开。测试独立核对目标位置、范围外隔离、宏命令的一次撤销、重做和重复设置，证据含各批目标列表。文档/播放检查包含五种速度单位、初始速度修改、后续变速点保留及实际播放帧数。生命周期检查覆盖关闭全部文档后重开、旧 ID、未保存修改保护及焦点策略恢复；双声部和钢琴夹具验证声部、谱表编辑隔离。模板检查验证重复新建、首音输入、跨文档未保存标记及多音轨小节同步。GPIF 会复用相同音符定义，编辑检查按节拍的音符引用计数。验证结果与可打开的曲谱副本输出到项目 `artifacts/`。
-
-2026-09-07 新增连音专项 175 项，累计 2042 项。本轮协议、原生后台、节拍编辑、选区、插件独立剪贴板和连音六组共 1377 项通过；没有将尚未完成的系统剪贴板测试计入。连音证据在 `artifacts/native-tuplets-*/verification.json`。
-
-同日新增连奏与延音线专项 153 项，十三组累计 2195 项。证据在 `artifacts/native-connections-*/verification.json`。音符技法回归进一步确认：空声部撤销后可能完全为空，也可能保留一个无音符占位拍；检查接受这两种明确状态，再对剩余曲谱执行完整比较。
-
-连接编辑检查点 DLL 的八组回归为 1784 项通过：连接 153、协议 26、原生后台 26、节拍编辑 58、音符技法 254、选区 980、插件独立剪贴板 112、连音 175。汇总证据与构建哈希在 `artifacts/native-connections-ce6b417d13c046e0a4703353b0121ca9/regression.json`，所有原生检查均在同一个隐藏宿主进程内完成。
-
-剪贴板检查覆盖快照独立性、源文档关闭后读取和粘贴、单小节选区替换、单/多声部及多轨剪切、原生宏命令精确撤销、多轨与跨小节全局插入及原内容顺移、空白目标、钢琴下谱表隔离、模式与轨数不兼容时拒绝，以及原生保存重开。证据在 `artifacts/native-clipboard-*/verification.json`，包括多声部休止补齐、跨小节末尾占位拍和钢琴快照。
-
-按以上顺序执行；会话和结构检查会保留多份干净文档。再次运行时先关闭测试实例，再只打开 `artifacts/native-test.gp`。
-
-这些检查未覆盖所有模型字段、复杂曲谱、全部模态状态、其他 Guitar Pro 构建或 Windows 无桌面服务环境。完整后台控制目标的剩余工作见 [覆盖清单](../COVERAGE.md)。
+失败时保留宿主和 `artifacts/` 证据；不要把 `scheduled`、菜单枚举或 DLL 加载成功当作原生能力已验证。真实宿主回归需要 Guitar Pro 8.1.1.17 及匹配的宿主文件哈希。

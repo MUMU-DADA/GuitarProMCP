@@ -1,6 +1,6 @@
-# GuitarProMCP 协作规范与开发目标
+# GuitarProMCP AI 协作规范与开发目标
 
-本文件是本仓库的唯一协作规范、开发目标和范围决策来源。开始任务前先阅读本文件；其他文档分别服务于用户安装、能力证据和实现细节，不重复定义这里的规则。若历史验收记录与本文件冲突，以本文件中的当前目标和范围为准。
+本文件是供 AI/自动化协作使用的唯一规范，也是本仓库的开发目标和范围决策来源。开始任务前先阅读本文件；其他文档分别服务于用户安装、能力证据和实现细节，不重复定义这里的规则。若历史验收记录与本文件冲突，以本文件中的当前目标和范围为准。
 
 ## 协作规范
 
@@ -37,7 +37,7 @@ MCP 客户端 -> 本机 HTTP /mcp -> GuitarPro.exe 内的 C++ 插件 -> Qt/GPCor
 
 ## 阶段目标
 
-P0-P7 已按下表声明的范围完成。阶段验收历史和具名证据保留在 [COVERAGE.md](COVERAGE.md) 与 [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md)，但这两份文件不再定义新的目标或协作规则。
+P0-P7 已按下表声明的范围完成。阶段验收历史和具名证据保留在 [docs/COVERAGE.md](docs/COVERAGE.md) 与 [docs/DEVELOPMENT_PLAN.md](docs/DEVELOPMENT_PLAN.md)，但这两份文件不再定义新的目标或协作规则。
 
 | 阶段 | 目标与当前范围 | 明确保留的边界 |
 | --- | --- | --- |
@@ -60,9 +60,9 @@ P0-P7 已按下表声明的范围完成。阶段验收历史和具名证据保�
 
 ## 文档分工
 
-- [README.md](README.md)：项目概览、用户入口、MCP 工具目录和开发启动。
-- [INSTALL.md](INSTALL.md)：安装包使用、更新/卸载和故障恢复。
-- [COVERAGE.md](COVERAGE.md)：已验证能力、保留边界和证据索引。
+- [README.md](README.md)：项目概览、用户入口、MCP 工具范围概览和开发启动。
+- [docs/INSTALL.md](docs/INSTALL.md)：安装包使用、更新/卸载和故障恢复。
+- [docs/COVERAGE.md](docs/COVERAGE.md)：已验证能力、保留边界和证据索引。
 - [native/README.md](native/README.md)：C++/Qt 实现、API 边界和测试命令。
-- [DEVELOPMENT_PLAN.md](DEVELOPMENT_PLAN.md)：历史阶段计划和验收记录；当前目标以本文件为准。
+- [docs/DEVELOPMENT_PLAN.md](docs/DEVELOPMENT_PLAN.md)：历史阶段计划和验收记录；当前目标以本文件为准。
 - [docs/README.md](docs/README.md)：面向用户和开发者的文档导航。
