@@ -2,7 +2,7 @@
 
 更新日期：2026-09-08。目标是无需输入模拟、无需前台窗口的完整 Guitar Pro MCP 插件。P0–P7 已按已声明范围完成；未实现、实验性和宿主限制仍在各节明确列出。以下按照具体能力记录证据，不以 DLL 加载成功、菜单可枚举或导出符号存在代替功能完成。
 
-完整 P0–P7 阶段、执行顺序和验收标准见 [开发计划](DEVELOPMENT_PLAN.md)。本清单记录操作覆盖与验证证据；未列入当前范围的扩展和宿主限制单独标明，不视为已验证能力。
+当前开发目标、范围决策和质量门槛统一见 [AGENTS.md](AGENTS.md)。本清单记录操作覆盖与验证证据；未列入当前范围的扩展和宿主限制单独标明，不视为已验证能力。阶段历史和验收过程见 [开发计划](DEVELOPMENT_PLAN.md)。
 
 ## 已验证的范围
 
@@ -91,7 +91,7 @@ AMNetwork 快速退出继续作为明确的最小发布范围限制，不计为�
 
 最终入口脚本 SHA-256 为 `FC573B84E3C49324958A2B39FCBAD6F3A496841DBA22461429C5DB61E05C4F50`，生命周期脚本为 `081E40ABE0C1EB8AE8B1547A845DC7656B61382359F6FF7187F3C53AF7345E50`，文件测试脚本为 `A3859C5839BD48E60718A2AC15201F206BC85B6B2B18D80462856E4B65CB6673`。生命周期内入口记录保留当时脚本哈希 `82AF098A3303286905845AD061B1A9FF78DF8BB660488E20615DB30E62E42F76`；后续修正普通入口窗口启动方式和就绪判断后，最终脚本通过上述普通用户四入口复验。
 
-P1 普通退出统一采用 `StartupSettleMs=30000`。用户已明确将快速退出 AMNetwork 挂起留给 P7；失败、线程栈及受控清理保留在 `artifacts/installed-lifecycle-c5822d8d9f964a3ea20b381cc0bbe68f/`，不计通过，等待 30 秒也不是修复。早期活动文档假设失败保留在 `installed-lifecycle-f0e43e4dd491473bbc601c385dc44f82`，窗口句柄等待失败在 `installed-lifecycle-normal-20260907`，错误沙箱账户启动失败及清理在 `installed-entrypoints-dcb22c564d254c2d8f8f8b3ec47c3c07`，均位于 `artifacts/`。历史阶段段落中的“P1 仍开放”描述当时状态，当前状态以本节为准；完整项目和 P7 发布验收仍未完成。
+P1 普通退出统一采用 `StartupSettleMs=30000`。用户已明确将快速退出 AMNetwork 挂起留给 P7；失败、线程栈及受控清理保留在 `artifacts/installed-lifecycle-c5822d8d9f964a3ea20b381cc0bbe68f/`，不计通过，等待 30 秒也不是修复。早期活动文档假设失败保留在 `installed-lifecycle-f0e43e4dd491473bbc601c385dc44f82`，窗口句柄等待失败在 `installed-lifecycle-normal-20260907`，错误沙箱账户启动失败及清理在 `installed-entrypoints-dcb22c564d254c2d8f8f8b3ec47c3c07`，均位于 `artifacts/`。历史阶段段落中的“P1 仍开放”描述当时状态；当前 P1/P7 状态以本清单的 P7 验收和 [AGENTS.md](AGENTS.md) 为准，AMNetwork 快速退出继续作为发布限制保留。
 
 ### P5 验收
 
