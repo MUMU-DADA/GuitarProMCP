@@ -619,16 +619,19 @@ class Bridge : public QObject {
         add("gp_new", "使用宿主内置模板异步新建曲谱；轮询 gp_documents.creation 确认 request 对应的 created 状态。", {{"template", str}}, {"template"});
         add("gp_read_bars", "按小节读取实时音符、音高、品位、弦、时值和休止；每次最多 16 小节。", {{"document", str}, {"track", integer}, {"staff", integer}, {"bar", integer}, {"count", integer}});
         add("gp_set_fret", "通过原生命令修改当前光标节拍中一个已有音符的品位；弦索引从 0 开始。", {{"document", str}, {"string", integer}, {"fret", integer}}, {"string", "fret"});
-        add("gp_edit_note", "在当前节拍或空白占位拍上原生新增/修改弦乐音符或删除指定弦音符。operation 为 set/remove，set 需要 fret；不移动到下一拍。", {{"document", str}, {"operation", str}, {"string", integer}, {"fret", integer}}, {"operation", "string"});
-        add("gp_edit_note_effect", "原生修改当前拍指定弦的已有音符，支持撤销。property: palm_mute/let_ring/left_hand_tapping/right_hand_tapping 使用布尔值；vibrato 为 None/Slight/Wide；anti_accent 为 None/Soft/Normal/Strong；left_fingering/right_fingering 为 None/P/I/M/A/C/Open。", {{"document", str}, {"string", integer}, {"property", str}, {"value", QJsonObject{{"anyOf", QJsonArray{boolean, str}}}}}, {"string", "property", "value"});
+        add("gp_edit_note", "在当前节拍或占位拍上原生增删音符。operation 为 set/remove；弦乐用 string 和 fret，键盘及打击乐用 midi 0..127，不混用两类定位。set 对已有 MIDI 音符不重复添加；打击乐 MIDI 必须属于当前乐器。", {{"document", str}, {"operation", str}, {"string", integer}, {"fret", integer}, {"midi", integer}}, {"operation"});
+        add("gp_edit_note_effect", "原生修改当前拍音符技法，用 string 或 note_index 定位，支持撤销。palm_mute/let_ring/left_hand_tapping/right_hand_tapping/dead/hopo/staccato/staccatissimo/accent/heavy_accent/tenuto 使用布尔值；vibrato、anti_accent、left_fingering/right_fingering、ornament 使用原生名称。trill: {enabled:true,midi:0..127}（十六分音符）或 {enabled:false}；slide: {kind,enabled} 或 {kind:None}；harmonic: {type,fret} 或 {type:None}；bend: {enabled,origin_value,middle_value,destination_value,origin_offset,middle_offset1,middle_offset2,destination_offset}，音高值为 0..12 半音，位置 0..1，清除只传 {enabled:false}。", {{"document", str}, {"string", integer}, {"note_index", integer}, {"property", str}, {"value", QJsonObject{{"anyOf", QJsonArray{boolean, str, QJsonObject{{"type", "object"}}}}}}}, {"property", "value"});
+        add("gp_edit_beat_effect", "修改光标单拍技法，支持原生撤销。grace、pick_stroke、fade、hairpin、golpe、ottavia、rasgueado、bar_vibrato、bass_attack、arpeggio、brush 使用原生名称，错误值返回 choices；通常 None 清除，hairpin 用 NoHairpin。琶音和扫弦采用宿主默认时序。whammy 与音符 bend 的七点格式相同，音高范围 -12..12 半音。dead_slap 用布尔值；tremolo 用 8/16/32/64 分音符，0 清除。装饰音转换会改变时值，死拍会清空音符，撤销可恢复。", {{"document", str}, {"property", str}, {"value", QJsonObject{{"anyOf", QJsonArray{boolean, str, integer, QJsonObject{{"type", "object"}}}}}}}, {"property", "value"});
+        add("gp_transpose", "按半音移动光标单拍或选区音符的实际音高，支持撤销。semitones 为 -24..24，scope 为 cursor（默认）或 selection；打击乐和超出 MIDI 音域的请求会拒绝。记谱用移调乐器偏移通过 gp_edit_track 的 transposition 设置。", {{"document", str}, {"semitones", integer}, {"scope", str}}, {"semitones"});
         add("gp_edit_beat", "原生编辑节拍：insert 新增休止节拍，rhythm 设置基础时值并保留附点/连音，dots 设置附点，tuplet 设置连音，clear 清空音符，remove 删除节拍。tuplet 的 level 为 primary（默认）或 secondary；actual/normal 表示实际演奏音符数与占用的普通音符数，均为 1..255；enabled=false 清除指定层且不接受比例参数。scope 默认 cursor；selection 对选区批量修改 rhythm/dots/tuplet，支持全部声部和音轨，最多 128 小节、20000 拍，跳过空占位拍，可一次撤销。", {{"document", str}, {"operation", str}, {"denominator", integer}, {"dots", integer}, {"scope", str}, {"level", str}, {"actual", integer}, {"normal", integer}, {"enabled", boolean}}, {"operation"});
         add("gp_edit_bars", "原生插入或删除小节，作用于整份曲谱的所有音轨。operation 为 insert/remove，index 从 0 开始，count 默认 1。", {{"document", str}, {"operation", str}, {"index", integer}, {"count", integer}}, {"operation", "index"});
         add("gp_score", "读取实时曲谱元数据、音轨小节数量、光标及撤销状态；直接调用 GPCore。", {{"document", str}});
         add("gp_read_master_bars", "读取全曲共享的小节拍号、实音调号、反复记号和小节线；分页最多 128 小节。", {{"document", str}, {"bar", integer}, {"count", integer}});
-        add("gp_edit_measure", "原生修改光标所在的单个小节，支持撤销。operation: time_signature(numerator,denominator)、key_signature(accidentals,major)、repeat_start/repeat_end/double_bar/free_time(enabled)。反复结束可指定 repeat_count 2..100。", {{"document", str}, {"operation", str}, {"numerator", integer}, {"denominator", integer}, {"accidentals", integer}, {"major", boolean}, {"enabled", boolean}, {"repeat_count", integer}}, {"operation"});
+        add("gp_edit_measure", "原生修改光标小节，支持撤销。time_signature(numerator,denominator)、key_signature(accidentals,major)、repeat_start/repeat_end/double_bar/free_time(enabled)，反复次数 repeat_count 2..100。alternate_endings 使用 endings（1..8 的不重复数组，空数组清除）；direction 使用 gp_read_master_bars.direction_marks 中的 ID 和 enabled。", {{"document", str}, {"operation", str}, {"numerator", integer}, {"denominator", integer}, {"accidentals", integer}, {"major", boolean}, {"enabled", boolean}, {"repeat_count", integer}, {"endings", QJsonObject{{"type", "array"}, {"items", integer}}}, {"direction", integer}}, {"operation"});
         add("gp_edit_tempo", "原生修改曲谱初始速度，支持撤销。value 为 1..400 的整数，unit 使用 gp_score.tempo.units 中的值，默认保留当前单位和 label；不编辑后续变速点。", {{"document", str}, {"value", QJsonObject{{"type", "number"}, {"minimum", 1}, {"maximum", 400}, {"multipleOf", 1}}}, {"unit", str}, {"label", str}}, {"value"});
-        add("gp_edit_track", "原生设置音轨 name/short_name、color (#RRGGBB)、volume/pan (0..1) 或 playback_state (Default/Solo/Mute)。播放状态不加入撤销栈，其余属性支持撤销。", {{"document", str}, {"track", integer}, {"property", str}, {"value", QJsonObject{{"anyOf", QJsonArray{str, QJsonObject{{"type", "number"}}}}}}}, {"track", "property", "value"});
+        add("gp_edit_track", "原生设置音轨 name/short_name、color (#RRGGBB)、volume/pan (0..1)、transposition（记谱移调偏移 -24..24 半音，保留发声音高）或 playback_state (Default/Solo/Mute)。播放状态不加入撤销栈，其余属性支持撤销。", {{"document", str}, {"track", integer}, {"property", str}, {"value", QJsonObject{{"anyOf", QJsonArray{str, QJsonObject{{"type", "number"}}}}}}}, {"track", "property", "value"});
         add("gp_edit_tracks", "原生复制、删除或交换音轨，支持撤销；operation 为 duplicate/remove/swap，复制到原轨之后，swap 需要 other 索引。", {{"document", str}, {"operation", str}, {"track", integer}, {"other", integer}}, {"operation", "track"});
+        add("gp_edit_tuning", "原生修改弦乐音轨谱表调弦及变调夹，支持撤销。tuning 为按宿主弦顺序的 1..12 个 MIDI 音高；capo/partial_capo 为 0..24，partial_capo_strings 为逐弦布尔数组。preserve_pitch 默认 true。省略字段保留原值，staff 默认 0。", {{"document", str}, {"track", integer}, {"staff", integer}, {"tuning", QJsonObject{{"type", "array"}, {"items", integer}}}, {"capo", integer}, {"partial_capo", integer}, {"partial_capo_strings", QJsonObject{{"type", "array"}, {"items", boolean}}}, {"preserve_pitch", boolean}}, {"track"});
         add("gp_insert_track", "以已有音轨配置原生新增音轨，支持撤销。默认清空内容并匹配目标小节数；copy_content=true 复制音符，要求两者小节数相同。源文档默认目标文档，index 默认末尾。", {{"document", str}, {"source_document", str}, {"source_track", integer}, {"index", integer}, {"copy_content", boolean}}, {"source_track"});
         add("gp_edit_metadata", "通过原生命令修改一项曲谱元数据，支持宿主撤销。property 使用 gp_score 返回的键。", {{"document", str}, {"property", str}, {"value", str}}, {"property", "value"});
         add("gp_undo_redo", "调用原生曲谱撤销或重做；不依赖窗口焦点或 QAction 状态。", {{"document", str}, {"operation", str}}, {"operation"});
@@ -681,7 +684,7 @@ class Bridge : public QObject {
                 return QJsonObject{{"error", "A document operation is pending; inspect gp_documents or cancel its request before another mutation"}};
             // Host command observers update the active document's dirty state.
             // Bind every model mutation to its document before calling native APIs.
-            static const QSet<QString> mutations{"gp_edit_note", "gp_edit_note_effect", "gp_edit_connection", "gp_edit_beat", "gp_edit_bars", "gp_edit_track", "gp_edit_tracks", "gp_insert_track", "gp_edit_tempo", "gp_edit_measure", "gp_set_fret", "gp_edit_metadata", "gp_cursor", "gp_undo_redo"};
+            static const QSet<QString> mutations{"gp_edit_note", "gp_edit_note_effect", "gp_edit_beat_effect", "gp_edit_tuning", "gp_transpose", "gp_edit_connection", "gp_edit_beat", "gp_edit_bars", "gp_edit_track", "gp_edit_tracks", "gp_insert_track", "gp_edit_tempo", "gp_edit_measure", "gp_set_fret", "gp_edit_metadata", "gp_cursor", "gp_undo_redo"};
             if (mutations.contains(tool)) {
                 const auto target = guitarpro::choose(args);
                 if (!target.view || !target.score) return QJsonObject{{"error", "Choose a document with a verified native score"}};
@@ -745,12 +748,15 @@ class Bridge : public QObject {
             if (tool == "gp_edit_bars") return guitarpro::editBars(args);
             if (tool == "gp_score") return guitarpro::scoreState(args);
             if (tool == "gp_edit_track") return guitarpro::editTrack(args);
+            if (tool == "gp_edit_tuning") return guitarpro::editTuning(args);
+            if (tool == "gp_transpose") return guitarpro::transpose(args);
             if (tool == "gp_edit_tracks") return guitarpro::editTracks(args);
             if (tool == "gp_insert_track") return guitarpro::insertTrack(args);
             if (tool == "gp_edit_metadata") return guitarpro::editMetadata(args);
             if (tool == "gp_edit_tempo") return guitarpro::editTempo(args);
             if (tool == "gp_read_master_bars") return guitarpro::readMasterBars(args);
             if (tool == "gp_edit_note_effect") return guitarpro::editNoteEffect(args);
+            if (tool == "gp_edit_beat_effect") return guitarpro::editBeatEffect(args);
             if (tool == "gp_edit_connection") return guitarpro::editConnection(args);
             if (tool == "gp_edit_measure") return guitarpro::editMeasure(args);
             if (tool == "gp_undo_redo") return guitarpro::undoRedo(args);

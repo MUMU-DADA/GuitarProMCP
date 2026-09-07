@@ -219,7 +219,8 @@ try {
     Assert ($barPaste.native_method -eq 'Score::pasteBarRange' -and $barPaste.global_bar_delta -eq 2) 'Multi-bar paste used a different native dispatch'
     $barAfter=Bars $second
     $expectedBars=(Json @{items=$barData} | ConvertFrom-Json).items
-    $expectedBars[1].voices[0].beats += [pscustomobject][ordered]@{dots=0;index=2;legato=[ordered]@{destination=$false;origin=$false};native_note_value=4;notes=@();placeholder=$true;rest=$true;rhythm='Quarter;Dots=0;PriTuplet=0/0;SecTuplet=0/0';tuplets=[ordered]@{primary=[ordered]@{actual=0;enabled=$false;normal=0};secondary=[ordered]@{actual=0;enabled=$false;normal=0}}}
+    $emptyEffects=[ordered]@{arpeggio='None';bar_vibrato='None';bass_attack='None';brush='None';dead_slap=$false;fade='None';golpe='None';grace='None';hairpin='NoHairpin';ottavia='None';pick_stroke='None';rasgueado='None';tremolo=0;whammy=[ordered]@{enabled=$false}}
+    $expectedBars[1].voices[0].beats += [pscustomobject][ordered]@{dots=0;effects=$emptyEffects;index=2;legato=[ordered]@{destination=$false;origin=$false};native_note_value=4;notes=@();placeholder=$true;rest=$true;rhythm='Quarter;Dots=0;PriTuplet=0/0;SecTuplet=0/0';tuplets=[ordered]@{primary=[ordered]@{actual=0;enabled=$false;normal=0};secondary=[ordered]@{actual=0;enabled=$false;normal=0}}}
     Assert ((Json $barAfter) -eq (Json $expectedBars)) 'Partial multi-bar paste differs beyond its trailing cursor placeholder'
     foreach($t in 0,1){
         Assert ($barPaste.tracks[$t].bars -eq 4) 'Multi-bar paste did not insert two global bars'

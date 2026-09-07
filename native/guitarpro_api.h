@@ -474,7 +474,20 @@ inline QJsonObject scoreState(const QJsonObject &args) {
         const auto base = trackBase(document.score, unsigned(i));
         if (!base) return {{"error", "Native TrackBase validation failed"}};
         const auto &color = base->color();
+        QJsonArray staffDetails, percussionNotes;
+        if (track->instrumentSet().isUnpitched()) for (const auto &articulation : track->instrumentSet().articulations())
+            percussionNotes.append(QJsonObject{{"midi", int(articulation.outputMidiNumber())}, {"name", QString::fromStdString(articulation.name())}});
+        for (const auto &staff : track->staves()) if (staff) {
+            QJsonArray tuning, partial;
+            for (const auto midi : staff->tuning().midiNumbers()) tuning.append(midi);
+            for (const bool enabled : staff->partialCapoStringFlags()) partial.append(enabled);
+            staffDetails.append(QJsonObject{{"tuning", tuning}, {"capo", staff->capoFret()},
+                {"partial_capo", staff->partialCapoFret()}, {"partial_capo_strings", partial}});
+        }
         tracks.append(QJsonObject{{"index", int(i)}, {"bars", int(track->barCount())}, {"staves", int(track->staffCount())},
+            {"staff_details", staffDetails}, {"stringed", gp::core::InstrumentSet::isStringed(track->type())},
+            {"unpitched", track->instrumentSet().isUnpitched()},
+            {"percussion_notes", percussionNotes},
             {"name", QString::fromStdString(base->name())}, {"short_name", QString::fromStdString(base->shortName())},
             {"playback_state", QString::fromStdString(gp::core::playbackStateToString(base->playbackState()))},
             {"volume", base->volume()}, {"pan", base->pan()}, {"transposition", track->transpositionOffset()},
@@ -513,6 +526,17 @@ inline QJsonObject editTrack(const QJsonObject &args) {
     const auto base = index < 0 ? nullptr : trackBase(document.score, unsigned(index));
     if (!base) return {{"error", "Choose an existing track index"}};
     const QString property = args.value("property").toString();
+    if (property == "transposition") {
+        const auto value = args.value("value");
+        const int semitones = value.toInt(-100);
+        if (!value.isDouble() || value.toDouble() != semitones || semitones < -24 || semitones > 24)
+            return {{"error", "transposition must be an integer in -24..24"}};
+        const auto track = document.score->tracks()[index];
+        if (track->instrumentSet().isUnpitched()) return {{"error", "Unpitched instruments cannot transpose"}};
+        if (track->transpositionOffset() != semitones) document.score->setTrackTranspositionOffset(*track, semitones);
+        if (track->transpositionOffset() != semitones) return {{"error", "Native transposition readback differs"}};
+        return scoreState(args);
+    }
     if (property == "volume" || property == "pan") {
         const double requested = args.value("value").toDouble(-1);
         if (!args.value("value").isDouble() || !std::isfinite(requested) || requested < 0 || requested > 1)
@@ -551,6 +575,66 @@ inline QJsonObject editTrack(const QJsonObject &args) {
     QJsonObject result = scoreState(args);
     result["undoable"] = property != "playback_state";
     return result;
+}
+inline QJsonObject editTuning(const QJsonObject &args) {
+    const Document document = choose(args);
+    if (!document.score) return {{"error", "Native score unavailable"}};
+    const int index = args.value("track").toInt(-1), staffIndex = args.value("staff").toInt(0);
+    const auto &tracks = document.score->tracks();
+    if (index < 0 || size_t(index) >= tracks.size() || !tracks[index] || staffIndex < 0 || size_t(staffIndex) >= tracks[index]->staves().size())
+        return {{"error", "Choose an existing track and staff"}};
+    if (!gp::core::InstrumentSet::isStringed(tracks[index]->type())) return {{"error", "Tuning requires a stringed instrument"}};
+    const auto staff = tracks[index]->staves()[staffIndex];
+    if (!staff) return {{"error", "Native staff is missing"}};
+    gp::core::GuitarTuning tuning(staff->tuning());
+    const auto input = args.value("tuning");
+    if (!input.isUndefined()) {
+        if (!input.isArray() || input.toArray().size() < 1 || input.toArray().size() > 12)
+            return {{"error", "tuning must contain 1..12 integer MIDI open-string pitches"}};
+        std::vector<int> pitches;
+        for (const auto value : input.toArray()) {
+            const int midi = value.toInt(-1);
+            if (!value.isDouble() || value.toDouble() != midi || midi < 0 || midi > 127) return {{"error", "Tuning pitches must be integers in 0..127"}};
+            pitches.push_back(midi);
+        }
+        tuning.setMidiNumbers(pitches);
+    }
+    const int capo = args.value("capo").toInt(staff->capoFret());
+    const int partialCapo = args.value("partial_capo").toInt(staff->partialCapoFret());
+    auto partial = staff->partialCapoStringFlags();
+    if (capo < 0 || capo > 24 || partialCapo < 0 || partialCapo > 24 || capo + partialCapo > 36)
+        return {{"error", "Capos must be 0..24 with total at most 36"}};
+    if (args.contains("partial_capo_strings")) {
+        const auto flags = args.value("partial_capo_strings");
+        if (!flags.isArray() || flags.toArray().size() != int(tuning.stringCount())) return {{"error", "partial_capo_strings must match tuning length"}};
+        partial.clear();
+        for (const auto value : flags.toArray()) {
+            if (!value.isBool()) return {{"error", "partial_capo_strings requires booleans"}};
+            partial.push_back(value.toBool());
+        }
+    } else if (tuning.stringCount() != staff->tuning().stringCount()) {
+        if (partialCapo) return {{"error", "Changing string count with partial capo requires explicit partial_capo_strings"}};
+        partial.resize(tuning.stringCount(), false);
+    }
+    const bool changed = tuning.midiNumbers() != staff->tuning().midiNumbers() || capo != staff->capoFret() ||
+        partialCapo != staff->partialCapoFret() || partial != staff->partialCapoStringFlags();
+    if (changed) for (const auto &bar : staff->bars()) if (bar) for (const auto &voice : bar->voices()) if (voice)
+        for (const auto &beat : voice->beats()) if (beat) for (const auto &note : beat->notes()) if (note) {
+            if (args.value("preserve_pitch").toBool(true)) {
+                if (note->string() >= tuning.stringCount()) return {{"error", "Removing an occupied string would lose notes"}};
+                const auto string = note->string();
+                const int fret = note->midi() - tuning.midiNumbers()[string] - capo - (partial[string] ? partialCapo : 0);
+                if (fret < 0 || fret > 36) return {{"error", "Pitch-preserving tuning must keep notes playable on their current strings within frets 0..36"}};
+            } else {
+                if (note->string() >= tuning.stringCount()) return {{"error", "Removing an occupied string would lose notes"}};
+                const int midi = tuning.midiNumbers()[note->string()] + capo + (partial[note->string()] ? partialCapo : 0) + note->fret();
+                if (midi < 0 || midi > 127) return {{"error", "New tuning would exceed the MIDI pitch range"}};
+            }
+        }
+    if (changed) document.score->setGuitarFullTuning(*staff, tuning, capo, partialCapo, partial, args.value("preserve_pitch").toBool(true));
+    if (staff->tuning().midiNumbers() != tuning.midiNumbers() || staff->capoFret() != capo || staff->partialCapoFret() != partialCapo || staff->partialCapoStringFlags() != partial)
+        return {{"error", "Native tuning readback differs; inspect track before retrying"}};
+    return scoreState(args);
 }
 inline QJsonObject editTracks(const QJsonObject &args) {
     const Document document = choose(args);
@@ -847,6 +931,33 @@ inline QStringList slideKinds() {
 inline double harmonicFretValue(int index) {
     return std::round(gp::core::Harmonic::fretToFloat(static_cast<gp::core::Harmonic::Fret>(index)) * 10.0) / 10.0;
 }
+inline QJsonObject bendState(const gp::core::Note &note) {
+    if (!note.isBended()) return {{"enabled", false}};
+    return {{"enabled", true}, {"origin_value", note.bendOriginValue()}, {"middle_value", note.bendMiddleValue()},
+        {"destination_value", note.bendDestinationValue()}, {"origin_offset", note.bendOriginOffset()},
+        {"middle_offset1", note.bendMiddleOffset1()}, {"middle_offset2", note.bendMiddleOffset2()},
+        {"destination_offset", note.bendDestinationOffset()}};
+}
+inline QJsonObject beatEffects(const gp::core::Beat &beat) {
+    const int tremolo = beat.hasTremolo() ? int(gp::core::RhythmValue::noteValueFromTimeUnit(beat.tremolo())) : -1;
+    return {{"grace", QString::fromStdString(gp::core::graceTypeToString(beat.graceType()))},
+        {"arpeggio", QString::fromStdString(gp::core::directionToString(beat.arpeggio()))},
+        {"brush", QString::fromStdString(gp::core::directionToString(beat.brush()))},
+        {"whammy", beat.hasWhammyBar() ? QJsonObject{{"enabled", true},
+            {"origin_value", beat.whammyBarOriginValue()}, {"middle_value", beat.whammyBarMiddleValue()},
+            {"destination_value", beat.whammyBarDestinationValue()}, {"origin_offset", beat.whammyBarOriginOffset()},
+            {"middle_offset1", beat.whammyBarMiddleOffset1()}, {"middle_offset2", beat.whammyBarMiddleOffset2()},
+            {"destination_offset", beat.whammyBarDestinationOffset()}} : QJsonObject{{"enabled", false}}},
+        {"tremolo", tremolo >= 2 && tremolo <= 9 ? 1 << (tremolo - 2) : 0},
+        {"rasgueado", QString::fromStdString(gp::core::rasgueadoToString(beat.rasgueado()))},
+        {"bar_vibrato", QString::fromStdString(gp::core::vibratoToString(beat.vibratoWTremBar()))},
+        {"bass_attack", beat.isSlapped() ? "Slap" : beat.isPopped() ? "Pop" : "None"},
+        {"pick_stroke", QString::fromStdString(gp::core::directionToString(beat.pickStroke()))},
+        {"fade", QString::fromStdString(gp::core::faddingToString(beat.fadding()))},
+        {"hairpin", QString::fromStdString(gp::core::hairpinToString(beat.hairpin()))},
+        {"golpe", QString::fromStdString(gp::core::golpeToString(beat.golpe()))},
+        {"ottavia", QString::fromStdString(gp::core::ottaviaToString(beat.ottavia()))}, {"dead_slap", beat.isDeadSlapped()}};
+}
 inline QJsonObject noteState(const gp::core::Note &note) {
     QJsonArray slides;
     const auto names = slideKinds();
@@ -854,9 +965,17 @@ inline QJsonObject noteState(const gp::core::Note &note) {
     const int harmonicFret = int(note.harmonicFret());
     const QJsonObject harmonic{{"type", note.isHarmonic() ? QString::fromStdString(gp::core::Harmonic::typeToString(note.harmonicType())) : "None"},
         {"fret", note.isHarmonic() && harmonicFret >= 0 && harmonicFret < 17 ? QJsonValue(harmonicFretValue(harmonicFret)) : QJsonValue()}};
-    return {{"string", int(note.string())}, {"fret", note.fret()}, {"midi", note.midi()}, {"accidental", int(note.accidental())},
+    return {{"string", int(note.string())}, {"fret", note.fret()}, {"midi", note.midi()},
+        {"accidental", gp::core::InstrumentSet::isUnpitched(note.type()) ? QJsonValue() : QJsonValue(int(note.accidental()))},
+        {"sounding_midi", int(note.soundingMidi(true))},
         {"tie", QJsonObject{{"origin", note.isTieOrigin()}, {"destination", note.isTieDestination()}}},
         {"effects", QJsonObject{{"palm_mute", note.isPalmMuted()}, {"let_ring", note.hasLetRing()},
+            {"staccato", bool(note.accentFlags() & 1)}, {"staccatissimo", bool(note.accentFlags() & 2)},
+            {"accent", bool(note.accentFlags() & 4)}, {"heavy_accent", bool(note.accentFlags() & 8)}, {"tenuto", bool(note.accentFlags() & 16)},
+            {"trill", note.isTrilled() ? QJsonObject{{"enabled", true}, {"midi", int(note.trillMidi())}} : QJsonObject{{"enabled", false}}},
+            {"dead", note.isDead()}, {"hopo", note.isHopoOrigin()}, {"hopo_destination", note.isHopoDestination()},
+            {"ornament", note.hasOrnament() ? QString::fromStdString(gp::core::ornamentToString(note.ornament())) : "None"},
+            {"bend", bendState(note)},
             {"harmonic", harmonic}, {"slide", QJsonObject{{"flags", int(note.slideFlags())}, {"kinds", slides},
                 {"valid", note.isSlideValid()}, {"shift_destination", note.isShiftSlideDestination()},
                 {"legato_destination", note.isLegatoSlideDestination()}}},
@@ -907,7 +1026,7 @@ inline QJsonObject readBarsForScore(const gp::core::Score *score, const QJsonObj
                 }
                 beats.append(QJsonObject{{"index", int(k)}, {"rest", beat.isRest()}, {"placeholder", beat.isPlaceholder()}, {"rhythm", beat.rhythm().toQString()},
                     {"native_note_value", int(beat.rhythm().getNoteValue())}, {"dots", int(beat.rhythm().getAugmentationDot())},
-                    {"tuplets", tupletState(beat.rhythm())},
+                    {"tuplets", tupletState(beat.rhythm())}, {"effects", beatEffects(beat)},
                     {"legato", QJsonObject{{"origin", beat.isLegatoOrigin()}, {"destination", beat.isLegatoDestination()}}}, {"notes", notes}});
             }
             voices.append(QJsonObject{{"index", int(v)}, {"beats", beats}});
@@ -915,7 +1034,7 @@ inline QJsonObject readBarsForScore(const gp::core::Score *score, const QJsonObj
         output.append(QJsonObject{{"index", b}, {"voices", voices}});
     }
     return {{"track", trackIndex}, {"staff", staffIndex}, {"bars", output}, {"index_base", 0},
-        {"scope", "Live notes, pitch, fret, string, rhythm, tuplets, legato, ties, rests, tapping, palm mute, let ring, vibrato, anti-accent and fingering; other notation/effects not yet exposed"}};
+        {"scope", "Live notes, rhythm, tuplets, connections and supported effects. sounding_midi includes harmonics; raw string/fret fields describe physical fingering only for stringed instruments"}};
 }
 inline QJsonObject readBars(const QJsonObject &args) {
     const Document document = choose(args);
@@ -936,10 +1055,15 @@ inline QJsonObject masterBarState(gp::core::Score *score, unsigned index) {
     if (!bar) return {{"error", "Native master bar is missing or failed validation"}};
     const auto &time = bar->timeSignature();
     const auto &key = bar->concertKeySignature();
+    QJsonArray endings, directions;
+    for (int i = 0; i < 8; ++i) if (bar->alternateEndingMask() & (1 << i)) endings.append(i + 1);
+    for (const auto direction : score->masterTrack()->directionsAtBarIndex(int(index)))
+        directions.append(QJsonObject{{"id", int(direction)}, {"name", gp::core::MasterTrack::directionToQString(direction)}});
     return {{"index", int(index)}, {"time_signature", QJsonObject{{"numerator", int(time.getNumerator())}, {"denominator", int(time.getDenominator())}}},
         {"key_signature", QJsonObject{{"accidentals", key.accidentalCount()}, {"major", key.isMajor()}, {"native_label", key.toQString()}}},
         {"repeat_start", bar->hasRepeatStart()}, {"repeat_end", bar->hasRepeatEnd()}, {"repeat_count", int(bar->repeatCount())},
-        {"double_bar", bar->hasDoubleBar()}, {"free_time", bar->hasFreeTime()}};
+        {"double_bar", bar->hasDoubleBar()}, {"free_time", bar->hasFreeTime()},
+        {"alternate_endings", endings}, {"directions", directions}};
 }
 inline QJsonObject readMasterBars(const QJsonObject &args) {
     const Document document = choose(args);
@@ -954,7 +1078,9 @@ inline QJsonObject readMasterBars(const QJsonObject &args) {
         if (bar.contains("error")) return bar;
         bars.append(bar);
     }
-    return {{"document", document.id()}, {"bars", bars}, {"bar_count", int(master->masterBarCount())},
+    QJsonArray directionMarks;
+    for (int i = 0; i <= 18; ++i) directionMarks.append(QJsonObject{{"id", i}, {"name", gp::core::MasterTrack::directionToQString(static_cast<gp::core::DirectionMark>(i))}});
+    return {{"document", document.id()}, {"bars", bars}, {"bar_count", int(master->masterBarCount())}, {"direction_marks", directionMarks},
         {"scope", "Score-wide master bars; key signatures use concert pitch"}, {"index_base", 0}};
 }
 inline QJsonObject editMeasure(const QJsonObject &args) {
@@ -965,12 +1091,27 @@ inline QJsonObject editMeasure(const QJsonObject &args) {
     if (operation == "time_signature") allowed.unite({"numerator", "denominator"});
     else if (operation == "key_signature") allowed.unite({"accidentals", "major"});
     else if (operation == "repeat_end") allowed.unite({"enabled", "repeat_count"});
+    else if (operation == "alternate_endings") allowed.insert("endings");
+    else if (operation == "direction") allowed.unite({"enabled", "direction"});
     else if (operation == "repeat_start" || operation == "double_bar" || operation == "free_time") allowed.insert("enabled");
     else return {{"error", "Unknown measure operation"}};
     for (auto it = args.begin(); it != args.end(); ++it) if (!allowed.contains(it.key())) return {{"error", "Argument does not apply to this operation: " + it.key()}};
     const int numerator = args.value("numerator").toInt(0), denominator = args.value("denominator").toInt(0);
     const int accidentals = args.value("accidentals").toInt(-100), repeats = args.value("repeat_count").toInt(2);
     const bool enabled = args.value("enabled").toBool();
+    int endingMask = 0;
+    if (operation == "alternate_endings") {
+        if (!args.value("endings").isArray()) return {{"error", "endings array required"}};
+        for (const auto value : args.value("endings").toArray()) {
+            const int ending = value.toInt(-1);
+            if (!value.isDouble() || value.toDouble() != ending || ending < 1 || ending > 8 || (endingMask & (1 << (ending - 1))))
+                return {{"error", "endings must contain distinct integers in 1..8; an empty array clears them"}};
+            endingMask |= 1 << (ending - 1);
+        }
+    }
+    const int direction = args.value("direction").toInt(-1);
+    if (operation == "direction" && (direction < 0 || direction > 18))
+        return {{"error", "direction must be a native direction ID in 0..18"}};
     if (operation == "time_signature" && (numerator < 1 || numerator > 64 || denominator < 1 || denominator > 128 || (denominator & (denominator - 1))))
         return {{"error", "Time signature requires numerator 1..64 and denominator 1,2,4,8,16,32,64,128"}};
     if (operation == "key_signature" && (accidentals < -7 || accidentals > 7 || !args.value("major").isBool()))
@@ -988,7 +1129,29 @@ inline QJsonObject editMeasure(const QJsonObject &args) {
     range.setMultiSelection(true);
     if (range.barCount() != 1 || !range.isMultiSelection()) return {{"error", "Cannot construct a native single-bar selection"}};
     QJsonObject expected = before;
-    if (operation == "time_signature") {
+    if (operation == "alternate_endings") {
+        QJsonArray endings;
+        for (int i = 0; i < 8; ++i) if (endingMask & (1 << i)) endings.append(i + 1);
+        expected["alternate_endings"] = endings;
+        if (expected != before) document.score->setBarAlternateEndings(range, endingMask != 0, endingMask, false);
+    } else if (operation == "direction") {
+        auto directions = document.score->masterTrack()->directionsAtBarIndex(index);
+        const auto mark = static_cast<gp::core::DirectionMark>(direction);
+        if (enabled) directions.insert(mark); else directions.erase(mark);
+        QJsonArray names;
+        for (const auto entry : directions) names.append(QJsonObject{{"id", int(entry)}, {"name", gp::core::MasterTrack::directionToQString(entry)}});
+        expected["directions"] = names;
+        if (expected != before) {
+            if (enabled) document.score->setBarDirection(range, true, mark);
+            else {
+                // Native NoDirection clears this bar; restore its other marks in one undo step.
+                gp::core::MacroCommandRecorder recorder(document.score, true);
+                document.score->setBarDirection(range, true, static_cast<gp::core::DirectionMark>(20));
+                for (const auto remaining : directions) document.score->setBarDirection(range, true, remaining);
+                recorder.commit();
+            }
+        }
+    } else if (operation == "time_signature") {
         expected["time_signature"] = QJsonObject{{"numerator", numerator}, {"denominator", denominator}};
         if (expected != before) {
             const auto time = gp::core::TimeSignature::fromValues(unsigned(numerator), unsigned(denominator));
@@ -1136,11 +1299,42 @@ inline QJsonObject editNoteEffect(const QJsonObject &args) {
     if (!document.score) return {{"error", "Native score unavailable"}};
     const QString property = args.value("property").toString();
     QJsonValue value = args.value("value");
-    const QSet<QString> toggles{"palm_mute", "let_ring", "left_hand_tapping", "right_hand_tapping"};
+    const QSet<QString> toggles{"palm_mute", "let_ring", "left_hand_tapping", "right_hand_tapping", "dead", "hopo", "staccato", "staccatissimo", "accent", "heavy_accent", "tenuto"};
+    const QStringList accents{"staccato", "staccatissimo", "accent", "heavy_accent", "tenuto"};
+    gp::core::Score::BendParam bend{};
     int harmonicType = -1, harmonicFret = -1, slideFlag = 0;
     bool slideEnabled = false;
     QStringList choices;
-    if (property == "slide") {
+    if (property == "trill") {
+        const auto object = value.toObject();
+        const bool enabled = object.value("enabled").toBool();
+        const auto midi = object.value("midi");
+        if (!value.isObject() || !object.value("enabled").isBool() || object.size() != (enabled ? 2 : 1) ||
+            (enabled && (!midi.isDouble() || midi.toDouble() != midi.toInt() || midi.toInt() < 0 || midi.toInt() > 127)))
+            return {{"error", "trill requires {enabled:true,midi:0..127}, or {enabled:false}"}};
+    } else if (property == "bend") {
+        auto object = value.toObject();
+        const bool enabled = object.value("enabled").toBool();
+        const QStringList fields{"origin_value", "middle_value", "destination_value", "origin_offset", "middle_offset1", "middle_offset2", "destination_offset"};
+        if (!value.isObject() || !object.value("enabled").isBool() || object.size() != (enabled ? 8 : 1))
+            return {{"error", "bend requires enabled and seven curve values; disabling accepts only enabled=false"}};
+        float values[7]{};
+        if (enabled) for (int i = 0; i < fields.size(); ++i) {
+            const auto number = object.value(fields[i]);
+            const double v = number.toDouble(-1);
+            if (!number.isDouble() || !std::isfinite(v) || v < 0 || v > (i < 3 ? 12 : 1))
+                return {{"error", "Bend pitch values must be 0..12 semitones and offsets 0..1"}};
+            values[i] = float(v);
+            object[fields[i]] = double(values[i]);
+        }
+        if (enabled && !(values[3] <= values[4] && values[4] <= values[5] && values[5] <= values[6]))
+            return {{"error", "Bend offsets must be ordered"}};
+        bend = {values[0], values[1], values[2], values[3], values[4], values[5], values[6]};
+        value = object;
+    } else if (property == "ornament") {
+        choices.append("None");
+        for (int i = 1; i < 5; ++i) choices.append(QString::fromStdString(gp::core::ornamentToString(static_cast<gp::core::Ornament>(i))));
+    } else if (property == "slide") {
         const auto object = value.toObject();
         const QString kind = object.value("kind").toString();
         const int index = slideKinds().indexOf(kind);
@@ -1172,19 +1366,34 @@ inline QJsonObject editNoteEffect(const QJsonObject &args) {
     const int option = choices.indexOf(value.toString());
     if ((!choices.isEmpty() && (!value.isString() || option < 0)) || (toggles.contains(property) && !value.isBool()))
         return {{"error", "Note effect value has the wrong type or is not a supported choice"}, {"choices", QJsonArray::fromStringList(choices)}};
-    const int string = args.value("string").toInt(-1);
+    int string = args.value("string").toInt(-1);
     auto &cursor = document.score->cursor();
     const auto beat = cursor.beat();
     const auto staff = cursor.staff();
-    if (!beat || beat->isPlaceholder() || !staff || string < 0 || string > 15 || unsigned(string) >= staff->tuning().stringCount())
-        return {{"error", "Choose an existing stringed note at the cursor"}};
+    const bool byIndex = args.contains("note_index");
+    if (!beat || beat->isPlaceholder() || !staff || (byIndex && args.contains("string")))
+        return {{"error", "Choose one existing note by string or note_index"}};
+    const int requestedIndex = args.value("note_index").toInt(-1);
+    if (byIndex ? requestedIndex < 0 || size_t(requestedIndex) >= beat->notes().size() : string < 0 || string > 15 || unsigned(string) >= staff->tuning().stringCount())
+        return {{"error", "Note locator is outside the current beat"}};
     std::shared_ptr<gp::core::Note> selected;
-    QJsonObject otherNotes;
-    for (const auto &note : beat->notes()) if (note) {
-        if (note->string() == unsigned(string)) selected = note;
-        else otherNotes[QString::number(note->string())] = noteState(*note);
+    int selectedIndex = -1;
+    QJsonArray otherNotes;
+    for (size_t i = 0; i < beat->notes().size(); ++i) {
+        const auto &note = beat->notes()[i];
+        if (!note) return {{"error", "Native note is missing"}};
+        if (byIndex ? i == size_t(requestedIndex) : note->string() == unsigned(string)) {
+            if (selected) return {{"error", "String identifies multiple notes; use note_index"}};
+            selected = note; selectedIndex = int(i);
+        } else otherNotes.append(noteState(*note));
     }
-    if (!selected || selected->fret() < 0) return {{"error", "No existing fretted note on that string"}};
+    if (!selected) return {{"error", "No note at the requested locator"}};
+    string = int(selected->string());
+    const auto &track = document.score->tracks()[cursor.trackIndex()];
+    const QSet<QString> common{"let_ring", "anti_accent", "left_fingering", "right_fingering", "ornament"};
+    if (!gp::core::InstrumentSet::isStringed(track->type()) && !common.contains(property) && !accents.contains(property) && property != "trill")
+        return {{"error", "This effect requires a stringed instrument"}};
+    if (property == "trill" && track->instrumentSet().isUnpitched()) return {{"error", "Trills require a pitched instrument"}};
     const auto before = noteState(*selected);
     const auto matches = [&](const QJsonObject &state) {
         const auto effect = state.value("effects").toObject().value(property);
@@ -1206,6 +1415,12 @@ inline QJsonObject editNoteEffect(const QJsonObject &args) {
         else if (property == "let_ring") document.score->setNoteLetRing(range, enabled, false);
         else if (property == "left_hand_tapping") document.score->setStringedNoteLeftHandTapping(range, enabled);
         else if (property == "right_hand_tapping") document.score->setStringedNoteRightHandTapping(range, enabled);
+        else if (property == "dead") document.score->setStringedNoteDead(range, enabled, -1, -1);
+        else if (property == "hopo") document.score->setStringedNoteHopo(range, enabled, false);
+        else if (accents.contains(property)) document.score->setNoteAccentFlag(range, enabled, static_cast<gp::core::AccentFlag>(1 << accents.indexOf(property)));
+        else if (property == "trill") document.score->setNoteTrill(range, value.toObject().value("enabled").toBool(), unsigned(value.toObject().value("midi").toInt()), 16);
+        else if (property == "ornament") document.score->setNoteOrnament(range, option != 0, static_cast<gp::core::Ornament>(option));
+        else if (property == "bend") document.score->setStringedNoteBend(range, value.toObject().value("enabled").toBool(), bend, false);
         else if (property == "vibrato") document.score->setStringedNoteVibrato(range, option != 0, static_cast<gp::core::Vibrato>(option));
         else if (property == "anti_accent") document.score->setNoteAntiAccent(range, option != 0, static_cast<gp::core::AntiAccent>(option));
         else if (property == "left_fingering") document.score->setNoteLeftHandFingering(range, option != 0, static_cast<gp::core::Fingering>(option));
@@ -1220,10 +1435,13 @@ inline QJsonObject editNoteEffect(const QJsonObject &args) {
     }
     const auto updated = cursor.beat();
     if (!updated) return {{"error", "Note effect edit left no beat; inspect score before retrying"}};
-    QJsonObject after, currentOtherNotes;
-    for (const auto &note : updated->notes()) if (note) {
-        if (note->string() == unsigned(string)) after = noteState(*note);
-        else currentOtherNotes[QString::number(note->string())] = noteState(*note);
+    QJsonObject after;
+    QJsonArray currentOtherNotes;
+    for (size_t i = 0; i < updated->notes().size(); ++i) {
+        const auto &note = updated->notes()[i];
+        if (!note) continue;
+        if (i == size_t(selectedIndex)) after = noteState(*note);
+        else currentOtherNotes.append(noteState(*note));
     }
     if (!matches(after) || after.value("midi") != before.value("midi") ||
         after.value("fret") != before.value("fret") || currentOtherNotes != otherNotes)
@@ -1231,10 +1449,207 @@ inline QJsonObject editNoteEffect(const QJsonObject &args) {
     return {{"document", document.id()}, {"note", after}, {"dirty", document.object->property("isDirty").toBool()},
         {"undo_available", document.score->undoAvailable()}};
 }
+inline QJsonObject transpose(const QJsonObject &args) {
+    const Document document = choose(args);
+    if (!document.score) return {{"error", "Native score unavailable"}};
+    const int semitones = args.value("semitones").toInt(-100);
+    const QString scope = args.value("scope").toString("cursor");
+    if (semitones < -24 || semitones > 24 || (scope != "cursor" && scope != "selection"))
+        return {{"error", "semitones must be -24..24; scope must be cursor or selection"}};
+    auto &cursor = document.score->cursor();
+    gp::core::ScoreModelRange single(cursor.modelIndex(), 0, static_cast<gp::core::ScoreModelRange::SortingPolicy>(0));
+    BeatSelection selected;
+    if (scope == "selection") {
+        const auto error = collectBeatSelection(document.score, selected);
+        if (!error.isEmpty()) return {{"error", error}};
+    } else {
+        if (!singleBeatRange(single, cursor)) return {{"error", "Cursor must point to a real beat"}};
+        single.setMultiSelection(true);
+        selected.beats.push_back(cursor.beat());
+        selected.positions.append(QJsonObject{{"track", cursor.trackIndex()}, {"staff", int(cursor.staffIndex())},
+            {"bar", cursor.barIndex()}, {"voice", int(cursor.voiceIndex())}, {"beat", cursor.beatIndex()}});
+    }
+    std::vector<std::vector<int>> pitches;
+    for (size_t i = 0; i < selected.beats.size(); ++i) {
+        const auto track = document.score->tracks()[selected.positions[int(i)].toObject().value("track").toInt()];
+        if (track->instrumentSet().isUnpitched()) return {{"error", "Transpose selection must not include unpitched instruments"}};
+        std::vector<int> expected;
+        for (const auto &note : selected.beats[i]->notes()) {
+            if (!note || note->midi() + semitones < 0 || note->midi() + semitones > 127)
+                return {{"error", "Transposition would exceed MIDI pitch range"}};
+            if (gp::core::InstrumentSet::isStringed(track->type()) && (note->fret() + semitones < 0 || note->fret() + semitones > 36))
+                return {{"error", "Transposition must remain within frets 0..36 on the current strings"}};
+            expected.push_back(note->midi() + semitones);
+        }
+        pitches.push_back(expected);
+    }
+    if (semitones) {
+        if (scope == "cursor") document.score->transposeTrackBySemitones(single, semitones, false, false, false);
+        else {
+            gp::core::MacroCommandRecorder recorder(document.score, true);
+            for (const auto &range : selected.ranges) document.score->transposeTrackBySemitones(*range, semitones, false, false, false);
+            recorder.commit();
+        }
+    }
+    QJsonArray observed;
+    bool matched = true;
+    for (size_t i = 0; i < selected.beats.size(); ++i) {
+        std::vector<int> actual;
+        QJsonArray notes;
+        for (const auto &note : selected.beats[i]->notes()) if (note) { actual.push_back(note->midi()); notes.append(noteState(*note)); }
+        std::sort(actual.begin(), actual.end());
+        std::sort(pitches[i].begin(), pitches[i].end());
+        matched = matched && actual == pitches[i];
+        observed.append(QJsonObject{{"position", selected.positions[int(i)]}, {"notes", notes}});
+    }
+    QJsonObject result{{"document", document.id()}, {"observed_beats", observed}, {"semitones", semitones}};
+    if (!matched) result["error"] = "Native transpose readback differs; inspect score before retrying";
+    return result;
+}
+inline QJsonObject editBeatEffect(const QJsonObject &args) {
+    const Document document = choose(args);
+    if (!document.score) return {{"error", "Native score unavailable"}};
+    const QString property = args.value("property").toString();
+    auto value = args.value("value");
+    gp::core::Score::WhammyBarParam whammy{};
+    if (property == "whammy") {
+        auto object = value.toObject();
+        const bool enabled = object.value("enabled").toBool();
+        const QStringList fields{"origin_value", "middle_value", "destination_value", "origin_offset", "middle_offset1", "middle_offset2", "destination_offset"};
+        if (!value.isObject() || !object.value("enabled").isBool() || object.size() != (enabled ? 8 : 1))
+            return {{"error", "whammy requires enabled and seven curve values; disabling accepts only enabled=false"}};
+        float values[7]{};
+        if (enabled) for (int i = 0; i < fields.size(); ++i) {
+            const auto number = object.value(fields[i]);
+            const double v = number.toDouble();
+            if (!number.isDouble() || !std::isfinite(v) || v < (i < 3 ? -12 : 0) || v > (i < 3 ? 12 : 1))
+                return {{"error", "Whammy pitch values must be -12..12 semitones and offsets 0..1"}};
+            values[i] = float(v);
+            object[fields[i]] = double(values[i]);
+        }
+        if (enabled && !(values[3] <= values[4] && values[4] <= values[5] && values[5] <= values[6]))
+            return {{"error", "Whammy offsets must be ordered"}};
+        whammy = {values[0], values[1], values[2], values[3], values[4], values[5], values[6]};
+        value = object;
+    }
+    QStringList choices;
+    const int choiceBase = property == "ottavia" ? -2 : 0;
+    for (int i = choiceBase; i < (property == "rasgueado" ? 20 : 8); ++i) {
+        std::string label;
+        if (property == "grace") label = gp::core::graceTypeToString(static_cast<gp::core::GraceType>(i));
+        else if (property == "pick_stroke" || property == "arpeggio" || property == "brush") label = gp::core::directionToString(static_cast<gp::core::Direction>(i));
+        else if (property == "fade") label = gp::core::faddingToString(static_cast<gp::core::Fadding>(i));
+        else if (property == "hairpin") label = gp::core::hairpinToString(static_cast<gp::core::Hairpin>(i));
+        else if (property == "golpe") label = gp::core::golpeToString(static_cast<gp::core::Golpe>(i));
+        else if (property == "ottavia") label = gp::core::ottaviaToString(static_cast<gp::core::Ottavia>(i));
+        else if (property == "rasgueado") label = gp::core::rasgueadoToString(static_cast<gp::core::Rasgueado>(i));
+        else if (property == "bar_vibrato") label = gp::core::vibratoToString(static_cast<gp::core::Vibrato>(i));
+        else if (property == "bass_attack") label = i == 0 ? "Slap" : i == 1 ? "Pop" : i == 2 ? "None" : "";
+        else if (property != "dead_slap" && property != "tremolo" && property != "whammy") return {{"error", "Unknown beat effect property"}};
+        choices.append(QString::fromStdString(label));
+    }
+    const int choiceIndex = choices.indexOf(value.toString()), option = choiceIndex + choiceBase;
+    const QList<int> tremolos{0,8,16,32,64};
+    if (property == "whammy" ? false : property == "tremolo" ? (!value.isDouble() || value.toDouble() != value.toInt() || !tremolos.contains(value.toInt())) :
+        property == "dead_slap" ? !value.isBool() : (!value.isString() || value.toString().isEmpty() || choiceIndex < 0)) {
+        choices.removeAll(QString());
+        return {{"error", "Unsupported beat effect value"}, {"choices", QJsonArray::fromStringList(choices)}};
+    }
+    auto &cursor = document.score->cursor();
+    const auto beat = cursor.beat();
+    gp::core::ScoreModelRange range(cursor.modelIndex(), 0, static_cast<gp::core::ScoreModelRange::SortingPolicy>(0));
+    if (!beat || !singleBeatRange(range, cursor)) return {{"error", "Cursor must point to a real beat"}};
+    if ((property == "rasgueado" || property == "bar_vibrato" || property == "bass_attack" || property == "dead_slap" || property == "golpe" || property == "whammy") &&
+        !gp::core::InstrumentSet::isStringed(document.score->tracks()[cursor.trackIndex()]->type()))
+        return {{"error", "This beat effect requires a stringed instrument"}};
+    if (value.toString() != "None" && ((property == "arpeggio" && !beat->canSetArpeggio()) || (property == "brush" && !beat->canSetBrush())))
+        return {{"error", "The native beat cannot accept this stroke"}};
+    // Keep range-based commands local even when the cursor carries a selection.
+    range.setMultiSelection(true);
+    const auto before = beatEffects(*beat);
+    if (before.value(property) != value) {
+        const bool enabled = value.isBool() ? value.toBool() : value.toString() != "None" && value.toString() != "NoHairpin";
+        if (property == "grace") document.score->setBeatGraceNotes(range, enabled, static_cast<gp::core::GraceType>(option));
+        else if (property == "pick_stroke") document.score->setBeatPickStroke(range, enabled, static_cast<gp::core::Direction>(option));
+        else if (property == "fade") document.score->setBeatFadding(range, enabled, static_cast<gp::core::Fadding>(option));
+        else if (property == "hairpin") document.score->setBeatHairpin(range, enabled, static_cast<gp::core::Hairpin>(option));
+        else if (property == "golpe") document.score->setBeatGolpe(range, enabled, static_cast<gp::core::Golpe>(option));
+        else if (property == "ottavia") document.score->setBeatOttavia(range, enabled, static_cast<gp::core::Ottavia>(option), false);
+        else if (property == "rasgueado") document.score->setBeatRasgueado(range, static_cast<gp::core::Rasgueado>(option));
+        else if (property == "bar_vibrato") document.score->setStringedBeatVibrato(range, enabled, static_cast<gp::core::Vibrato>(option));
+        else if (property == "bass_attack") document.score->setStringedBeatBassAttack(range, enabled, static_cast<gp::core::BassAttack>(option));
+        else if (property == "whammy") document.score->setStringedBeatWhammyBar(range, value.toObject().value("enabled").toBool(), whammy);
+        else if (property == "arpeggio" || property == "brush") {
+            const auto direction = static_cast<gp::core::Direction>(option);
+            // The pattern command supplies the host's default stroke timing.
+            if (property == "arpeggio") {
+                if (enabled) document.score->setArpeggioPattern(range, {direction}, false);
+                else document.score->setBeatArpeggio(range, false, direction, 0, 0);
+            } else {
+                if (enabled) document.score->setBrushPattern(range, {direction}, false);
+                else document.score->setBrush(range, false, direction, 0, 0);
+            }
+        }
+        else if (property == "tremolo") {
+            const int denominator = value.toInt();
+            const int index = QList<int>{1,2,4,8,16,32,64,128}.indexOf(denominator ? denominator : 16);
+            const gp::core::RhythmValue rhythm(static_cast<gp::core::RhythmValue::Value>(index + 2), 0, 0, 0);
+            document.score->setBeatTremolo(range, denominator != 0, rhythm.getLength());
+        }
+        else document.score->setBeatDeadSlapped(range, enabled);
+    }
+    const auto after = beatEffects(*beat);
+    if (after.value(property) != value) return {{"error", "Native beat effect readback differs; inspect score before retrying"}, {"observed", after}};
+    QJsonArray notes;
+    for (const auto &note : beat->notes()) if (note) notes.append(noteState(*note));
+    return {{"document", document.id()}, {"effects", after}, {"rhythm", beat->rhythm().toQString()}, {"notes", notes},
+        {"rest", beat->isRest()}, {"dirty", document.object->property("isDirty").toBool()}};
+}
 inline QJsonObject editNote(const QJsonObject &args) {
     const Document document = choose(args);
     if (!document.score) return {{"error", "Native score unavailable"}};
     const QString operation = args.value("operation").toString();
+    if (args.contains("midi")) {
+        const int midi = args.value("midi").toInt(-1);
+        if (midi < 0 || midi > 127 || args.contains("string") || args.contains("fret") || (operation != "set" && operation != "remove"))
+            return {{"error", "MIDI note editing accepts set/remove with midi 0..127 and no string/fret"}};
+        auto &cursor = document.score->cursor();
+        const auto &tracks = document.score->tracks();
+        if (cursor.trackIndex() < 0 || size_t(cursor.trackIndex()) >= tracks.size()) return {{"error", "Cursor must point to a track"}};
+        const auto track = tracks[cursor.trackIndex()];
+        if (!track || gp::core::InstrumentSet::isStringed(track->type())) return {{"error", "Use string/fret for stringed instruments"}};
+        if (track->instrumentSet().isUnpitched() && track->instrumentSet().indexOfArticulationWithMidi(unsigned(midi)) < 0)
+            return {{"error", "This percussion instrument has no articulation for that MIDI note"}};
+        const auto beat = cursor.beat();
+        gp::core::ScoreModelRange range(cursor.modelIndex(), 0, static_cast<gp::core::ScoreModelRange::SortingPolicy>(0));
+        if (!singleBeatRange(range, cursor, operation == "set")) return {{"error", "Cursor must point to a beat or input placeholder"}};
+        std::shared_ptr<gp::core::Note> existing;
+        if (beat) for (const auto &note : beat->notes()) if (note && note->midi() == midi) {
+            if (existing) return {{"error", "MIDI pitch identifies multiple notes at this beat"}};
+            existing = note;
+        }
+        if (operation == "set" && !existing) {
+            if (track->instrumentSet().isUnpitched()) {
+                const auto &articulations = track->instrumentSet().articulations();
+                const int articulation = track->instrumentSet().indexOfArticulationWithMidi(unsigned(midi));
+                if (articulation < 0 || size_t(articulation) >= articulations.size()) return {{"error", "Native percussion articulation is missing"}};
+                document.score->createNonPitchedNote(range, beat && !beat->isPlaceholder() ? beat->rhythm() : cursor.nextInsertRhythm(), articulations[articulation]);
+            } else document.score->setMIDINote(range, unsigned(midi));
+        } else if (operation == "remove" && existing) {
+            if (track->instrumentSet().isUnpitched()) document.score->removeNonPitchedNoteFromMidiAndString(cursor.modelIndex(), unsigned(midi), existing->string());
+            else document.score->setMIDINote(range, unsigned(midi));
+        }
+        const auto updated = cursor.beat();
+        if (!updated) return {{"error", "Native MIDI edit left no beat"}};
+        bool found = false;
+        QJsonArray notes;
+        for (const auto &note : updated->notes()) if (note) {
+            notes.append(noteState(*note));
+            if (note->midi() == midi) found = true;
+        }
+        if (found != (operation == "set")) return {{"error", "Native MIDI edit readback differs"}, {"notes", notes}};
+        return {{"document", document.id()}, {"notes", notes}, {"rest", updated->isRest()}, {"cursor", cursorState(document.score)}};
+    }
     const int string = args.value("string").toInt(-1), fret = args.value("fret").toInt(-1);
     if (operation != "set" && operation != "remove") return {{"error", "operation must be set or remove"}};
     if (operation == "set" && (fret < 0 || fret > 36)) return {{"error", "set requires fret 0..36"}};

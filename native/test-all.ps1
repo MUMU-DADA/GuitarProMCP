@@ -1,4 +1,4 @@
-param([string]$Exe = 'C:\Program Files\Arobas Music\Guitar Pro 8\GuitarPro.exe')
+param([string]$Exe = 'C:\Program Files\Arobas Music\Guitar Pro 8\GuitarPro.exe', [string]$SessionFile)
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $Exe = (Resolve-Path -LiteralPath $Exe).Path
@@ -14,11 +14,33 @@ if (Test-Path -LiteralPath $fixture) {
 }
 $run = Join-Path $root ('artifacts/regression-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $run | Out-Null
-$sessionFile = Join-Path $run 'session/native-session.json'
-$process = & "$root/start-plugin.ps1" -Exe $Exe -ScorePath $fixture -SessionFile $sessionFile -PassThru
+if ($SessionFile) {
+    $sessionFile = (Resolve-Path -LiteralPath $SessionFile).Path
+    $existing = Get-Content -LiteralPath $sessionFile -Raw | ConvertFrom-Json
+    $process = Get-Process -Id $existing.pid
+    if ($process.Path -ne $Exe) { throw 'The existing session does not belong to the requested executable.' }
+    $null = $process.Handle
+} else {
+    $sessionFile = Join-Path $run 'session/native-session.json'
+    $process = & "$root/start-plugin.ps1" -Exe $Exe -ScorePath $fixture -SessionFile $sessionFile -PassThru
+}
 $descriptor = Get-Content -LiteralPath $sessionFile -Raw | ConvertFrom-Json
+if (-not ('GpmcpRegressionProcess' -as [type])) {
+    Add-Type @'
+using System;
+using System.Runtime.InteropServices;
+public static class GpmcpRegressionProcess {
+    [DllImport("kernel32.dll", SetLastError=true)] public static extern IntPtr OpenProcess(uint access, bool inherit, int pid);
+    [DllImport("kernel32.dll", SetLastError=true)] public static extern bool GetExitCodeProcess(IntPtr process, out uint code);
+    [DllImport("kernel32.dll")] public static extern bool CloseHandle(IntPtr handle);
+}
+'@
+}
+$exitHandle = [GpmcpRegressionProcess]::OpenProcess(0x1000, $false, $process.Id)
+if ($exitHandle -eq [IntPtr]::Zero) { throw 'Cannot retain a process handle for exit-code verification.' }
+$exitCode = $null
 Write-Output "Regression host PID $($process.Id). Session: $sessionFile"
-$suites = @('mcp','native','editing','tracks','measures','effects','selection','saving','document-operations','document-tabs','lifecycle','session','structure','clipboard','tuplets','connections')
+$suites = @('mcp','native','editing','tracks','measures','effects','selection','saving','document-operations','document-tabs','lifecycle','session','structure','clipboard','tuplets','connections','notation','instruments','score-form')
 $results = @()
 $fixtureRestorations = @()
 $complete = $false
@@ -77,16 +99,21 @@ try {
         $main = @($window.objects | Where-Object class -EQ 'gp::gui::MainWindow')
         try { Invoke-McpTool $connection gp_close_window @{snapshot=$window.snapshot;id=$main[0].id} | Out-Null }
         catch { if (-not $process.WaitForExit(5000)) { throw } }
-        if (-not $process.WaitForExit(60000) -or $process.ExitCode -ne 0) { throw 'Regression host failed clean shutdown.' }
+        if (-not $process.WaitForExit(60000)) { throw 'Regression host did not exit.' }
+        [uint32]$nativeExitCode = 0
+        if (-not [GpmcpRegressionProcess]::GetExitCodeProcess($exitHandle, [ref]$nativeExitCode)) { throw 'Cannot read the regression host exit code.' }
+        $exitCode = $nativeExitCode
+        if ($exitCode -ne 0) { throw "Regression host failed clean shutdown: $exitCode" }
         if (Test-Path -LiteralPath $sessionFile) { throw 'Regression host left a stale session descriptor.' }
         $complete = $true
     } finally { if (-not $process.HasExited) { Close-McpSession $connection } }
 } finally {
-    $sourceFiles = @('guitarpro_mcp.cpp','guitarpro_api.h','guitarpro_abi.h','guitarpro_clipboard.h','mcp_server.cpp','object_registry.h','host_build.h','plugin_config.h','autoload.cpp','plugin_status.h')
+    $sourceFiles = @('guitarpro_mcp.cpp','guitarpro_api.h','guitarpro_abi.h','gpcore.def','guitarpro_clipboard.h','mcp_server.cpp','object_registry.h','host_build.h','plugin_config.h','autoload.cpp','plugin_status.h','test-all.ps1','test-notation.ps1','test-instruments.ps1','test-score-form.ps1','test-connections.ps1','test-clipboard.ps1')
     $hashes = @($sourceFiles | ForEach-Object { Get-FileHash -LiteralPath (Join-Path $PSScriptRoot $_) | Select-Object Path,Hash })
-    @{complete=$complete;host_pid=$descriptor.pid;exit_code=$(if($process.HasExited){$process.ExitCode}else{$null});checks=($results | Measure-Object -Property checks -Sum).Sum;suites=$results;fixture_restorations=$fixtureRestorations;sources=$hashes;powershell=$PSVersionTable.PSVersion.ToString();plugin_sha256=(Get-FileHash -LiteralPath "$root/.tools/native/plugins/generic/guitarpro_mcp.dll").Hash;autoload_sha256=(Get-FileHash -LiteralPath "$root/.tools/native/plugins/imageformats/guitarpro_mcp_autoload.dll").Hash;host_exe=$Exe;host_sha256=(Get-FileHash -LiteralPath $Exe).Hash} |
+    @{complete=$complete;host_pid=$descriptor.pid;exit_code=$exitCode;checks=($results | Measure-Object -Property checks -Sum).Sum;suites=$results;fixture_restorations=$fixtureRestorations;sources=$hashes;powershell=$PSVersionTable.PSVersion.ToString();plugin_sha256=(Get-FileHash -LiteralPath "$root/.tools/native/plugins/generic/guitarpro_mcp.dll").Hash;autoload_sha256=(Get-FileHash -LiteralPath "$root/.tools/native/plugins/imageformats/guitarpro_mcp_autoload.dll").Hash;host_exe=$Exe;host_sha256=(Get-FileHash -LiteralPath $Exe).Hash} |
         ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $run 'regression.json') -Encoding UTF8
     if (-not $process.HasExited) { Write-Warning "Regression host retained for inspection: PID $($process.Id), session $sessionFile" }
     $process.Dispose()
+    [GpmcpRegressionProcess]::CloseHandle($exitHandle) | Out-Null
 }
 Write-Output "Complete regression evidence: $run"

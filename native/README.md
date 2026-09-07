@@ -102,14 +102,17 @@ try {
 | `gp_edit_measure` | `document?`, `operation` 及对应参数 | 修改光标所在的单个全曲共享小节，参数见下表；支持原生撤销 |
 | `gp_edit_metadata` | `document?`, `property`, `value` | 属性名使用 `gp_score.metadata` 的原始键，例如 `Title`；值最长 16384 个 UTF-16 代码单元 |
 | `gp_edit_tempo` | `document?`, `value`, `unit?`, `label?` | 修改初始速度，`value` 为 1–400 的整数，省略单位或标记时保留原值 |
-| `gp_edit_track` | `document?`, `track`, `property`, `value` | 修改 `name`、`short_name`、`color`、`volume`、`pan` 或 `playback_state` |
+| `gp_edit_track` | `document?`, `track`, `property`, `value` | 修改 `name`、`short_name`、`color`、`volume`、`pan`、`playback_state` 或记谱 `transposition` |
+| `gp_edit_tuning` | `document?`, `track`, `staff?`, `tuning?`, `capo?`, `partial_capo?`, `partial_capo_strings?`, `preserve_pitch?` | 修改弦乐谱表的调弦、变调夹及部分变调夹，支持撤销 |
+| `gp_transpose` | `document?`, `semitones`, `scope?=cursor` | 光标单拍或明确选区的实音移调，范围为 -24..24 半音；拒绝打击乐 |
 | `gp_edit_tracks` | `document?`, `operation`, `track`, `other?` | `duplicate` 复制到源轨之后，`remove` 删除，`swap` 与 `other` 交换 |
 | `gp_insert_track` | `document?`, `source_document?`, `source_track`, `index?`, `copy_content?=false` | 基于现有音轨配置新增，源文档默认目标文档，插入位置默认末尾 |
 | `gp_cursor` | `document?`, `axis`, `index` | `axis` 为 `track`、`staff`、`bar`、`voice` 或 `beat`；每次修改一个索引；声部 0–3 |
 | `gp_selection` | `document?`, `operation?=state`, `base?`, `extent?`, `note_index?`, `all_voices?`, `all_tracks?` | 读取、构造并提交原生选区；参数和范围见下文 |
 | `gp_set_fret` | `document?`, `string`, `fret` | 修改当前光标节拍中指定弦的已有音符；品位 0–36 |
-| `gp_edit_note` | `document?`, `operation`, `string`, `fret?` | `set` 新增或修改音符，需要品位 0–36；`remove` 删除该弦音符，不接受 `fret` |
-| `gp_edit_note_effect` | `document?`, `string`, `property`, `value` | 修改当前拍指定弦的已有音符技法，支持原生撤销；取值见下表 |
+| `gp_edit_note` | `document?`, `operation`, `string?`, `fret?`, `midi?` | 弦乐用弦号和品位；键盘和打击乐用 MIDI 0..127，不能混用两套定位参数；`set` 新增、`remove` 删除 |
+| `gp_edit_note_effect` | `document?`, `string?`, `note_index?`, `property`, `value` | 用弦号或 `notes` 数组下标选择已有单音，支持原生撤销；取值见下表 |
+| `gp_edit_beat_effect` | `document?`, `property`, `value` | 修改当前单拍的装饰音、扫拨方向、渐强弱、轮指等技法，支持撤销 |
 | `gp_edit_beat` | `document?`, `operation`, `denominator?`, `dots?`, `scope?=cursor`, `level?`, `actual?`, `normal?`, `enabled?` | `insert` 插入休止拍，`rhythm` 设置基础时值，`dots` 设置附点，`tuplet` 设置连音，`clear` 清空音符，`remove` 删除节拍；`scope=selection` 接受 `rhythm/dots/tuplet` |
 | `gp_edit_connection` | `document?`, `kind`, `enabled`, `scope?=cursor`, `string?` | `legato` 连奏或 `tie` 延音线；指定弦单音仅用于光标延音线；选区支持跨声部、音轨及谱表 |
 | `gp_clipboard` | 按操作提供 `document?`, `id?`, `scope?`, `track?`, `staff?`, `bar?`, `count?` | 原生独立快照的复制、剪切、读取和粘贴；见原生剪贴板章节 |
@@ -151,6 +154,16 @@ PowerShell 的 `Invoke-McpTool` 默认等待三个保存工具的结果，保持
 `gp_score.tracks` 包含名称、简称、乐器类型、播放状态、音量、声像、移调偏移和颜色。`gp_edit_track` 的名称、简称、颜色及播放状态要求字符串；颜色格式为 `#RRGGBB`，播放状态为 `Default` / `Solo` / `Mute`。音量和声像要求数值 `0..1`，声像 `0.5` 居中；这些值不是分贝或百分数。混音设置调用原生 `setTrackChannelStripParameter`，声像参数为 11、音量参数为 12。除播放状态外均支持原生撤销；播放状态返回 `undoable=false`，不会伪造撤销历史。
 
 复制、新增、删除和交换音轨使用宿主结构命令并读回数量和对象顺序，最多支持 1024 条音轨。删除最后一轨会留下零音轨曲谱，可撤销恢复。新增音轨时宿主克隆源配置；默认清空内容并按目标主音轨重建小节，不修改源文档。`copy_content=true` 目前只接受源轨与目标小节数相同的情况。原音轨及克隆的音符数据独立，跨文档钢琴双谱表插入和零轨恢复首条音轨已验证。
+
+### 乐器和音高
+
+乐器配置继续复用 `gp_templates` / `gp_new` 和 `gp_insert_track`，从内置模板或已打开曲谱克隆配置。`gp_score.tracks` 的 `stringed`、`unpitched` 区分弦乐与无固定音高乐器；`staff_details` 返回每个谱表的调弦和变调夹。钢琴的 `staff=0/1` 分别访问上下谱表，各自支持声部 0..3。宿主内部保留的钢琴、打击乐 `string/fret` 字段不是实际琴弦或品位，音符编辑应使用 `midi`，单音技法使用 `note_index`。
+
+打击乐可用音符由 `percussion_notes` 给出，MIDI 输入选择宿主对应的默认演奏法，不支持的 MIDI 会在修改前拒绝。重复设置已有 MIDI 不删除音符。无固定音高乐器的 `accidental` 返回 `null`。`sounding_midi` 包含宿主的调弦、变调夹及泛音计算；它不是弯音或揉弦随时间变化的连续音高曲线。
+
+`gp_edit_tuning` 的调弦数组为 1..12 个 MIDI 音高，按宿主弦序排列，标准吉他为 `[40,45,50,55,59,64]`。两个变调夹值各为 0..24，合计最多 36；部分变调夹的布尔数组长度必须与弦数一致。省略字段保留当前值，`preserve_pitch=true` 为默认值，要求每个现有音符在原弦上仍可用 0..36 品演奏；不自动搜索替代指法。`false` 保留指法并改变实音。删除已占用弦或超出 MIDI 范围时拒绝修改。
+
+`gp_edit_track property=transposition` 设置 -24..24 的记谱偏移，保留音符实音和品位，但宿主可能改变升降号拼写。`gp_transpose` 改变实际音高，弦乐要求当前弦上结果仍在 0..36 品；不自动搜索替代指法。选区沿用 128 小节、20000 拍限制，混入打击乐时整体拒绝。宿主实音移调的撤销快照可能给未写满的声部补齐休止符，调用方应以返回的实际模型为准。
 
 `gp_edit_note` 和默认 `scope=cursor` 的 `gp_edit_beat` 从当前光标创建独立的单拍范围。弦号还会按当前谱表的调弦数量检查。新增音符使用宿主自动升降号拼写，删除最后一个音符后保留该拍为休止。空白占位拍上输入使用宿主的下一次输入时值；插入休止拍后可能仍有占位拍，读取时应以 `placeholder` 区分占位拍和真实节拍。
 
@@ -242,7 +255,7 @@ Invoke-McpTool $connection gp_edit_connection @{kind='tie';enabled=$false;string
 
 单音延音线命令会克隆 `Score::cursor` 并读取其当前音符，仅设置范围中的弦号和音高不足以定位和弦单音。插件在调用期间以原生 `ScoreCursor::selectNote` 及通知方法选中目标，随后恢复原光标和选区；没有鼠标、按键或前台窗口操作。
 
-已验证 153 项：光标与较大选区隔离、正反向跨小节、整拍及和弦单音、音高与升降号更新、缺少弦音符补入、清除、重复命令、撤销重做、跨声部/音轨的一次撤销、钢琴下谱表隔离、GPIF 连接两端及保存重开。尚未覆盖装饰音、打击乐、长延音链与其他技法的全部组合、复杂排版和实际发声。
+原有专项验证 153 项：光标与较大选区隔离、正反向跨小节、整拍及和弦单音、音高与升降号更新、缺少弦音符补入、清除、重复命令、撤销重做、跨声部/音轨的一次撤销、钢琴下谱表隔离、GPIF 连接两端及保存重开。P3 结构专项另验证跨两小节八拍连奏/八音延音链、整链移调及弯音组合。装饰音、打击乐与其他技法的全部组合、复杂排版和各音源声学效果未穷举。
 
 ## 原生剪贴板
 
@@ -307,12 +320,21 @@ Invoke-McpTool $connection gp_undo_redo @{operation='undo';document=$target}
 | `vibrato` | `None`, `Slight`, `Wide` | 无揉弦、轻揉弦、宽揉弦 |
 | `anti_accent` | `None`, `Soft`, `Normal`, `Strong` | 宿主的弱音级别编码 |
 | `left_fingering` / `right_fingering` | `None`, `P`, `I`, `M`, `A`, `C`, `Open` | 宿主指法编码；`Open` 为空弦指法标记 |
+| `dead` / `hopo` | 布尔值 | 死音、击勾弦起点 |
+| `staccato` / `staccatissimo` / `accent` / `heavy_accent` / `tenuto` | 布尔值 | 断奏、极短断奏、重音、强重音、保持音；互斥规则由宿主处理 |
+| `ornament` | `None`, `Turn`, `InvertedTurn`, `LowerMordent`, `UpperMordent` | 回音或波音 |
+| `trill` | `{enabled:true,midi:42}` 或 `{enabled:false}` | 颤音的另一个音高，使用原生十六分音符速度 |
+| `slide` | `{kind,enabled}` 或 `{kind:"None"}` | `Shift`, `Legato`, `OutDownwards`, `OutUpwards`, `InFromBelow`, `InFromAbove`, `OutDownwardsPickScrape`, `OutUpwardsPickScrape` |
+| `harmonic` | `{type,fret}` 或 `{type:"None"}` | `Natural`, `Artificial`, `Pinch`, `Tap`, `Semi`, `Feedback`；错误品位返回可选节点 |
+| `bend` | `{enabled,origin_value,middle_value,destination_value,origin_offset,middle_offset1,middle_offset2,destination_offset}` | 三个音高值为 0..12 半音，四个位置为有序的 0..1；清除仅传 `{enabled:false}` |
 
-布尔属性用 `false` 清除，枚举属性用 `None` 清除；大小写必须匹配。不接受不存在的弦、没有音符的休止/占位拍或无品位音符。枚举名称由宿主转换函数提供，`Open` 指法标记不会修改已有音符的实际品位。
+布尔属性用 `false` 清除，枚举属性用 `None` 清除；大小写必须匹配。不接受不存在的音符或休止/占位拍。键盘和打击乐的通用技法可通过 `note_index` 修改；弯音、滑音等弦乐技法拒绝非弦乐音轨，颤音拒绝打击乐。枚举名称由宿主转换函数提供，`Open` 指法标记不会修改已有音符的实际品位。
 
 单音范围从当前拍构造，选择模式为 0，同时设置两个端点的弦号与 MIDI 音高，再通过原生 `ScoreModelIndex::note()` 核对目标对象。只设置弦号不足以定位，音高尚未指定时宿主会返回空对象。局部范围不会改动界面光标或选区；编辑使用宿主可撤销命令，读回目标属性、音高、品位和同拍其他音符。相同值不会重复加入撤销记录。掌根闷音和延音命令关闭了连续命令合并，使每次实际变化可独立撤销。
 
-已验证 21 种非默认取值、清除、撤销重做、和弦内单音隔离、第二声部和另一音轨不变、逐项 GPIF 保存及组合技法的原生保存/重开。GPIF 通过主小节、音轨小节、声部、节拍和音符引用定位检查对象，不能把 XML 音符定义数量当作实际发声次数。这些检查证明记谱状态和持久化，不代表已经完成各音源的声音效果验证；弯音、滑音、连奏和其他技法仍待接入。
+原有 21 种取值由 `test-effects.ps1` 验证，新增技法由 `test-notation.ps1` 验证。GPIF 通过主小节、音轨小节、声部、节拍和音符引用定位检查对象，不能把 XML 音符定义数量当作实际发声次数。曲谱状态和持久化检查不代替 P5 的各音源声音效果验收。
+
+`gp_edit_beat_effect` 使用 `grace`、`pick_stroke`、`fade`、`hairpin`、`golpe`、`ottavia`、`rasgueado`、`bar_vibrato`、`bass_attack`、`arpeggio`、`brush` 的原生名称；无效值返回 `choices`。通常以 `None` 清除，`hairpin` 以 `NoHairpin` 清除。琶音和扫弦采用宿主默认演奏时序；不另设时序编辑器。`whammy` 与上表 `bend` 使用相同七点格式，三个音高值范围为 -12..12 半音。`dead_slap` 使用布尔值，`tremolo` 使用 8/16/32/64，0 清除。装饰音转换会改写时值，清除装饰音保留转换后的时值；死拍会清空原音符，清除死拍保留休止。原生撤销可恢复这些内容。
 
 验证空声部时发现：撤销首音输入后，宿主会留下一个无音符的空白占位拍。音符技法测试单独检查这一状态，并重开原始夹具，避免后续检查继承不同的占位拍结构。
 
@@ -327,6 +349,8 @@ Invoke-McpTool $connection gp_undo_redo @{operation='undo';document=$target}
 | `repeat_start` | `enabled` | 设置反复开始标记 |
 | `repeat_end` | `enabled`, `repeat_count?=2` | 开启时次数为 `2..100`；关闭时不接受次数参数 |
 | `double_bar` / `free_time` | `enabled` | 设置双小节线或自由拍号 |
+| `alternate_endings` | `endings` | 1..8 的不重复数组，空数组清除反复房子 |
+| `direction` | `direction`, `enabled` | 使用 `direction_marks` 返回的有效 ID 0..18；同一记号从原小节移动到新小节；清除指定记号保留同小节其他记号，可一次撤销 |
 
 工具先检查操作对应的参数，再通过原生命令修改，并读回所有小节字段。独立的 `ScoreModelRange` 设置 `setMultiSelection(true)`，确保拍号、调号只作用于光标所在小节，阻止宿主自动延伸到后续小节。这里的单小节仍由全曲各音轨共享。
 
@@ -384,7 +408,7 @@ GPIF 预检使用宿主 `Qt5Gui.dll` 的 `QZipReader` 和 Qt XML 流解析器，
 
 测试使用初始速度 90 和 120 的两份曲谱核对第二小节起点的帧数比为 0.75，并验证播放时间线实际推进、停止后保持不动。当前尚未暴露完整混音、分段变速编辑和音频设备控制。
 
-两个 4/4 小节的测试曲谱原长为 3840 tick，反复 3 次后为 11520 tick，原谱小节数仍为 2。`seek bar=1,tick=0` 定位到原谱第二小节的首次出现（1920 tick）；第三次的第二小节使用 `seek_tick tick=9600`。最后有效位置为 11519；反复 100 次时为 383999。测试同时验证次数修改和撤销后的时间线长度，但尚未覆盖反复房子、嵌套反复及跳转记号。
+两个 4/4 小节的测试曲谱原长为 3840 tick，反复 3 次后为 11520 tick，原谱小节数仍为 2。`seek bar=1,tick=0` 定位到原谱第二小节的首次出现（1920 tick）；第三次的第二小节使用 `seek_tick tick=9600`。最后有效位置为 11519；反复 100 次时为 383999。P3 结构专项另验证六小节曲谱的反复房子展开为 8 小节，反复内插入小节后为 10 小节，嵌套反复为 15 小节，D.C. al Fine 为 8 小节；均核对末尾 tick 定位，并验证实际播放帧推进。
 
 `gp_score.tempo` 读取主音轨的初始速度，字段为 `value`、`unit`、`label`、`quarter_bpm` 和可用单位 `units`，不代表当前播放位置的速度。单位包括 `Eighth`、`Quarter`、`QuarterDotted`、`Half`、`HalfDotted`，等效四分音符 BPM 分别为速度值的 0.5、1、1.5、2、3 倍，使用宿主转换函数计算。
 
@@ -440,7 +464,9 @@ IDocumentsManager + 0x10 → 管理器实现对象
 
 ## 验证
 
-P2 已按用户确认的单实例、多文档必要范围完成，独立 GUI 多开、原生标签拖动和原生保存进度取消列为宿主限制。当前构建在 Windows PowerShell 5.1 和 PowerShell 7 下各通过功能回归 2588 项、保存恢复 380 项、标签/原生异常恢复 405 项、文档集合变化 397 项、连接/Inspector/DDE 72 项，合计执行 7684 项；另通过隔离安装 46 项及协议 27 项。准确构建哈希、证据和边界见 [当前验证证据](../COVERAGE.md#当前验证证据) 及 [开发计划](../DEVELOPMENT_PLAN.md)。下方旧轮次保留为历史，不代表 P1 或整个项目已完成。
+P3 已按用户确认的必要范围完成。最终构建在 PowerShell 7.6.5 通过 19 组、3732 项完整回归，包含记谱 627 项、混合乐器 210 项和结构 307 项；宿主退出码为 0，连接描述已清理。已验证原弦调弦预检、跨轨及长连接链移调、跳转清除与结构引用；乐器配置复用模板和现有音轨，保留两层连音。准确哈希、证据及边界见 [P3 验收](../COVERAGE.md#p3-验收)。
+
+P2 已按用户确认的单实例、多文档必要范围完成，独立 GUI 多开、原生标签拖动和原生保存进度取消列为宿主限制。P2 验收构建在 Windows PowerShell 5.1 和 PowerShell 7 下各通过功能回归 2588 项、保存恢复 380 项、标签/原生异常恢复 405 项、文档集合变化 397 项、连接/Inspector/DDE 72 项，合计执行 7684 项；另通过隔离安装 46 项及协议 27 项。准确构建哈希、证据和边界见 [当前验证证据](../COVERAGE.md#当前验证证据) 及 [开发计划](../DEVELOPMENT_PLAN.md)。下方旧轮次保留为历史，不代表 P1 或整个项目已完成。
 
 按根目录 [README](../README.md) 使用完整回归入口；可用 `-Exe` 指定隔离宿主：
 

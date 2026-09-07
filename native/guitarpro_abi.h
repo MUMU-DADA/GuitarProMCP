@@ -4,9 +4,11 @@
 #include <string>
 #include <vector>
 #include <array>
+#include <set>
 #include <utility>
 namespace am::music { enum class Accidental : int {}; }
 namespace am::utils {
+class rational;
 // Verified Color copy/read code uses exactly three bytes, without alpha.
 class Color { public: unsigned char red, green, blue; };
 static_assert(sizeof(Color) == 3 && alignof(Color) == 1);
@@ -23,6 +25,17 @@ enum class AntiAccent : int {};
 enum class Fingering : int {};
 enum class TupletLevel : int {};
 enum class SlideFlag : int {};
+enum class Ornament : int {};
+enum class GraceType : int {};
+enum class Direction : int {};
+enum class Fadding : int {};
+enum class Hairpin : int {};
+enum class Golpe : int {};
+enum class Ottavia : int {};
+enum class DirectionMark : int {};
+enum class AccentFlag : int {};
+enum class Rasgueado : int {};
+enum class BassAttack : int {};
 struct Harmonic {
     enum class Type : int {};
     enum class Fret : int {};
@@ -31,10 +44,21 @@ struct Harmonic {
 };
 using TupletRatio = std::pair<unsigned char, unsigned char>;
 static_assert(sizeof(TupletRatio) == 2 && alignof(TupletRatio) == 1);
+class __declspec(dllimport) InstrumentArticulation {
+    void *implementation;
+public:
+    const std::string &name() const; unsigned outputMidiNumber() const;
+};
+static_assert(sizeof(InstrumentArticulation) == 8);
 class InstrumentSet {
 public:
     enum class Type : int {};
     __declspec(dllimport) static std::string typeToString(Type);
+    __declspec(dllimport) static bool isStringed(Type);
+    __declspec(dllimport) static bool isUnpitched(Type);
+    __declspec(dllimport) bool isUnpitched() const;
+    __declspec(dllimport) int indexOfArticulationWithMidi(unsigned) const;
+    __declspec(dllimport) const std::vector<InstrumentArticulation> &articulations() const;
 };
 class ScoreModel;
 class MasterBar;
@@ -65,6 +89,7 @@ public:
     const KeySignature &concertKeySignature() const;
     bool hasRepeatStart() const; bool hasRepeatEnd() const; unsigned repeatCount() const;
     bool hasDoubleBar() const; bool hasFreeTime() const;
+    int alternateEndingMask() const;
 };
 class __declspec(dllimport) MasterTrack {
 public:
@@ -72,6 +97,8 @@ public:
     const std::string &tempoLabel() const;
     TempoUnit tempoUnit() const; float tempoValue() const;
     std::shared_ptr<MasterBar> masterBar(unsigned) const;
+    std::set<DirectionMark> directionsAtBarIndex(int) const;
+    static QString directionToQString(DirectionMark);
 };
 class Beat;
 class Note;
@@ -143,6 +170,7 @@ static_assert(sizeof(MacroCommandRecorder) == 24 && alignof(MacroCommandRecorder
 class __declspec(dllimport) Note {
 public:
     int midi() const; int fret() const; unsigned string() const;
+    unsigned soundingMidi(bool) const; InstrumentSet::Type type() const;
     am::music::Accidental accidental() const;
     bool isPalmMuted() const; bool hasLetRing() const;
     bool isLeftHandTapped() const; bool isTapped() const;
@@ -150,6 +178,12 @@ public:
     unsigned slideFlags() const;
     bool isSlideValid() const; bool isShiftSlideDestination() const; bool isLegatoSlideDestination() const;
     bool isHarmonic() const; Harmonic::Type harmonicType() const; Harmonic::Fret harmonicFret() const;
+    bool isDead() const; bool isHopoOrigin() const; bool isHopoDestination() const;
+    bool hasOrnament() const; Ornament ornament() const;
+    unsigned accentFlags() const; bool isTrilled() const; unsigned trillMidi() const;
+    bool isBended() const; bool isBendValid() const;
+    float bendOriginValue() const; float bendMiddleValue() const; float bendDestinationValue() const;
+    float bendOriginOffset() const; float bendMiddleOffset1() const; float bendMiddleOffset2() const; float bendDestinationOffset() const;
     Vibrato vibrato() const; AntiAccent antiAccent() const;
     Fingering leftHandFingering() const; Fingering rightHandFingering() const;
 };
@@ -167,6 +201,8 @@ public:
     const TupletRatio &getTupletRatio(TupletLevel) const;
     bool hasTuplet(TupletLevel) const;
     QString toQString() const;
+    const am::utils::rational &getLength() const;
+    static Value noteValueFromTimeUnit(const am::utils::rational &);
 };
 static_assert(sizeof(RhythmValue) == 0x38 && alignof(RhythmValue) == 8);
 class __declspec(dllimport) Beat {
@@ -174,6 +210,17 @@ public:
     const std::vector<std::shared_ptr<Note>> &notes() const;
     bool isRest() const; bool isPlaceholder() const; const RhythmValue &rhythm() const;
     bool isLegatoOrigin() const; bool isLegatoDestination() const;
+    GraceType graceType() const; Direction pickStroke() const;
+    Fadding fadding() const; Hairpin hairpin() const; Golpe golpe() const; Ottavia ottavia() const;
+    bool isDeadSlapped() const;
+    bool hasTremolo() const; const am::utils::rational &tremolo() const;
+    Rasgueado rasgueado() const; Vibrato vibratoWTremBar() const;
+    bool isSlapped() const; bool isPopped() const;
+    Direction arpeggio() const; Direction brush() const;
+    bool canSetArpeggio() const; bool canSetBrush() const;
+    bool hasWhammyBar() const;
+    float whammyBarOriginValue() const; float whammyBarMiddleValue() const; float whammyBarDestinationValue() const;
+    float whammyBarOriginOffset() const; float whammyBarMiddleOffset1() const; float whammyBarMiddleOffset2() const; float whammyBarDestinationOffset() const;
 };
 class __declspec(dllimport) Voice {
 public:
@@ -185,14 +232,21 @@ public:
     const std::array<std::shared_ptr<Voice>, 4> &voices() const;
 };
 class __declspec(dllimport) GuitarTuning {
+    // QObject's two pointers followed by the native tuning implementation.
+    void *objectPrivate, *implementation;
 public:
+    GuitarTuning(const GuitarTuning &); virtual ~GuitarTuning();
     unsigned stringCount() const;
+    const std::vector<int> &midiNumbers() const; void setMidiNumbers(const std::vector<int> &);
 };
+static_assert(sizeof(GuitarTuning) == 24 && alignof(GuitarTuning) == 8);
 class __declspec(dllimport) Staff {
 public:
     const std::vector<std::shared_ptr<Bar>> &bars() const;
     GuitarTuning &tuning() const;
     int midi(unsigned, int) const;
+    unsigned char capoFret() const; unsigned char partialCapoFret() const;
+    const std::vector<bool> &partialCapoStringFlags() const;
 };
 class __declspec(dllimport) ScoreCursor {
     void *implementation; // Native constructor and clone allocate an 8-byte value.
@@ -234,13 +288,28 @@ public:
     const std::vector<std::shared_ptr<Staff>> &staves() const;
     unsigned barCount() const; unsigned staffCount() const;
     InstrumentSet::Type type() const; int transpositionOffset() const;
+    const InstrumentSet &instrumentSet() const;
     int defaultBarCountBySystem() const;
 };
 class __declspec(dllimport) Score {
 public:
+    // Seven floats, copied by the native entry and consumed in this order.
+    struct BendParam {
+        float originValue, middleValue, destinationValue;
+        float originOffset, middleOffset1, middleOffset2, destinationOffset;
+    };
+    static_assert(sizeof(BendParam) == 28 && alignof(BendParam) == 4);
+    struct WhammyBarParam {
+        float originValue, middleValue, destinationValue;
+        float originOffset, middleOffset1, middleOffset2, destinationOffset;
+    };
+    static_assert(sizeof(WhammyBarParam) == 28 && alignof(WhammyBarParam) == 4);
     const std::shared_ptr<ScoreModel> &modelPrivate() const;
     std::string property(ScoreProperty) const;
     void setStringedNoteFret(const ScoreModelIndex &, unsigned, int, am::music::Accidental);
+    void setMIDINote(const ScoreModelRange &, unsigned);
+    void createNonPitchedNote(const ScoreModelRange &, const RhythmValue &, const InstrumentArticulation &);
+    void removeNonPitchedNoteFromMidiAndString(const ScoreModelIndex &, unsigned, unsigned);
     void setStringedNote(const ScoreModelRange &, bool, int, int, am::music::Accidental, const RhythmValue &);
     void clearBeat(const ScoreModelIndex &); void removeBeat(const ScoreModelIndex &);
     void removeBeatRange(const ScoreModelRange &);
@@ -265,6 +334,28 @@ public:
     void setStringedNoteNaturalHarmonic(const ScoreModelRange &, bool, Harmonic::Fret);
     void setStringedNoteArtificialHarmonic(const ScoreModelRange &, bool, Harmonic::Type, Harmonic::Fret);
     void unsetStringedNoteHarmonic(const ScoreModelRange &);
+    void setStringedNoteBend(const ScoreModelRange &, bool, BendParam, bool);
+    void setStringedNoteDead(const ScoreModelRange &, bool, int, int);
+    void setStringedNoteHopo(const ScoreModelRange &, bool, bool);
+    void setNoteOrnament(const ScoreModelRange &, bool, Ornament);
+    void setNoteAccentFlag(const ScoreModelRange &, bool, AccentFlag);
+    void setNoteTrill(const ScoreModelRange &, bool, unsigned, unsigned);
+    void setBeatGraceNotes(const ScoreModelRange &, bool, GraceType);
+    void setBeatPickStroke(const ScoreModelRange &, bool, Direction);
+    void setBeatFadding(const ScoreModelRange &, bool, Fadding);
+    void setBeatHairpin(const ScoreModelRange &, bool, Hairpin);
+    void setBeatGolpe(const ScoreModelRange &, bool, Golpe);
+    void setBeatOttavia(const ScoreModelRange &, bool, Ottavia, bool);
+    void setBeatDeadSlapped(const ScoreModelRange &, bool);
+    void setBeatTremolo(const ScoreModelRange &, bool, const am::utils::rational &);
+    void setBeatRasgueado(const ScoreModelRange &, Rasgueado);
+    void setStringedBeatBassAttack(const ScoreModelRange &, bool, BassAttack);
+    void setStringedBeatVibrato(const ScoreModelRange &, bool, Vibrato);
+    void setArpeggioPattern(const ScoreModelRange &, const std::vector<Direction> &, bool);
+    void setBrushPattern(const ScoreModelRange &, const std::vector<Direction> &, bool);
+    void setBeatArpeggio(const ScoreModelRange &, bool, Direction, int, float);
+    void setBrush(const ScoreModelRange &, bool, Direction, int, float);
+    void setStringedBeatWhammyBar(const ScoreModelRange &, bool, WhammyBarParam);
     void createBars(unsigned, unsigned); void removeBarRange(unsigned, unsigned);
     void createBeat(const ScoreModelRange &, const RhythmValue &);
     void setProperty(ScoreProperty, const std::string &);
@@ -273,6 +364,8 @@ public:
     void setMasterBarKeySignature(const ScoreModelRange &, bool, const KeySignature &, bool);
     void setBarRepeatStart(const ScoreModelRange &, bool);
     void setBarRepeatEnd(const ScoreModelRange &, bool, int);
+    void setBarAlternateEndings(const ScoreModelRange &, bool, int, bool);
+    void setBarDirection(const ScoreModelRange &, bool, DirectionMark);
     void setMasterBarDoubleBar(const ScoreModelRange &, bool);
     void setMasterBarFreeTime(const ScoreModelRange &, bool);
     unsigned trackCount() const;
@@ -285,6 +378,9 @@ public:
     void setTrackPlaybackState(TrackBase &, PlaybackState);
     void setTrackChannelStripParameter(TrackBase &, unsigned, float);
     void setTrackColor(TrackBase &, const am::utils::Color &);
+    void setTrackTranspositionOffset(Track &, int);
+    void transposeTrackBySemitones(const ScoreModelRange &, int, bool, bool, bool);
+    void setGuitarFullTuning(Staff &, const GuitarTuning &, int, int, const std::vector<bool> &, bool);
     ScoreCursor &cursor();
     bool undoAvailable() const; bool redoAvailable() const;
     void undo(); void redo();
@@ -296,6 +392,14 @@ __declspec(dllimport) float convertTempo(float, TempoUnit, TempoUnit);
 __declspec(dllimport) std::string vibratoToString(Vibrato);
 __declspec(dllimport) std::string antiAccentToString(AntiAccent);
 __declspec(dllimport) std::string fingeringToString(Fingering);
+__declspec(dllimport) std::string ornamentToString(Ornament);
+__declspec(dllimport) std::string graceTypeToString(GraceType);
+__declspec(dllimport) std::string directionToString(Direction);
+__declspec(dllimport) std::string faddingToString(Fadding);
+__declspec(dllimport) std::string hairpinToString(Hairpin);
+__declspec(dllimport) std::string golpeToString(Golpe);
+__declspec(dllimport) std::string ottaviaToString(Ottavia);
+__declspec(dllimport) std::string rasgueadoToString(Rasgueado);
 }
 namespace gp::rse {
 class __declspec(dllimport) Metronome {

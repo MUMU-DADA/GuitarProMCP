@@ -162,7 +162,7 @@ try {
         $destination=(Beat $expected (Point 0 1)).notes[0]
         $previous.tie.origin=$true
         $destination.tie.destination=$true
-        $destination.fret=0;$destination.midi=40;$destination.accidental=0
+        $destination.fret=0;$destination.midi=40;$destination.sounding_midi=40;$destination.accidental=0
         $result=Link tie $true cursor $(if($single){0}else{-1})
         Assert ((Json (Model)) -eq (Json $expected)) 'Tie changed unexpected notes, strings or rhythm'
         Assert ($result.changed_selected_beats -eq 1 -and $result.observed_beats[0].notes[0].tie.destination) 'Tie result did not report destination'
@@ -223,7 +223,7 @@ try {
     (Beat $expected (Point 0 3)).notes[0].tie.origin=$true
     foreach($p in @((Point 1 0),(Point 1 1))){
         $note=(Beat $expected $p).notes[0]
-        $note.tie.destination=$true;$note.fret=0;$note.midi=45;$note.accidental=0
+        $note.tie.destination=$true;$note.fret=0;$note.midi=45;$note.sounding_midi=45;$note.accidental=0
     }
     (Beat $expected (Point 1 0)).notes[0].tie.origin=$true
     Link tie $true selection | Out-Null
@@ -255,7 +255,7 @@ try {
                         foreach($index in 1..$last){
                             $note=(Beat $expected (Point 0 $index $track $voice)).notes[0]
                             $note.tie.destination=$true;$note.tie.origin=$index -lt $last
-                            $note.fret=if($voice -eq 0){0}else{5};$note.midi=if($voice -eq 0){40}else{45};$note.accidental=0
+                            $note.fret=if($voice -eq 0){0}else{5};$note.midi=if($voice -eq 0){40}else{45};$note.sounding_midi=$note.midi;$note.accidental=0
                         }
                     }
                 }
