@@ -1,5 +1,6 @@
-param([string]$Exe = 'C:\Program Files\Arobas Music\Guitar Pro 8\GuitarPro.exe', [string]$SessionFile)
+param([string]$Exe = 'C:\Program Files\Arobas Music\Guitar Pro 8\GuitarPro.exe', [string]$SessionFile, [string]$PackageDirectory)
 $ErrorActionPreference = 'Stop'
+if ($PackageDirectory -and -not $SessionFile) { throw 'Package regression requires an autoloaded installed session.' }
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $Exe = (Resolve-Path -LiteralPath $Exe).Path
 $root = Split-Path -Parent $PSScriptRoot
@@ -25,6 +26,20 @@ if ($SessionFile) {
     $process = & "$root/start-plugin.ps1" -Exe $Exe -ScorePath $fixture -SessionFile $sessionFile -PassThru
 }
 $descriptor = Get-Content -LiteralPath $sessionFile -Raw | ConvertFrom-Json
+$loadedBinaries = @($process.Modules | Where-Object ModuleName -In @('guitarpro_mcp.dll','guitarpro_mcp_autoload.dll') | ForEach-Object {
+    @{name=$_.ModuleName;path=$_.FileName;sha256=(Get-FileHash -LiteralPath $_.FileName).Hash}
+})
+if ($PackageDirectory) {
+    $manifest = Get-Content -LiteralPath (Join-Path $PackageDirectory 'package.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+    foreach ($file in $manifest.files) {
+        $actual = @($loadedBinaries | Where-Object name -EQ ([IO.Path]::GetFileName($file.path)))
+        if ($actual.Count -ne 1 -or $actual[0].sha256 -ne $file.sha256 -or
+            $actual[0].path -ne (Join-Path (Split-Path -Parent $Exe) $file.path) -or
+            (Get-FileHash -LiteralPath (Join-Path $PackageDirectory $file.path)).Hash -ne $file.sha256) {
+            throw 'Loaded installation differs from the regression package.'
+        }
+    }
+}
 if (-not ('GpmcpRegressionProcess' -as [type])) {
     Add-Type @'
 using System;
@@ -109,11 +124,8 @@ try {
         $complete = $true
     } finally { if (-not $process.HasExited) { Close-McpSession $connection } }
 } finally {
-    $sourceFiles = @('guitarpro_mcp.cpp','guitarpro_api.h','guitarpro_abi.h','gpcore.def','guitarpro_clipboard.h','mcp_server.cpp','object_registry.h','host_build.h','plugin_config.h','autoload.cpp','plugin_status.h','test-all.ps1','test-notation.ps1','test-instruments.ps1','test-score-form.ps1','test-connections.ps1','test-clipboard.ps1','test-transfer.ps1')
-    $sourceFiles += @('guitarpro_audio.h','gprse.def','amaudio.def','test-audio.ps1','supported-host.json')
-    $sourceFiles += @('guitarpro_io.h','amutils.def','test-p6.ps1','test-exchange.ps1','build.ps1')
-    $hashes = @($sourceFiles | ForEach-Object { Get-FileHash -LiteralPath (Join-Path $PSScriptRoot $_) | Select-Object Path,Hash })
-    @{complete=$complete;host_pid=$descriptor.pid;exit_code=$exitCode;checks=($results | Measure-Object -Property checks -Sum).Sum;suites=$results;fixture_restorations=$fixtureRestorations;sources=$hashes;powershell=$PSVersionTable.PSVersion.ToString();plugin_sha256=(Get-FileHash -LiteralPath "$root/.tools/native/plugins/generic/guitarpro_mcp.dll").Hash;autoload_sha256=(Get-FileHash -LiteralPath "$root/.tools/native/plugins/imageformats/guitarpro_mcp_autoload.dll").Hash;host_exe=$Exe;host_sha256=(Get-FileHash -LiteralPath $Exe).Hash} |
+    $hashes = @(Get-ChildItem -LiteralPath $PSScriptRoot -File | Where-Object Extension -In @('.h','.cpp','.ps1','.def','.json') | Get-FileHash | Select-Object Path,Hash)
+    @{complete=$complete;host_pid=$descriptor.pid;exit_code=$exitCode;checks=($results | Measure-Object -Property checks -Sum).Sum;suites=$results;fixture_restorations=$fixtureRestorations;sources=$hashes;powershell=$PSVersionTable.PSVersion.ToString();package=$PackageDirectory;loaded_binaries=$loadedBinaries;plugin_sha256=($loadedBinaries | Where-Object name -EQ 'guitarpro_mcp.dll').sha256;autoload_sha256=($loadedBinaries | Where-Object name -EQ 'guitarpro_mcp_autoload.dll').sha256;host_exe=$Exe;host_sha256=(Get-FileHash -LiteralPath $Exe).Hash} |
         ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $run 'regression.json') -Encoding UTF8
     if (-not $process.HasExited) { Write-Warning "Regression host retained for inspection: PID $($process.Id), session $sessionFile" }
     $process.Dispose()

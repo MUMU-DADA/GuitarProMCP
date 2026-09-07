@@ -1,6 +1,6 @@
 # 原生控制覆盖清单
 
-更新日期：2026-09-07。目标是无需输入模拟、无需前台窗口的完整 Guitar Pro MCP 插件。**该目标仍在进行中。** 以下按照具体能力记录证据，不以 DLL 加载成功、菜单可枚举或导出符号存在代替功能完成。
+更新日期：2026-09-08。目标是无需输入模拟、无需前台窗口的完整 Guitar Pro MCP 插件。P0–P7 已按已声明范围完成；未实现、实验性和宿主限制仍在各节明确列出。以下按照具体能力记录证据，不以 DLL 加载成功、菜单可枚举或导出符号存在代替功能完成。
 
 完整 P0–P7 阶段、执行顺序和验收标准见 [开发计划](DEVELOPMENT_PLAN.md)。本清单记录操作覆盖与验证证据，两份文档的未完成项共同构成交付范围。
 
@@ -46,6 +46,34 @@
 | 兼容性与可靠性 | 多文档、并发、长时间运行、取消、异常路径、宿主升级，以及安装和卸载体验 |
 
 ## 当前验证证据
+
+### P7 验收
+
+状态：已完成（2026-09-08）。按本次最小发布范围复用 P0–P6 的已实现功能，不扩展其他宿主版本或已排除的功能。双客户端、十份文档、至少 100 次循环和一小时混合使用均已完成；AMNetwork 快速退出仍是明确的厂商限制。
+
+候选包：`artifacts/GuitarProMCP-0.3.0-9d6312e4f62d43ec8215e2eb21285f7d.zip`。核心 SHA-256 为 `90F2FD97B1BB3716B7D0A105BA3FAB94ED939B1BA2CE891B4365C7780DF5D642`；自动加载器为 `B713945BCE9B877270074B4A958191532DEE34DDC84A021F69DF448965E6A56D`。原生源码与 P6 构建记录一致，无需重编译或新增运行时依赖。候选包含更新后的中文诊断恢复及支持边界说明。
+
+| 检查 | 当前结果 | 证据 |
+| --- | --- | --- |
+| 安装包自动加载后的完整功能回归 | 22 组、4153 项通过，正常退出 0，连接描述已清理；记录实际加载 DLL，覆盖全部既有功能及 P6 生产 WAV 输出 | `artifacts/regression-3b3d86d9c1c645b3957283293718d97a/regression.json` |
+| 安装文件归属、不同 DLL 回滚、中文配置 | PowerShell 7 与 5.1 各 33 项通过 | `artifacts/installer-files-858f089c40bb4b4586f993c18e88707e/verification.json`、`artifacts/installer-files-925a69d6632f48a6a23033e33f8764a9/verification.json` |
+| 手动安装包结构与脚本兼容 | 8 项通过；三个文件、DLL 与候选包一致、更新及卸载正确 | `artifacts/p7-manual-cc0564cb868547ff82ccc59a9dcceeae/verification.json` |
+| 宿主兼容清单 | Windows x64 Guitar Pro 8.1.1.17，10 个宿主文件哈希一致 | `artifacts/p7-host-matrix.json` |
+| 持续运行与资源回落 | 124 个周期、3748 秒（约 62.5 分钟）、28 项收尾检查；两个客户端、10 份文档、大型 514 小节曲谱、保存重开、播放推进和实例清理通过。混合阶段私有内存约 472→598 MiB，关闭文档后约 522 MiB；句柄 772→674、线程 54→21，文档 10→0，IDocument 22→2，未见文档或音频对象随循环累积 | `artifacts/p7-soak-391766fe4f194074b85abc6667a0c367/hour-acceptance.json`、同目录 `resources.jsonl` |
+| 设置跨重启 | 12 项通过；GUI 高亮和音频缓冲区写入、重启读回、恢复原值并再次重启读回均通过，原设置已恢复 | `artifacts/p7-settings-06c6c346522c4d02b6eaaa95a4a732c1/verification.json` |
+| 实例、重连和入口转发 | 72 项通过；默认端口、端口回退、双客户端、MCP Inspector 2.5.0、重启旧身份拒绝及文件关联 DDE 通过；独立 GUI 多进程仍按宿主限制不计 | `artifacts/instances-8e18878f8eb1431a9b4fbf039a947a82/verification.json` |
+| 普通退出路径 | 8/8 通过；后台/可见、generic/autoload、窗口/动作退出均为 0 并清理实例文件，启动等待 30000 ms | `artifacts/shutdown-bec6bc4eaaf94e34992dcccf6aa0bda/verification.json` |
+| 候选包快速退出路径 | 8/8 通过；在端点就绪后立即关闭仍正常退出。真正启动瞬间的 AMNetwork 挂起由无 MCP 核心基线复现，继续作为厂商限制 | `artifacts/shutdown-85748e58eadd437bad57c70feb72d156/verification.json`、`artifacts/exit-baseline-ee2f813e0b8343d7856fa611439c315e/` |
+| 保存与标签故障恢复 | 保存恢复 380 项；标签恢复 405 项；关闭干净文档并在恢复期间新增文档分支 397 项，均正常退出 | `artifacts/save-recovery-2718d30fff4147539f75c507e6af7c3e/verification.json`、`artifacts/tab-recovery-a87c5d2abe37489f850dee9d0522b725/verification.json`、`artifacts/tab-recovery-9fc4d2d306c94615a28e07ff150a1f3a/verification.json` |
+| 真实安装生命周期与入口 | 真实 `Program Files` 目录 52 项；更新、安装、停用/启用、卸载、重装、设置凭据保留通过。普通用户 EXE、快捷方式、文件关联和后台入口 68 项通过 | `artifacts/installed-lifecycle-88b4e0a3be3440c8af820ab3bc16a2c5/verification.json`、`artifacts/installed-entrypoints-a52fae8a2a47432181b345aaa1cf8c41/verification.json` |
+
+持续运行期间资源有约 126 MiB 的混合阶段增长，但关闭十份文档后回落约 76 MiB，句柄、线程、文档及音频文档对象均回落；这支持“未观察到文档生命周期泄漏”的结论，不把宿主缓存误称为零增长。候选包的 `native/test-audio.ps1 -Render` 本次生成了 89 项 PCM 证据但结束时留下未保存对话框，`complete=false`，因此不计为完整通过；P6 生产 WAV 证据仍有效。
+
+持续运行夹具由原生模板、剪贴板和保存生成，含吉他、钢琴双谱表、打击乐、多声部及速度自动化，共 514 小节。GPIF 会复用相同的节拍和音符节点，因此按实际引用次数统计规模，不能仅数唯一 XML 节点。嵌套连音、长连接链、移调乐器和复杂反复跳转由上述完整回归覆盖。
+
+保留的测试准备失败：空声部光标断言为 `p7-soak-c065127ef4e646c99c4fc0b7ed022522`；安装记录替换瞬时失败且 DLL 已回滚为 `p7-soak-7606140e199f42c3a45cd37b5f5d7dc8`；GPIF 去重导致初始规模计数错误为 `p7-soak-ed76188d5f6842ebb1b869a9df9efc15`；修正固定客户端配置保留断言前主动停止的准备运行为 `p7-soak-e983631297934756a466df9e95a94ab9`。这些目录均在 `artifacts/`，不计为持续运行通过，测试宿主均已正常关闭。
+
+AMNetwork 快速退出继续作为明确的最小发布范围限制，不计为修复或通过；首版不承诺启动期间立即退出可靠。诊断、正常关闭失败后的处理和凭据脱敏要求见 [安装说明](INSTALL.md#故障恢复与支持边界)。
 
 ### P1 验收
 
