@@ -6,7 +6,7 @@
 MCP 客户端 -> 本机 HTTP /mcp -> GuitarPro.exe 内的 C++ 插件 -> Qt/GPCore 原生文档模型
 ```
 
-当前发布范围为 Windows x64 的 Guitar Pro **8.1.1.17**。P0-P7 已按声明范围完成验收；系统剪贴板互通、独立 GUI 多进程、原生标签拖动、原生保存进度取消和部分宿主可靠性场景仍是实验项或宿主限制。当前状态和证据以 [覆盖清单](docs/COVERAGE.md) 为准。
+当前发布范围为 Windows x64 的 Guitar Pro **8.1.1.17**。P0-P7 已按声明范围完成验收。系统剪贴板互通、独立 GUI 多进程、原生标签拖动、原生保存进度取消和部分宿主可靠性场景仍是实验项或宿主限制。当前状态和证据以 [覆盖清单](docs/COVERAGE.md) 为准。
 
 ## 文档入口
 
@@ -15,7 +15,7 @@ MCP 客户端 -> 本机 HTTP /mcp -> GuitarPro.exe 内的 C++ 插件 -> Qt/GPCor
 | 最终用户 | [docs/INSTALL.md](docs/INSTALL.md) | 安装、更新、启停、卸载和故障恢复 |
 | 开发者 | [native/README.md](native/README.md) | 构建、连接、协议边界、工具参数和测试入口 |
 | 验收/维护 | [docs/COVERAGE.md](docs/COVERAGE.md) | 当前能力、边界和最新证据 |
-| 历史追溯 | [docs/DEVELOPMENT_PLAN.md](docs/DEVELOPMENT_PLAN.md) | 阶段计划和历史检查点，不定义当前目标 |
+| 历史追溯 | [docs/DEVELOPMENT_PLAN.md](docs/DEVELOPMENT_PLAN.md) | 历史阶段和验收检查点 |
 | 自动加载 | [native/AUTOLOAD.md](native/AUTOLOAD.md) | Qt 加载入口和探针验证 |
 | 协作规范 | [AGENTS.md](AGENTS.md) | 唯一的目标、范围和质量门槛来源 |
 
