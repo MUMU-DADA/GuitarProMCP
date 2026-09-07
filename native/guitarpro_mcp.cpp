@@ -25,6 +25,7 @@
 #include "discovery.h"
 #include "guitarpro_api.h"
 #include "guitarpro_audio.h"
+#include "guitarpro_io.h"
 #include "guitarpro_clipboard.h"
 #include "object_registry.h"
 #include <QtCore/QEvent>
@@ -64,6 +65,7 @@ class Bridge : public QObject {
     QString loadingKind;
     QPointer<QDialog> loadModal;
     QJsonObject saving;
+    QJsonObject exporting;
     QJsonObject moving;
     std::function<QJsonObject()> pendingRecovery;
     QString recoveryRequest;
@@ -225,14 +227,22 @@ class Bridge : public QObject {
 
     void checkOpening() {
         if (!openingPoll.isActive()) return;
+        auto midiDialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+        if (loadingKind == "open" && QSet<QString>{"mid", "midi"}.contains(QFileInfo(opening.value("path").toString()).suffix().toLower()) &&
+            midiDialog && QByteArray(midiDialog->metaObject()->className()) == "gp::gui::MidiImportDialog") {
+            loadModal = midiDialog;
+            opening["dialog"] = modalState();
+            openingElapsed.restart();
+            return;
+        }
         if (loadNativeActive && loadingKind == "open") {
             if (QApplication::activeModalWidget()) opening["dialog"] = modalState();
             return;
         }
         for (const auto &document : guitarpro::documents()) {
-            if (document.score && QFileInfo(document.object->property("openedFilePath").toString()).canonicalFilePath().compare(opening.value("path").toString(), Qt::CaseInsensitive) == 0) {
+            if (document.score && QFileInfo(guitarpro::localDocumentPath(document.object->property("openedFilePath").toString())).canonicalFilePath().compare(opening.value("path").toString(), Qt::CaseInsensitive) == 0) {
                 opening["status"] = "opened"; opening["document"] = document.id();
-                opening.remove("error"); opening.remove("outcome_unknown"); openingPoll.stop(); return;
+                opening.remove("error"); opening.remove("outcome_unknown"); opening.remove("dialog"); openingPoll.stop(); return;
             }
         }
         if (opening.value("status") == "cancelling" && opening.value("cancel_decision_available").toBool()) { opening["status"] = "cancelled"; openingPoll.stop(); return; }
@@ -249,7 +259,7 @@ class Bridge : public QObject {
             QJsonObject &operation = kind == "open" ? opening : creation;
             if (operation.value("request") != request || operation.value("status") != "scheduled") return;
             operation["status"] = "requested";
-            if (kind == "open") {
+            if (kind == "open" && QFileInfo(path).suffix().compare("gp", Qt::CaseInsensitive) == 0) {
                 const QString validation = guitarpro::validateGpFile(path);
                 if (!validation.isEmpty()) {
                     operation["status"] = "error"; operation["error"] = validation; operation["failure_stage"] = "validation";
@@ -311,13 +321,18 @@ class Bridge : public QObject {
     }
 
     QJsonObject cancelOperation(const QString &request) {
-        for (auto operation : {&creation, &opening, &closing, &saving, &moving}) {
+        for (auto operation : {&creation, &opening, &closing, &saving, &moving, &exporting}) {
             if (operation->value("request") != request) continue;
             if (!pending(*operation)) return {{"error", "Operation already completed"}, {"operation", *operation}};
             if (operation->value("status") == "scheduled") {
                 (*operation)["status"] = "cancelled";
                 if (operation == &creation) { creationPoll.stop(); creationBefore.clear(); }
                 if (operation == &opening) openingPoll.stop();
+                return *operation;
+            }
+            if (operation == &exporting) {
+                (*operation)["cancel_requested"] = true;
+                (*operation)["status"] = "cancelling";
                 return *operation;
             }
             if (operation == savingOperation && saveModal && saveModal == QApplication::activeModalWidget()) {
@@ -346,7 +361,7 @@ class Bridge : public QObject {
                     });
                     return *operation;
                 }
-            } else if (loadNativeActive && loadModal == QApplication::activeModalWidget() && loadModal &&
+            } else if ((loadNativeActive || (operation == &opening && loadModal && QByteArray(loadModal->metaObject()->className()) == "gp::gui::MidiImportDialog")) && loadModal == QApplication::activeModalWidget() && loadModal &&
                        ((operation == &opening && loadingKind == "open") || (operation == &creation && loadingKind == "create"))) {
                 (*operation)["status"] = "cancelling";
                 bool cancelAvailable = false;
@@ -357,7 +372,7 @@ class Bridge : public QObject {
                 const QString kind = loadingKind;
                 QTimer::singleShot(0, this, [this, dialog, kind, request]() {
                     if ((kind == "open" ? opening : creation).value("request") == request && loadingKind == kind &&
-                        loadNativeActive && dialog && dialog == QApplication::activeModalWidget()) dialog->reject();
+                        dialog && dialog == QApplication::activeModalWidget()) dialog->reject();
                 });
                 return *operation;
             }
@@ -430,6 +445,89 @@ class Bridge : public QObject {
         QList<QPointer<QObject>> result = registry.objects();
         for (const auto &object : nativeObjects) if (object) result.append(object);
         return result; // native operations may destroy objects in this snapshot
+    }
+
+    QJsonObject preferences(const QJsonObject &args) const {
+        const QString scope = args.value("scope").toString("application");
+        const QString operation = args.value("operation").toString("state");
+        if (scope != "application") return {{"error", "scope must be application; use gp_presentation for document settings"}};
+        QObject *object = nullptr;
+        QStringList allowed;
+        {
+            const QString model = args.value("model").toString();
+            const QHash<QString, QStringList> models{
+                {"general", {"embedAudioFiles", "restoreOpenFile", "zoom"}},
+                {"gui", {"autoOpenFxPopup", "highlightBar", "includeChordsInCopyPaste", "playSoundWhileEditing", "useMediaKeys"}},
+                {"score", {"barLengthError", "hoPoError", "outOfRangeError", "tupletError", "unreachableBarError"}}
+            };
+            if (!models.contains(model)) return {{"error", "model must be general, gui or score"}};
+            allowed = models.value(model);
+            const QString className = model == "general" ? "gp::base::GeneralPreferencesModel" : model == "gui" ? "gp::base::GUIPreferencesModel" : "gp::base::ScorePreferencesModel";
+            for (const auto &candidate : services()) if (candidate && QByteArray(candidate->metaObject()->className()) == className) {
+                if (object) return {{"error", "Ambiguous native preference model"}};
+                object = candidate;
+            }
+            if (!object) return {{"error", "Native preference model unavailable"}};
+        }
+        QJsonObject values;
+        for (const auto &name : allowed) {
+            const int index = object->metaObject()->indexOfProperty(name.toLatin1().constData());
+            if (index < 0) continue;
+            const auto property = object->metaObject()->property(index);
+            if (property.isReadable()) values[name] = QJsonValue::fromVariant(property.read(object));
+        }
+        if (operation == "state") return {{"scope", scope}, {"model", args.value("model")}, {"values", values}, {"undoable", false}};
+        if (operation != "set") return {{"error", "operation must be state or set"}};
+        const QString name = args.value("property").toString();
+        if (!allowed.contains(name)) return {{"error", "property is not in the explicit preference allowlist"}};
+        const int index = object->metaObject()->indexOfProperty(name.toLatin1().constData());
+        if (index < 0 || !object->metaObject()->property(index).isWritable()) return {{"error", "Native preference property is unavailable or read-only"}};
+        const auto property = object->metaObject()->property(index);
+        const auto input = args.value("value");
+        if ((property.userType() == QMetaType::Bool && !input.isBool()) ||
+            (name == "zoom" && (!input.isDouble() || !std::isfinite(input.toDouble()) || input.toDouble() < 0.25 || input.toDouble() > 4)))
+            return {{"error", "Use a boolean for flags or a zoom from 0.25 to 4"}};
+        QVariant value = args.value("value").toVariant();
+        if (!value.convert(property.userType())) return {{"error", "Preference value has the wrong type"}};
+        const QVariant before = property.read(object);
+        if (!property.write(object, value) || property.read(object) != value) {
+            const bool restored = property.write(object, before) && property.read(object) == before;
+            return {{"error", restored ? "Preference change failed; previous value restored" : "Preference change failed; inspect native preferences"}, {"scope", scope}};
+        }
+        values[name] = QJsonValue::fromVariant(property.read(object));
+        return {{"scope", scope}, {"model", args.value("model")}, {"values", values}, {"undoable", false}};
+    }
+
+    QJsonObject midiImport(const QJsonObject &args) {
+        if (args.value("request") != opening.value("request") || !openingPoll.isActive() || !loadModal ||
+            loadModal != QApplication::activeModalWidget() || QByteArray(loadModal->metaObject()->className()) != "gp::gui::MidiImportDialog")
+            return {{"error", "The request has no active MIDI import dialog"}};
+        QObject *settings = nullptr;
+        for (const auto &candidate : services()) if (candidate && QByteArray(candidate->metaObject()->className()) == "gp::base::MidiImportSettingsModel") {
+            if (settings) return {{"error", "Ambiguous native MIDI options"}};
+            settings = candidate;
+        }
+        if (!settings) return {{"error", "Native MIDI options unavailable"}};
+        const QStringList fields{"dot", "is2ChannelsPerTrack", "live", "multivoice", "quantization", "staccato", "triplet"};
+        const QString operation = args.value("operation").toString("state");
+        if (operation == "set") {
+            const QString name = args.value("property").toString();
+            const auto value = args.value("value");
+            if (!fields.contains(name) || (name == "quantization" ? (!value.isDouble() || value.toDouble() != value.toInt() || value.toInt() < 2 || value.toInt() > 8) : !value.isBool()))
+                return {{"error", "Choose a MIDI boolean option or quantization 2..8 (whole..64th)"}};
+            if (!settings->setProperty(name.toLatin1().constData(), value.toVariant())) return {{"error", "Native MIDI option could not be set"}};
+        } else if (operation == "accept") {
+            const QPointer<QDialog> dialog = loadModal;
+            QTimer::singleShot(0, this, [this, dialog]() {
+                if (dialog && dialog == loadModal && dialog == QApplication::activeModalWidget()) {
+                    if (auto button = dialog->findChild<QAbstractButton *>("newScoreButton")) button->click();
+                    dialog->accept();
+                }
+            });
+        } else if (operation != "state") return {{"error", "operation must be state, set or accept; use gp_cancel to cancel"}};
+        QJsonObject values;
+        for (const auto &name : fields) values[name] = QJsonValue::fromVariant(settings->property(name.toLatin1().constData()));
+        return {{"scope", "import"}, {"request", opening.value("request")}, {"values", values}, {"status", operation == "accept" ? "scheduled" : "observed"}};
     }
 
     QList<QObject*> objects() const {
@@ -617,6 +715,8 @@ class Bridge : public QObject {
         if (qEnvironmentVariableIsSet("GPMCP_DEVELOPMENT")) add("gp_debug_objects", "开发用：从已知 Qt 对象读取关联的 C++ RTTI，定位原生模型。", {});
         if (qEnvironmentVariableIsSet("GPMCP_DEVELOPMENT")) add("gp_audio_probe", "开发验收：原生渲染最多 30 秒测试曲谱，返回 PCM 帧数、能量和哈希。", {{"document", str}});
         add("gp_audio_device", "原生全局音频设备：state/set。property/value 必须来自返回的 choices；修改前停止播放，不加入曲谱撤销栈。", {{"operation", str}, {"property", str}, {"value", QJsonObject{{"anyOf", QJsonArray{str, integer}}}}});
+        add("gp_preferences", "读取或设置明确允许的全局原生偏好。scope 为 application，model 为 general/gui/score。文档设置使用 gp_presentation。设置失败会恢复旧值。", {{"scope", str}, {"model", str}, {"operation", str}, {"property", str}, {"value", QJsonObject{{"anyOf", QJsonArray{boolean, QJsonObject{{"type", "number"}}}}}}});
+        add("gp_presentation", "读取或设置文档页面、缩放、编辑显示和谱表可见性。页面尺寸/边距使用毫米；一次只设置页面、视图或谱表一组。standard_notation、tablature 使用宿主原生曲谱模型。", {{"document", str}, {"operation", str}, {"width", QJsonObject{{"type", "number"}}}, {"height", QJsonObject{{"type", "number"}}}, {"left", QJsonObject{{"type", "number"}}}, {"top", QJsonObject{{"type", "number"}}}, {"right", QJsonObject{{"type", "number"}}}, {"bottom", QJsonObject{{"type", "number"}}}, {"orientation", str}, {"zoom", QJsonObject{{"type", "number"}}}, {"design_mode", boolean}, {"multivoice_edition", boolean}, {"track", integer}, {"standard_notation", boolean}, {"tablature", boolean}});
         if (qEnvironmentVariableIsSet("GPMCP_DEVELOPMENT")) add("gp_debug_resources", "开发用：只读枚举宿主嵌入的 Qt 资源路径。", {{"query", str}});
         add("gp_templates", "枚举宿主内置曲谱模板，供 gp_new 使用。", {});
         add("gp_edit_connection", "原生编辑连奏和延音线，支持撤销。kind 为 legato/tie，enabled 必填；scope 为 cursor（默认）或 selection。cursor 的 legato 连接下一拍，tie 连接前一拍；tie 可用 string 指定单音，省略时整拍处理，可能改写音高/升降号或补入音符。selection 支持跨声部/音轨，沿用 128 小节、20000 拍上限。返回 observed_beats 和 changed_selected_beats，后者不含选区外的相邻端点；status=executed 不保证每个音符都可连接。重复命令可能增加原生撤销记录。", {{"document", str}, {"kind", str}, {"enabled", boolean}, {"scope", str}, {"string", integer}}, {"kind", "enabled"});
@@ -648,7 +748,10 @@ class Bridge : public QObject {
         add("gp_activate", "通过原生文档导航方法切换指定文档并读回活动文档；无需前台窗口。", {{"document", str}}, {"document"});
         add("gp_move_document", "将指定文档标签移动到从 0 开始的 index，保留活动文档、曲谱内容和撤销历史；同步返回结果及 request，可用 gp_operation 查阅。失败时尝试恢复完整原顺序；rolled_back=false 且 outcome_unknown=true 时阻止后续修改。位置从 gp_documents.tab_index 读取；仅改变会话标签顺序，不加入曲谱撤销栈。", {{"document", str}, {"index", integer}}, {"document", "index"});
         add("gp_playback", "原生播放：state/play/stop/seek/seek_tick/set_loop/set_metronome/set_countdown。seek 使用原谱 bar 和小节内 tick；seek_tick 使用展开绝对 tick。timeline 分页读取实际反复/跳转序列。set_loop_range 用 base/extent（含端点）设置原生选区并启用循环；clear_loop_range 清选区并关闭循环。状态包含实际循环边界和帧数。", {{"document", str}, {"operation", str}, {"bar", integer}, {"tick", integer}, {"enabled", boolean}, {"base", endpoint}, {"extent", endpoint}, {"offset", integer}, {"limit", integer}, {"value", QJsonObject{{"type", "number"}}}});
-        add("gp_open", "通过宿主原生文件打开事件异步打开已有 .gp 文件；用 gp_documents 的路径读回确认完成。", {{"path", str}}, {"path"});
+        add("gp_formats", "读取宿主注册的曲谱导入导出格式。", {});
+        add("gp_midi_import", "按 gp_open 的 request 读取或设置当前 MIDI 导入选项：state/set/accept；set 用 property/value，quantization 为 2..8（全音符至64分），其他选项布尔。accept 导入新文档，轮询 gp_operation；取消使用 gp_cancel。", {{"request", str}, {"operation", str}, {"property", str}, {"value", QJsonObject{{"anyOf", QJsonArray{boolean, integer}}}}}, {"request"});
+        add("gp_export", "异步原生导出 GP5、GPX、MusicXML、MIDI、WAV、PDF 或 PNG；已有目标须 overwrite=true。PNG page 从 1 开始，默认第一页，144 DPI。轮询 gp_operation 的 exported/result，gp_cancel 在提交目标前取消。WAV 为 44.1 kHz 双声道 16 位，最多 30 分钟。", {{"document", str}, {"path", str}, {"overwrite", boolean}, {"page", integer}}, {"document", "path"});
+        add("gp_open", "通过宿主原生文件打开事件异步打开 GP、GP3/4/5、GPX、MIDI、MusicXML；用 gp_operation 和 gp_documents 确认结果。", {{"path", str}}, {"path"});
         add("gp_close", "异步关闭文档；unsaved: reject（默认）、save、discard、cancel、prompt。save 可指定 path 和 overwrite；轮询 gp_documents.closing 确认结果。", {{"document", str}, {"unsaved", str}, {"path", str}, {"overwrite", boolean}}, {"document"});
         add("gp_documents", "按标签顺序读取实时文档 ID、tab_index、原生打开路径、保存路径和未保存状态；另存成功后两种路径都更新。映射不可用时 tab_order_available=false，不推断顺序。", {});
         add("gp_operation", "Read a new/open/save/close/tab-move operation by request ID, including the last 64 replaced records.", {{"request", str}}, {"request"});
@@ -672,32 +775,38 @@ class Bridge : public QObject {
         if (!server.start(sessionFile, info(), tools, [this](const QString &tool, const QJsonObject &args) {
             refreshOperations();
             if (tool == "gp_dialogs") return modalState();
+            if (tool == "gp_formats") return guitarpro::fileFormats();
+            if (tool == "gp_midi_import") return midiImport(args);
             if (tool == "gp_operation") {
                 const QString request = args.value("request").toString();
-                for (const auto &operation : {creation, opening, closing, saving, moving}) if (operation.value("request") == request) return QJsonObject{{"operation", operation}};
+                for (const auto &operation : {creation, opening, closing, saving, moving, exporting}) if (operation.value("request") == request) return QJsonObject{{"operation", operation}};
                 if (operationHistory.contains(request)) return QJsonObject{{"operation", operationHistory.value(request)}};
                 return QJsonObject{{"error", "Unknown or expired operation request"}};
             }
             if (tool == "gp_cancel") return cancelOperation(args.value("request").toString());
             if (tool == "gp_recover") return recoverOperation(args.value("request").toString());
-            static const QSet<QString> modalReads{"gp_capabilities", "gp_documents", "gp_score", "gp_read_bars", "gp_read_master_bars", "gp_templates", "gp_objects", "gp_actions", "gp_debug_objects", "gp_debug_resources"};
+            if (pending(exporting) && (tool == "gp_close_window" || tool == "gp_window" || tool == "gp_trigger" || tool == "gp_set_property"))
+                return QJsonObject{{"error", "Export is active; cancel its request and observe completion first"}};
+            static const QSet<QString> modalReads{"gp_capabilities", "gp_documents", "gp_score", "gp_read_bars", "gp_read_master_bars", "gp_templates", "gp_objects", "gp_actions", "gp_debug_objects", "gp_debug_resources", "gp_formats"};
             static const QSet<QString> dialogActions{"gp_trigger", "gp_set_property", "gp_close_window", "gp_window"};
             if (QApplication::activeModalWidget() && !modalReads.contains(tool) && !dialogActions.contains(tool))
                 return QJsonObject{{"error", "A modal dialog blocks native operations; inspect gp_dialogs"}, {"dialog", modalState()}};
             const bool operationPending = recoveryActive || loadNativeActive || closingNativeActive || savingOperation ||
-                pending(creation) || pending(opening) || pending(closing) || pending(saving) || pending(moving);
+                pending(creation) || pending(opening) || pending(closing) || pending(saving) || pending(moving) || pending(exporting);
             const bool outsideDialogEdit = !QApplication::activeModalWidget() && (tool == "gp_trigger" || tool == "gp_set_property");
             if (operationPending && !modalReads.contains(tool) && (!dialogActions.contains(tool) || outsideDialogEdit))
                 return QJsonObject{{"error", "A document operation is pending; inspect gp_documents or cancel its request before another mutation"}};
             // Host command observers update the active document's dirty state.
             // Bind every model mutation to its document before calling native APIs.
             static const QSet<QString> mutations{"gp_edit_note", "gp_edit_note_effect", "gp_edit_beat_effect", "gp_edit_tuning", "gp_transpose", "gp_edit_connection", "gp_edit_beat", "gp_edit_bars", "gp_edit_track", "gp_edit_tracks", "gp_insert_track", "gp_edit_tempo", "gp_edit_measure", "gp_set_fret", "gp_edit_metadata", "gp_cursor", "gp_undo_redo"};
-            if (mutations.contains(tool) || ((tool == "gp_tempo" || tool == "gp_audio_track") && args.value("operation").toString("state") != "state")) {
+            if (mutations.contains(tool) || ((tool == "gp_tempo" || tool == "gp_audio_track" || tool == "gp_presentation") && args.value("operation").toString("state") != "state") || (tool == "gp_preferences" && args.value("operation").toString("state") != "state" && args.value("scope").toString("application") == "document")) {
                 const auto target = guitarpro::choose(args);
                 if (!target.view || !target.score) return QJsonObject{{"error", "Choose a document with a verified native score"}};
                 const QJsonObject activated = guitarpro::activate(QJsonObject{{"document", target.id()}}, services());
                 if (activated.contains("error")) return activated;
             }
+            if (tool == "gp_preferences") return preferences(args);
+            if (tool == "gp_presentation") return guitarpro::presentation(args);
             if (tool == "gp_templates" || tool == "gp_new") {
                 if (!guitarpro::supportedBuild()) return QJsonObject{{"error", "Template creation requires the verified host build"}};
                 const QDir templates(":/GPBase/MainWindow/Templates");
@@ -805,11 +914,12 @@ class Bridge : public QObject {
             if (tool == "gp_open") {
                 if (!guitarpro::supportedBuild()) return QJsonObject{{"error", "Document opening requires the verified host build"}};
                 const QFileInfo file(args.value("path").toString());
-                if (!file.isAbsolute() || !file.isFile() || file.suffix().toLower() != "gp") return QJsonObject{{"error", "Existing absolute .gp path required"}};
+                const QSet<QString> extensions{"gp", "gp3", "gp4", "gp5", "gpx", "mid", "midi", "xml", "musicxml", "mxl"};
+                if (!file.isAbsolute() || !file.isFile() || !extensions.contains(file.suffix().toLower())) return QJsonObject{{"error", "Existing absolute GP, GP3/4/5, GPX, MIDI or MusicXML path required"}};
                 const QString path = file.canonicalFilePath();
                 for (const auto &document : guitarpro::documents()) {
                     for (const char *property : {"openedFilePath", "saveFilePath"})
-                        if (QFileInfo(document.object->property(property).toString()).canonicalFilePath().compare(path, Qt::CaseInsensitive) == 0)
+                        if (QFileInfo(guitarpro::localDocumentPath(document.object->property(property).toString())).canonicalFilePath().compare(path, Qt::CaseInsensitive) == 0)
                             return QJsonObject{{"status", "already_open"}, {"document", document.id()}, {"path", path}};
                 }
                 archiveOperation(opening);
@@ -823,6 +933,7 @@ class Bridge : public QObject {
                 if (!creation.isEmpty()) result["creation"] = creation;
                 if (!opening.isEmpty()) result["opening"] = opening;
                 if (!saving.isEmpty()) result["saving"] = saving;
+                if (!exporting.isEmpty()) result["exporting"] = exporting;
                 if (!moving.isEmpty()) result["moving"] = moving;
                 checkClosing();
                 if (!closing.isEmpty()) result["closing"] = closing;
@@ -879,6 +990,31 @@ class Bridge : public QObject {
                     checkClosing();
                 });
                 return closing;
+            }
+            if (tool == "gp_export") {
+                const auto target = guitarpro::choose(args);
+                if (!target.object || !target.score) return QJsonObject{{"error", "Existing document required"}};
+                archiveOperation(exporting);
+                exporting = {{"request", nonce()}, {"status", "scheduled"}, {"kind", "export"}, {"document", target.id()}};
+                QJsonObject bound = args; bound["document"] = target.id();
+                const QString request = exporting.value("request").toString();
+                QTimer::singleShot(0, this, [this, bound, target, request]() {
+                    if (exporting.value("request") != request || exporting.value("status") != "scheduled") return;
+                    exporting["status"] = "requested";
+                    QJsonObject result;
+                    try {
+                        if (!target.object || guitarpro::choose(bound).object != target.object) result = {{"error", "Document changed before export"}};
+                        else {
+                            result = guitarpro::activate(bound, services());
+                            if (!result.contains("error")) result = guitarpro::exportFile(bound, services(), [this]() { return exporting.value("cancel_requested").toBool(); });
+                        }
+                    } catch (const std::exception &exception) { result = {{"error", QString::fromUtf8(exception.what())}}; }
+                    catch (...) { result = {{"error", "Native export exception"}}; }
+                    exporting["result"] = result;
+                    exporting["status"] = result.value("cancelled").toBool() ? "cancelled" : result.contains("error") ? "error" : "exported";
+                    if (result.contains("error")) exporting["error"] = result.value("error");
+                });
+                return exporting;
             }
             if (tool == "gp_save_as" || tool == "gp_save_current" || tool == "gp_save") {
                 const auto target = guitarpro::choose(args);

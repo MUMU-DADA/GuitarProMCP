@@ -8,7 +8,7 @@
 
 | 范围 | 已实现并验证 | 仍有边界 |
 | --- | --- | --- |
-| 插件与 MCP | C++ DLL 在 GuitarPro.exe 内提供 HTTP MCP；会话、令牌、Host/Origin 和参数检查；实例 UUID/PID/启动时间绑定、默认端口回退、两个客户端并发编辑、重连及重启失效；官方 MCP Inspector 2.5.0 配置导入、重启和端口变化后重新连接，旧配置明确拒绝；隔离宿主的 Windows DDE 文件关联打开；Windows PowerShell 5.1 中文路径与 UTF-8 描述读取 | 独立 GUI 多进程列为宿主限制；其他客户端、真实安装目录入口和长时间运行归后续验收；单独重复命令行启动不转发文件路径 |
+| 插件与 MCP | C++ DLL 在 GuitarPro.exe 内提供 HTTP MCP；会话、令牌、Host/Origin 和参数检查；实例 UUID/PID/启动时间绑定、默认端口回退、两个客户端并发编辑、重连及重启失效；官方 MCP Inspector 2.5.0 配置导入、重启和端口变化后重新连接，旧配置明确拒绝；真实目录安装/更新/启停/卸载/重装，普通用户 EXE/快捷方式/关联曲谱/后台启动；运行中关联文件转发；Windows PowerShell 5.1 中文配置与 UTF-8 描述读取 | 独立 GUI 多进程列为宿主限制；其他客户端、长时间运行及快速退出 AMNetwork 挂起归后续验收；单独重复命令行启动不转发文件路径 |
 | 后台执行 | 同步 QWidget / QWindow 焦点策略，显式后台启动保持隐藏，常规安装启动窗口可见；无需预先最小化即可执行模板新建、打开、关闭、切换、编辑、保存和播放；窗口恢复后可再隐藏 | 未验证无桌面环境、所有模态窗口和长时间运行 |
 | 文档状态与切换 | 独立 ID、路径、未保存状态、原生 Score 和活动文档；打开/新建/关闭/重排请求跟踪和 64 条历史；明确保存/丢弃/取消及原生确认；迟到的新建/打开和新建/打开/关闭完成后异常的终态协调；损坏 ZIP/GPIF 及不兼容 required 修订明确拒绝；插件重排和故障回滚；显式恢复并核验部分/全部原文档关闭及新增文档，保留失败及恢复历史；未知结果阻止普通原生动作和属性写入；同名/未命名及多份未保存曲谱的身份、撤销、保存重开和关闭隔离；另存后的路径及界面名称同步；反复隐藏/恢复后的原生菜单及关闭确认取消 | 原生拖动列为宿主限制；完整 GPIF 模型语义、未穷举的异常组合和模态上下文属于后续可靠性验证；无可信终态时保持阻塞；原生菜单仍需宿主有效的焦点上下文 |
 | 曲谱元数据 | 读取 11 项元数据；使用原生命令修改，支持撤销重做和中文保存 | 拒绝宿主不能可靠保存的补充平面 Unicode 字符和 XML 控制字符 |
@@ -40,12 +40,30 @@
 | 完整乐谱编辑 | P3 按用户确认的必要范围验收；自定义乐器定义、符杠/括号排版和指法搜索不作为 P3 完成条件，相关后续扩展另按 P5/P6 需求处理 |
 | 选区和编辑上下文 | P4 按最小必要范围完成；系统剪贴板隔离验证、任意音轨集合剪贴板、其余特别粘贴过滤项和部分小节跨栏替换属于保留扩展，未声明可用 |
 | 播放与音频 | P5 按最小必要范围完成；任意音色/效果定义、更多自动化、ASIO/驱动故障及跨重启设备持久化、未穷举的技法与跳转声学组合为保留扩展 |
-| 文件导入导出 | MIDI、MusicXML、其他 GP 格式、PDF/图片/音频等原生流程及内容验证 |
-| 设置与工作区 | 全局偏好、声音、插件、打印、视图和各类对话框的参数化原生接口 |
+| 文件导入导出 | P6 按用户确认的最小范围完成；已验证 GP5/GPX/MusicXML/MIDI 交换和原生 PDF/PNG/WAV 输出，完整回归本次按用户要求跳过，详见下方记录。打印限定原生 PDF 目标；不扩展物理队列或其他音频编码器 |
+| 设置与工作区 | P6 页面、谱表及明确作用域偏好按最小范围完成；完整回归本次按用户要求跳过。页面和显示设置不进入宿主撤销栈，视图缩放不承诺跨重开保持；任意样式、插件管理和更多偏好不在本轮最小范围 |
 | 完整状态 | 按真实用户操作建立清单，为每项状态/修改建立读回和持久化验证 |
 | 兼容性与可靠性 | 多文档、并发、长时间运行、取消、异常路径、宿主升级，以及安装和卸载体验 |
 
 ## 当前验证证据
+
+### P1 验收
+
+2026-09-07 已完成用户确认的安装集成范围。验收包 `artifacts/GuitarProMCP-0.3.0-9b2770a215574ebc810546de0a842397.zip`，SHA-256 为 `B0BE5B161BCF0A9E82B7666AEF42E2C97E9B265D953BFA40629AC392E8A08281`。真实目录 `C:/Program Files/Arobas Music/Guitar Pro 8` 已安装并启用该版本，保留原有用户设置和凭据。汇总索引：`artifacts/p1-acceptance-20260907/verification.json`；同目录 `verify-evidence.ps1` 只读核验已有验收记录、ZIP/解压包/正式安装字节、宿主兼容列表和源码一致性，生成汇总，不重跑安装或宿主测试。
+
+| 验证项 | 通过结果 | 证据 |
+| --- | --- | --- |
+| 真实安装生命周期 | Windows PowerShell 5.1.19041.6456，48 项；更新、全新安装、再次更新、停用、启用、卸载及重装；停用/卸载后的普通宿主退出码均为 0 | `artifacts/installed-lifecycle-bfaceaa7bc9946f2951e0132a200d7ce/verification.json` |
+| 生命周期内的启动入口 | 68 + 20 + 20 项；四种入口、启用后后台、重装后后台，全部退出码为 0 并清理实例文件 | 同一生命周期目录的 `entrypoints/verification.json`、`enabled/verification.json`、`reinstalled/verification.json` |
+| 普通用户真实入口 | PowerShell 7.6.5，68 项；`mumu` 非管理员；EXE、原有快捷方式、中文/空格路径关联文件、后台隐藏及焦点检查；运行中打开第二份及重复打开，读回实际音符 | `artifacts/installed-entrypoints-3f13bd101a4d4b6e87ac7572d9808d62/verification.json` 及 `execution-context.json` |
+| 隔离安装与失败诊断 | Windows PowerShell 5.1，46 项及 27 项协议检查；状态入口、启停、运行中更新拒绝、显式端口冲突、配置/凭据/客户端配置不可用、不支持的宿主和卸载 | `artifacts/installation-4c97c72b35164662ba10357f8339016e/verification.json`；27 项协议输出见前置任务 `01a07b1f-cb14-7f81-869a-6cb005bd35c6` 的对应命令记录 |
+| 文件归属、回滚及中文配置 | PowerShell 5.1/7 各 33 项；两份内容不同的 DLL 在回执提交失败后恢复旧字节，无归属/被修改文件拒绝，BOM-less UTF-8 配置启停后保留中文值 | `artifacts/installer-files-b2eb512eaaaf4084a1aa8892f35e5c03/verification.json`、`artifacts/installer-files-685af3524c484cc8975eb70adf79b2e3/verification.json` |
+
+以上结构化记录共 336 项，另有 27 项协议检查通过输出。核心 SHA-256 为 `888F31675C7894AECFD0EED61DBA215F755564281B444739843A36607A608991`，自动加载器为 `21341BD69888E2741C81783964DB0C653944EBDD3610A3A52A780660E25EFD37`；与下方 P5 的 4056 项完整功能回归二进制一致，P1 未重新编译核心。安装器 SHA-256 为 `8ED58EBAE4CB5A8FBDB32539A03A4EC3592A91EDFB471E0EF0B09CAD0FB91F58`，修复 Windows PowerShell 5.1 按系统编码读取 JSON 导致解析失败或中文配置损坏的问题；包内脚本与当前源码一致。
+
+最终入口脚本 SHA-256 为 `FC573B84E3C49324958A2B39FCBAD6F3A496841DBA22461429C5DB61E05C4F50`，生命周期脚本为 `081E40ABE0C1EB8AE8B1547A845DC7656B61382359F6FF7187F3C53AF7345E50`，文件测试脚本为 `A3859C5839BD48E60718A2AC15201F206BC85B6B2B18D80462856E4B65CB6673`。生命周期内入口记录保留当时脚本哈希 `82AF098A3303286905845AD061B1A9FF78DF8BB660488E20615DB30E62E42F76`；后续修正普通入口窗口启动方式和就绪判断后，最终脚本通过上述普通用户四入口复验。
+
+P1 普通退出统一采用 `StartupSettleMs=30000`。用户已明确将快速退出 AMNetwork 挂起留给 P7；失败、线程栈及受控清理保留在 `artifacts/installed-lifecycle-c5822d8d9f964a3ea20b381cc0bbe68f/`，不计通过，等待 30 秒也不是修复。早期活动文档假设失败保留在 `installed-lifecycle-f0e43e4dd491473bbc601c385dc44f82`，窗口句柄等待失败在 `installed-lifecycle-normal-20260907`，错误沙箱账户启动失败及清理在 `installed-entrypoints-dcb22c564d254c2d8f8f8b3ec47c3c07`，均位于 `artifacts/`。历史阶段段落中的“P1 仍开放”描述当时状态，当前状态以本节为准；完整项目和 P7 发布验收仍未完成。
 
 ### P5 验收
 
@@ -197,3 +215,17 @@ P1 候选检查点 DLL 的十三组回归共 2195 项通过，进程退出码为
 - `artifacts/native-editing-*/verification.json`、`artifacts/native-tracks-*/verification.json`、`artifacts/native-measures-*/verification.json`、`artifacts/native-effects-*/verification.json`、`artifacts/native-selection-*/verification.json`、`artifacts/native-lifecycle-*/verification.json`、`artifacts/native-session-*/verification.json`、`artifacts/native-structure-*/verification.json`、`artifacts/native-clipboard-*/verification.json`、`artifacts/native-tuplets-*/verification.json`、`artifacts/native-connections-*/verification.json`：各原生功能检查的模型与保存证据；包括协议检查在内，十三组累计 2195 项通过。
 
 早期 Python/原始 TCP 桥接的测试记录不能作为当前 C++ HTTP 服务器的验证证据。临时 RTTI 扫描只能帮助定位对象，不能直接用未经验证的扫描路径执行生产写入。
+
+### P6 验收
+
+2026-09-07：按用户确认的最小范围完成 P6；用户明确要求跳过受权限限制的完整回归并提交 Git，该回归不计为通过。当前构建通过常规 P6 专项 116 项，证据 `artifacts/native-p6-aeacc535953546c2a1f62738de5a5d0e/verification.json`；显式 `-RenderPdf` 的独立 PDF 复核通过 119 项，证据 `artifacts/native-p6-ef2c61b0c7574ef79eadfa728df1d4ac/verification.json`。两轮后宿主正常退出（0）。独立读取 GP5/GPX 的 8 个音高以及 MIDI 事件、每音 480 tick、90 BPM；MusicXML 用禁用外部实体的 XML 解析器核对两小节及五线谱/六线谱各 8 个音符，四种曲谱实际导入。MIDI 的七项参数逐一读写恢复，并验收确认和取消。
+
+原生 QPrinter 受控打印得到 PDF；同一绘制器生成 PNG，50 小节输出 3 页并检查第 2 页音符、谱表和页码。独立 PDF 渲染已视觉检查。RSE WAV 为 235200 帧（5.333 秒），验证非静音 PCM 能量和峰值。覆盖拒绝、成功覆盖、锁定目标提交失败、无效目录/页码及 WAV 取消保持目标一致，随后可继续导出；同值页面不改脏标记，页面/谱表保存重开，视图状态读回，13 个全局偏好逐项恢复，所有临时文档关闭且其他文档不变。
+
+先前 PDF 挂起来自错误使用 `ScoreView::clone`；改为宿主打印流程的构造加 `applyModel` 后已解决，不能再列为宿主受限。运行时仅依赖 Guitar Pro 自带组件，无 Python、Node.js、FFmpeg、Poppler 或虚拟打印机要求。外部 PDF 复核仅为开发者显式选择的验收手段，不进入安装包。打印限定 PDF 文件，音频限定 WAV；不增加物理队列、通用排版框架或第三方插件管理。跨重启偏好持久化和复杂格式转换保真度没有在本轮穷举。
+
+当前核心 SHA-256 为 `90F2FD97B1BB3716B7D0A105BA3FAB94ED939B1BA2CE891B4365C7780DF5D642`。候选包 `artifacts/GuitarProMCP-0.3.0-1243df419412495c81281bcc7dca42e5.zip`，SHA-256 为 `3C3CC243F3FFD950447982F393E519447B34F489BF0FC76B661BD0E3DEA4A546`。包内两份 DLL 与已测构建一致；依赖、全部宿主及源码哈希见 `artifacts/p6-checkpoint.json`。候选包不含测试脚本和外部解释器/转换器，未替换真实安装。
+
+完整回归只完成前两组 53 项，随后宿主写入 `AppData/Roaming/Arobas Music/guitarpro8/autobackups/native-test(4).gp.bak` 被沙箱拒绝，出现原生保存错误对话框。失败记录为 `artifacts/regression-41214c35507946c9a4f5a442144e7b1c/regression.json`，`complete=false`。申请允许测试宿主访问自有目录时，自动审批服务返回 HTTP 503，未执行提升权限的回归。测试进程已关闭；本次按用户要求跳过该回归，不沿用旧构建的回归结果。P7 的最终发布包完整回归仍待完成。
+
+专项脚本补充了清理失败时的证据落盘：模拟偏好恢复失败后仍保存 `complete=false` 和 `cleanup_error`，验证记录为 `artifacts/p6-cleanup-failure/verification.json`。这项修改仅影响测试失败分支，生产 DLL 和候选包字节不变。

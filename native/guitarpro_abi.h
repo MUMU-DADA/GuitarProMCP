@@ -9,7 +9,22 @@
 #include <optional>
 #include <functional>
 #include <utility>
+#include <list>
+#include <QtCore/QStringList>
+namespace am::filesystem {
+class FileHandle;
+class __declspec(dllimport) FileSystem {
+public:
+    enum class Mode : int { Read = 0, Write = 1 };
+    std::unique_ptr<FileHandle, std::function<void(FileHandle *)>> openHandle(const QString &, Mode);
+};
+}
 namespace am::music { enum class Accidental : int {}; }
+namespace am::painting {
+class Color { public: int red, green, blue, alpha; };
+class Size { public: double width, height; };
+class Margins { public: double left, top, right, bottom; };
+}
 namespace am::audio {
 // AudioDeviceInfo owns QString fields at +0x10/+0x18 and a scalar vector at
 // +0x28. The remaining native fields are copied without interpreting them.
@@ -39,6 +54,64 @@ static_assert(sizeof(Color) == 3 && alignof(Color) == 1);
 // Declarations for verified MSVC x64 exports only. The host owns model objects.
 // Only the value types with verified storage below are constructed locally.
 namespace gp::core {
+class Score;
+class __declspec(dllimport) ScoreView {
+    alignas(8) unsigned char storage[0xa8];
+public:
+    ScoreView(); ~ScoreView();
+    void applyModel(const ScoreView &);
+};
+static_assert(sizeof(ScoreView) == 0xa8);
+namespace style {
+namespace generated { class PageLayout { public: enum class Orientation : int { Portrait = 0, Landscape = 1 }; }; }
+class __declspec(dllimport) Stylesheet {
+    unsigned char storage[0x1488];
+public:
+    Stylesheet(const Stylesheet &);
+    Stylesheet &operator=(const Stylesheet &);
+    Stylesheet(const std::shared_ptr<Stylesheet> &);
+    virtual ~Stylesheet();
+    void applyModel(const std::shared_ptr<Stylesheet> &);
+    static void setupStyleForExport(Stylesheet &);
+};
+static_assert(sizeof(Stylesheet) == 0x1490);
+__declspec(dllimport) void setPageLayoutBackgroundColor(Stylesheet &, const std::optional<am::painting::Color> &);
+__declspec(dllimport) am::painting::Size pageLayoutSizeValue(const Stylesheet &);
+__declspec(dllimport) am::painting::Margins pageLayoutMarginsValue(const Stylesheet &);
+__declspec(dllimport) generated::PageLayout::Orientation pageLayoutOrientationValue(const Stylesheet &);
+__declspec(dllimport) void setPageLayoutSize(Stylesheet &, const std::optional<am::painting::Size> &);
+__declspec(dllimport) void setPageLayoutMargins(Stylesheet &, const std::optional<am::painting::Margins> &);
+__declspec(dllimport) void setPageLayoutOrientation(Stylesheet &, const std::optional<generated::PageLayout::Orientation> &);
+}
+namespace io {
+class Importer;
+class Exporter {
+public:
+    virtual ~Exporter() = default;
+    virtual const std::list<std::string> &defaultExporterExtensions() const = 0;
+    virtual const std::string &exporterDescription() const = 0;
+    virtual void reservedSaveWithArchive() = 0;
+    virtual void reservedSaveWithRange() = 0;
+    virtual bool saveFile(am::filesystem::FileHandle &, const Score &) = 0;
+    virtual const std::list<std::string> &warnings() = 0;
+    virtual void setVersion(const QString &) = 0;
+    virtual void setRevision(const std::string &) = 0;
+    virtual void setOption(int) = 0;
+    virtual void saveAdditionalDatas(am::filesystem::FileHandle &, Score &) = 0;
+};
+}
+class __declspec(dllimport) Core {
+public:
+    static Core &instance();
+    am::filesystem::FileSystem *fileSystem() const;
+    unsigned exportersCount() const;
+    unsigned importersCount() const;
+    std::string exporterDescription(unsigned) const;
+    std::list<std::string> exporterExtensions(unsigned) const;
+    QString importerDescription(unsigned) const;
+    QStringList importerExtensions(unsigned) const;
+    io::Exporter *exporterByExtension(const std::string &) const;
+};
 enum class ScoreProperty : int {};
 enum class PlaybackState : int {};
 enum class TempoUnit : int {};
@@ -375,6 +448,12 @@ public:
 };
 class __declspec(dllimport) Score {
 public:
+    ScoreView &activeView();
+    const std::shared_ptr<style::Stylesheet> &newStylesheet() const;
+    bool hasStdNotation(int);
+    bool hasTablature(int);
+    void setStdNotation(Track &, bool);
+    void setTablature(Track &, bool);
     // Seven floats, copied by the native entry and consumed in this order.
     struct BendParam {
         float originValue, middleValue, destinationValue;

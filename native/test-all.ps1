@@ -40,7 +40,7 @@ $exitHandle = [GpmcpRegressionProcess]::OpenProcess(0x1000, $false, $process.Id)
 if ($exitHandle -eq [IntPtr]::Zero) { throw 'Cannot retain a process handle for exit-code verification.' }
 $exitCode = $null
 Write-Output "Regression host PID $($process.Id). Session: $sessionFile"
-$suites = @('mcp','native','editing','tracks','measures','effects','selection','saving','document-operations','document-tabs','lifecycle','session','structure','clipboard','tuplets','connections','notation','instruments','score-form','transfer','audio')
+$suites = @('mcp','native','editing','tracks','measures','effects','selection','saving','document-operations','document-tabs','lifecycle','session','structure','clipboard','tuplets','connections','notation','instruments','score-form','transfer','audio','p6')
 $results = @()
 $fixtureRestorations = @()
 $complete = $false
@@ -111,6 +111,7 @@ try {
 } finally {
     $sourceFiles = @('guitarpro_mcp.cpp','guitarpro_api.h','guitarpro_abi.h','gpcore.def','guitarpro_clipboard.h','mcp_server.cpp','object_registry.h','host_build.h','plugin_config.h','autoload.cpp','plugin_status.h','test-all.ps1','test-notation.ps1','test-instruments.ps1','test-score-form.ps1','test-connections.ps1','test-clipboard.ps1','test-transfer.ps1')
     $sourceFiles += @('guitarpro_audio.h','gprse.def','amaudio.def','test-audio.ps1','supported-host.json')
+    $sourceFiles += @('guitarpro_io.h','amutils.def','test-p6.ps1','test-exchange.ps1','build.ps1')
     $hashes = @($sourceFiles | ForEach-Object { Get-FileHash -LiteralPath (Join-Path $PSScriptRoot $_) | Select-Object Path,Hash })
     @{complete=$complete;host_pid=$descriptor.pid;exit_code=$exitCode;checks=($results | Measure-Object -Property checks -Sum).Sum;suites=$results;fixture_restorations=$fixtureRestorations;sources=$hashes;powershell=$PSVersionTable.PSVersion.ToString();plugin_sha256=(Get-FileHash -LiteralPath "$root/.tools/native/plugins/generic/guitarpro_mcp.dll").Hash;autoload_sha256=(Get-FileHash -LiteralPath "$root/.tools/native/plugins/imageformats/guitarpro_mcp_autoload.dll").Hash;host_exe=$Exe;host_sha256=(Get-FileHash -LiteralPath $Exe).Hash} |
         ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $run 'regression.json') -Encoding UTF8

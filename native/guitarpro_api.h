@@ -9,6 +9,7 @@
 #include <QtCore/QMetaMethod>
 #include <QtCore/QPointer>
 #include <QtCore/QUuid>
+#include <QtCore/QUrl>
 #include <QtCore/QSaveFile>
 #include <QtCore/QTemporaryDir>
 #include <QtCore/QXmlStreamReader>
@@ -24,6 +25,10 @@
 #include <memory>
 
 namespace guitarpro {
+inline QString localDocumentPath(const QString &path) {
+    const QUrl url(path);
+    return url.isLocalFile() ? url.toLocalFile() : path;
+}
 inline QString validateGpFile(const QString &path) {
     QZipReader archive(path);
     if (!archive.isReadable()) return "Cannot read the Guitar Pro archive";

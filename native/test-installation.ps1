@@ -1,9 +1,14 @@
-param([Parameter(Mandatory=$true)][string]$HostDirectory)
+param([Parameter(Mandatory=$true)][string]$HostDirectory, [string]$PackageDirectory = '')
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $HostDirectory = [IO.Path]::GetFullPath($HostDirectory)
 if (-not $HostDirectory.StartsWith(([IO.Path]::GetFullPath((Join-Path $root '.tools')) + '\'), [StringComparison]::OrdinalIgnoreCase)) { throw 'This test requires an isolated host copy under the project .tools directory.' }
-. "$PSScriptRoot/mcp-client.ps1"
+$installer = "$root/install-plugin.ps1"
+if ($PackageDirectory) {
+    $PackageDirectory = (Resolve-Path -LiteralPath $PackageDirectory).Path
+    $installer = Join-Path $PackageDirectory 'install-plugin.ps1'
+    . "$PackageDirectory/mcp-client.ps1"
+} else { . "$PSScriptRoot/mcp-client.ps1" }
 $run = Join-Path $root ('artifacts/installation-' + [guid]::NewGuid().ToString('N'))
 $data = Join-Path $run 'data'
 New-Item -ItemType Directory -Path $run,$data | Out-Null
@@ -15,7 +20,7 @@ $hashBefore = (Get-FileHash -LiteralPath $exe).Hash
 $checks = 0
 $observations = @()
 function Assert($condition, [string]$message) { if (-not $condition) { throw $message }; $script:checks++ }
-function Install([string]$action) { & "$root/install-plugin.ps1" -Action $action -InstallDirectory $HostDirectory -DataDirectory $data }
+function Install([string]$action) { & $installer -Action $action -InstallDirectory $HostDirectory -DataDirectory $data -PackageDirectory $PackageDirectory }
 function Launch([string]$variant, [bool]$background = $false, [bool]$openScore = $false) {
     if (Test-Path -LiteralPath $descriptorPath) { Remove-Item -LiteralPath $descriptorPath }
     if (Test-Path -LiteralPath $statusPath) { Remove-Item -LiteralPath $statusPath }
@@ -23,12 +28,14 @@ function Launch([string]$variant, [bool]$background = $false, [bool]$openScore =
     $launch = @{FilePath=$exe;WorkingDirectory=$HostDirectory;WindowStyle='Hidden';PassThru=$true;RedirectStandardError=(Join-Path $run "$variant.stderr.log")}
     if ($openScore) { $launch.ArgumentList = @('--open', ('"' + "$PSScriptRoot/testdata/minimal.gp" + '"')) }
     $process = Start-Process @launch
+    # Retain ownership even if status parsing or startup validation fails before return.
+    $script:process = $process
     $deadline = [DateTime]::UtcNow.AddSeconds(25)
     do {
         Start-Sleep -Milliseconds 100
         $process.Refresh()
     } while (-not $process.HasExited -and -not (Test-Path -LiteralPath $statusPath) -and [DateTime]::UtcNow -lt $deadline)
-    $status = if (Test-Path -LiteralPath $statusPath) { Get-Content -LiteralPath $statusPath -Raw | ConvertFrom-Json } else { $null }
+    $status = if (Test-Path -LiteralPath $statusPath) { Get-Content -LiteralPath $statusPath -Raw -Encoding UTF8 | ConvertFrom-Json } else { $null }
     $script:observations += [pscustomobject]@{variant=$variant;pid=$process.Id;status=$status}
     return $process
 }
@@ -39,6 +46,7 @@ function Stop-Owned($process) {
 $original = @{}
 foreach ($name in @('QT_PLUGIN_PATH','QT_QPA_GENERIC_PLUGINS','GPMCP_SESSION_FILE','GPMCP_DATA_DIR','GPMCP_BACKGROUND','GPMCP_PORT','TEMP','TMP')) { $original[$name] = [Environment]::GetEnvironmentVariable($name, 'Process') }
 $process = $null
+$passed = $false
 try {
     Remove-Item Env:QT_PLUGIN_PATH,Env:QT_QPA_GENERIC_PLUGINS,Env:GPMCP_SESSION_FILE -ErrorAction SilentlyContinue
     $env:GPMCP_PORT = ''
@@ -58,7 +66,7 @@ try {
         Assert $rejected 'Locked receipt did not fail the update.'
     } finally { $receiptLock.Dispose() }
     Assert ((Get-FileHash -LiteralPath $receiptPath).Hash -eq $receiptHash) 'Failed update modified the receipt.'
-    $receipt = Get-Content -LiteralPath $receiptPath -Raw | ConvertFrom-Json
+    $receipt = Get-Content -LiteralPath $receiptPath -Raw -Encoding UTF8 | ConvertFrom-Json
     foreach ($file in $receipt.files) { Assert ((Get-FileHash -LiteralPath (Join-Path $HostDirectory $file.path)).Hash -eq $file.sha256) 'Failed update did not restore a plugin binary.' }
     $process = Launch 'visible' $false $true
     Assert (-not $process.HasExited -and (Test-Path -LiteralPath $descriptorPath)) 'Automatic MCP startup failed.'
@@ -103,11 +111,11 @@ try {
         $checkbox = Invoke-McpTool $connection gp_objects @{query='gpmcpEnabled'}
         Invoke-McpTool $connection gp_set_property @{snapshot=$checkbox.snapshot;id=$checkbox.objects[0].id;property='checked';value=$false} | Out-Null
         Start-Sleep -Milliseconds 100
-        Assert (-not (Get-Content -LiteralPath $settingsPath -Raw | ConvertFrom-Json).enabled) 'Status dialog did not persist the disabled setting.'
+        Assert (-not (Get-Content -LiteralPath $settingsPath -Raw -Encoding UTF8 | ConvertFrom-Json).enabled) 'Status dialog did not persist the disabled setting.'
         $checkbox = Invoke-McpTool $connection gp_objects @{query='gpmcpEnabled'}
         Invoke-McpTool $connection gp_set_property @{snapshot=$checkbox.snapshot;id=$checkbox.objects[0].id;property='checked';value=$true} | Out-Null
         Start-Sleep -Milliseconds 100
-        Assert ((Get-Content -LiteralPath $settingsPath -Raw | ConvertFrom-Json).enabled) 'Status dialog did not persist the enabled setting.'
+        Assert ((Get-Content -LiteralPath $settingsPath -Raw -Encoding UTF8 | ConvertFrom-Json).enabled) 'Status dialog did not persist the enabled setting.'
         $dialog = Invoke-McpTool $connection gp_objects @{query='gpmcpStatusDialog'}
         Invoke-McpTool $connection gp_close_window @{snapshot=$dialog.snapshot;id=$dialog.objects[0].id} | Out-Null
         $rejected = $false
@@ -132,7 +140,7 @@ try {
     Install Disable | Out-Null
     $process = Launch 'disabled'
     Assert (-not $process.HasExited -and -not (Test-Path -LiteralPath $descriptorPath)) 'Disabled plugin started MCP or stopped the host.'
-    Assert ((Get-Content -LiteralPath $statusPath -Raw | ConvertFrom-Json).status -eq 'disabled') 'Disabled state was not reported.'
+    Assert ((Get-Content -LiteralPath $statusPath -Raw -Encoding UTF8 | ConvertFrom-Json).status -eq 'disabled') 'Disabled state was not reported.'
     Stop-Owned $process; $process = $null
     Install Enable | Out-Null
     $blocker = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 18432)
@@ -141,7 +149,7 @@ try {
         $env:GPMCP_PORT = '18432'
         $process = Launch 'port-conflict'
         Assert (-not $process.HasExited -and -not (Test-Path -LiteralPath $descriptorPath)) 'Port conflict stopped the host or published a wrong session.'
-        Assert ((Get-Content -LiteralPath $statusPath -Raw | ConvertFrom-Json).status -eq 'service_error') 'Port conflict was not diagnosed.'
+        Assert ((Get-Content -LiteralPath $statusPath -Raw -Encoding UTF8 | ConvertFrom-Json).status -eq 'service_error') 'Port conflict was not diagnosed.'
     } finally { Stop-Owned $process; $process = $null; $blocker.Stop(); $env:GPMCP_PORT = '' }
     $clientPath = Join-Path $data 'mcp-client.json'
     $clientBackup = Join-Path $run 'client-backup.json'
@@ -150,7 +158,7 @@ try {
     try {
         $process = Launch 'blocked-client-config'
         Assert (-not $process.HasExited -and -not (Test-Path -LiteralPath $descriptorPath)) 'Failed client configuration left a false session or stopped the host.'
-        Assert ((Get-Content -LiteralPath $statusPath -Raw | ConvertFrom-Json).status -eq 'service_error') 'Client configuration failure was not diagnosed.'
+        Assert ((Get-Content -LiteralPath $statusPath -Raw -Encoding UTF8 | ConvertFrom-Json).status -eq 'service_error') 'Client configuration failure was not diagnosed.'
     } finally {
         Stop-Owned $process; $process = $null
         Remove-Item -LiteralPath $clientPath
@@ -163,7 +171,7 @@ try {
     try {
         $process = Launch 'invalid-token'
         Assert (-not $process.HasExited -and -not (Test-Path -LiteralPath $descriptorPath)) 'Invalid token started MCP or stopped the host.'
-        Assert ((Get-Content -LiteralPath $statusPath -Raw | ConvertFrom-Json).status -eq 'service_error') 'Invalid token was not diagnosed.'
+        Assert ((Get-Content -LiteralPath $statusPath -Raw -Encoding UTF8 | ConvertFrom-Json).status -eq 'service_error') 'Invalid token was not diagnosed.'
     } finally {
         Stop-Owned $process; $process = $null
         Remove-Item -LiteralPath $tokenPath
@@ -172,7 +180,7 @@ try {
     '{invalid' | Set-Content -LiteralPath $settingsPath -Encoding UTF8
     $process = Launch 'invalid-settings'
     Assert (-not $process.HasExited -and -not (Test-Path -LiteralPath $descriptorPath)) 'Invalid settings stopped the host or started MCP.'
-    Assert ((Get-Content -LiteralPath $statusPath -Raw | ConvertFrom-Json).status -eq 'configuration_error') 'Invalid settings were not diagnosed.'
+    Assert ((Get-Content -LiteralPath $statusPath -Raw -Encoding UTF8 | ConvertFrom-Json).status -eq 'configuration_error') 'Invalid settings were not diagnosed.'
     Stop-Owned $process; $process = $null
     Remove-Item -LiteralPath $settingsPath
     foreach ($fileName in @('GuitarPro.exe','Qt5Gui.dll')) {
@@ -184,7 +192,7 @@ try {
             try { $append.WriteByte(0) } finally { $append.Dispose() }
             $process = Launch ('unsupported-' + $fileName)
             Assert (-not $process.HasExited -and -not (Test-Path -LiteralPath $descriptorPath)) "Unsupported $fileName started private MCP code or failed to launch."
-            Assert ((Get-Content -LiteralPath $statusPath -Raw | ConvertFrom-Json).status -eq 'unsupported_host') "Unsupported $fileName was not diagnosed."
+            Assert ((Get-Content -LiteralPath $statusPath -Raw -Encoding UTF8 | ConvertFrom-Json).status -eq 'unsupported_host') "Unsupported $fileName was not diagnosed."
             $loadedCore = @($process.Modules | Where-Object ModuleName -EQ 'guitarpro_mcp.dll')
             Assert ($loadedCore.Count -eq 0) "Unsupported $fileName loaded the private-interface DLL."
         } finally {
@@ -199,9 +207,10 @@ try {
     Assert (-not $process.HasExited -and -not (Test-Path -LiteralPath $statusPath)) 'Uninstall did not restore ordinary startup.'
     Assert ((Get-FileHash -LiteralPath $exe).Hash -eq $hashBefore) 'The installer modified the host executable.'
     Assert ((Get-FileHash -LiteralPath (Join-Path $data 'mcp-auth-token')).Hash -eq $tokenHash) 'Uninstall deleted or changed user credentials.'
+    $passed = $true
 } finally {
     Stop-Owned $process
     foreach ($name in $original.Keys) { [Environment]::SetEnvironmentVariable($name, $original[$name], 'Process') }
-    @{checks=$checks;host=$HostDirectory;host_sha256=$hashBefore;observations=$observations} | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $run 'verification.json')
+    @{passed=$passed;checks=$checks;host=$HostDirectory;host_sha256=$hashBefore;package=$PackageDirectory;installed_files=$receipt.files;powershell=$PSVersionTable.PSVersion.ToString();observations=$observations} | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $run 'verification.json')
 }
 Write-Output "PASS: $checks installation checks plus MCP protocol checks. Evidence: $run"

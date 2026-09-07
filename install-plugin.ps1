@@ -22,11 +22,11 @@ if ($Elevate -and $Action -in 'Install','Update','Uninstall') {
 $receiptPath = Join-Path $InstallDirectory 'Plugins/guitarpro-mcp-install.json'
 $settingsPath = Join-Path $DataDirectory 'settings.json'
 $paths = @('Plugins/generic/guitarpro_mcp.dll','Plugins/imageformats/guitarpro_mcp_autoload.dll')
-$receipt = if (Test-Path -LiteralPath $receiptPath) { Get-Content -LiteralPath $receiptPath -Raw | ConvertFrom-Json } else { $null }
+$receipt = if (Test-Path -LiteralPath $receiptPath) { Get-Content -LiteralPath $receiptPath -Raw -Encoding UTF8 | ConvertFrom-Json } else { $null }
 if ($receipt -and $receipt.product -ne 'GuitarProMCP') { throw 'Unrecognized installation receipt.' }
 function Read-Settings {
     if (-not (Test-Path -LiteralPath $settingsPath)) { return [pscustomobject]@{} }
-    $settings = Get-Content -LiteralPath $settingsPath -Raw | ConvertFrom-Json
+    $settings = Get-Content -LiteralPath $settingsPath -Raw -Encoding UTF8 | ConvertFrom-Json
     if ($null -eq $settings -or $settings.GetType().FullName -ne 'System.Management.Automation.PSCustomObject') { throw 'settings.json must contain an object.' }
     if ($settings.PSObject.Properties['enabled'] -and $settings.enabled -isnot [bool]) { throw 'enabled must be boolean.' }
     return $settings
@@ -82,7 +82,7 @@ if (-not $PackageDirectory) {
 $PackageDirectory = [IO.Path]::GetFullPath($PackageDirectory)
 $allowlistPath = Join-Path $PackageDirectory 'supported-host.json'
 if (-not (Test-Path -LiteralPath $allowlistPath)) { $allowlistPath = Join-Path $PSScriptRoot 'native/supported-host.json' }
-$allowlist = Get-Content -LiteralPath $allowlistPath -Raw | ConvertFrom-Json
+$allowlist = Get-Content -LiteralPath $allowlistPath -Raw -Encoding UTF8 | ConvertFrom-Json
 foreach ($file in $allowlist.PSObject.Properties) {
     $target = Join-Path $InstallDirectory $file.Name
     if (-not (Test-Path -LiteralPath $target -PathType Leaf) -or (Get-FileHash -LiteralPath $target).Hash -ne $file.Value) {
@@ -100,7 +100,7 @@ foreach ($relative in $paths) {
 $packageManifest = Join-Path $PackageDirectory 'package.json'
 $version = '0.3.0'
 if (Test-Path -LiteralPath $packageManifest) {
-    $manifest = Get-Content -LiteralPath $packageManifest -Raw | ConvertFrom-Json
+    $manifest = Get-Content -LiteralPath $packageManifest -Raw -Encoding UTF8 | ConvertFrom-Json
     if ($manifest.product -ne 'GuitarProMCP' -or $manifest.version -notmatch '^\d+\.\d+\.\d+([-.][A-Za-z0-9.]+)?$') { throw 'Invalid package manifest.' }
     $version = $manifest.version
     foreach ($file in $files) {

@@ -463,6 +463,20 @@ GPIF 预检使用宿主 `Qt5Gui.dll` 的 `QZipReader` 和 Qt XML 流解析器，
 
 `gp_capabilities` 的 `foreground_pid` 和 `foreground_window` 在宿主内读取 Windows 的真实前台窗口；`hidden_mode` 表示插件是否维持隐藏模式。主窗口隐藏不必然代表前台 PID 已切走，因此测试仍独立检查前台进程。修复后的检查无需预先最小化，包含恢复窗口后再隐藏的路径。
 
+## P6 文件与工作区
+
+插件运行时仅使用 Guitar Pro 自带的 GPCore、GPIO、GPRSE、AMUtils、AMPainting 和 Qt。无需安装 Python、Node.js、FFmpeg、Poppler、虚拟打印机或其他转换程序；音频继续使用宿主已有音源和音色库。
+
+`gp_formats` 区分宿主注册表与插件的 `export_extensions`。`gp_export` 按扩展名输出 GP5、GPX、XML/MusicXML、MIDI、WAV、PDF 或 PNG；`.gp` 保存继续使用 `gp_save`/`gp_save_as`/`gp_save_current`。目标须为现有目录中的绝对路径，覆盖须 `overwrite=true`，拒绝覆盖打开的曲谱。先写同目录临时文件，再核对原目标并原子提交；用 `gp_operation` 等待 `exported`，用 `gp_cancel` 请求取消，已完成的输出不会被撤销。转换器原生警告通过 `result.warnings` 返回。
+
+PDF 复用宿主原生排版和 QPrinter 打印流程，受控打印目标就是 PDF 文件，不提交物理打印队列。PNG 为同一原生绘制器输出的单页，`page` 从 1 起，默认 1；144 DPI，最多 256 页、单页 6400 万像素。WAV 为整曲 44.1 kHz 双声道 16 位 PCM，最多 30 分钟，不含节拍器和预备拍；MIDI 音轨须使用宿主可渲染的音源，不能把静音文件解释为有效发声。
+
+`gp_open` 异步导入 GP5、GPX、MusicXML 和 MIDI。MIDI 请求停在原生参数对话框时，用 `gp_midi_import request=<id>` 读回选项，`operation=set` 设置 `dot/is2ChannelsPerTrack/live/multivoice/staccato/triplet` 布尔值或 `quantization` 2..8（全音符至六十四分音符），`operation=accept` 导入为新曲谱；继续轮询原打开请求，取消使用 `gp_cancel`。不向当前曲谱合并。GP3/GP4、MXL 等宿主可打开的扩展仍需各自样本验收。GP5/GPX 可能丢失新版本记谱及音色信息；MusicXML 保留记谱而非完整 RSE，五线谱和六线谱可分别成为输出谱表；MIDI 保留演奏事件，不保留原始排版和完整技法语义。
+
+`gp_preferences` 只操作整个软件，`scope=application`，`model=general/gui/score`；允许属性由 `values` 列出，设置失败会尝试恢复旧值。`gp_presentation` 只操作返回 ID 对应的文档，一次修改页面、视图或谱表一组。页面边长 50..1000 毫米，边距须留下至少 20 毫米内容区域；尺寸、边距、方向和谱表显示可保存重开。缩放 0.25..4 及编辑视图属于会话状态，返回 `requested` 时应再次读取 `state` 确认。页面及显示设置不进入宿主撤销栈，同值页面设置不制造脏状态。声音和设备参数复用 P5 的 `gp_audio_track`/`gp_audio_device`。
+
+专项：`./native/test-p6.ps1 -SessionFile <session.json>`，使用 Windows 自带的 PowerShell/.NET 核验交换格式、PNG、PCM、设置恢复和临时文档隔离。`test-exchange.ps1` 仅解析本项目简单验收夹具，不是通用转换器。开发者可显式加 `-RenderPdf` 使用已准备的 Poppler 独立复核 PDF；该选项不是普通测试、插件安装或运行的前提，测试脚本不进入安装包。当前证据见 [P6 验收](../COVERAGE.md#p6-验收)。
+
 ## 私有接口的版本约束
 
 生产文档定位只在 `GuitarPro.exe` 和 `GPCore.dll` 的 SHA-256 与已验证构建完全一致时启用。播放接口另校验 `GPRSE.dll`，生命周期钩子另校验 `Qt5Core.dll`。对应的宿主文件哈希为：
@@ -496,6 +510,21 @@ IDocumentsManager + 0x10 → 管理器实现对象
 开发时可在启动前设置 `GPMCP_DEVELOPMENT=1`，启用只读 `gp_debug_objects`。其 RTTI 扫描可能读到相邻分配，结果只能作为研究线索，不能直接当作稳定 ABI。原始地址不接受客户端回传执行，默认模式也不暴露该开发工具。
 
 ## 验证
+
+P1 已通过真实安装生命周期 48 项、生命周期内入口 108 项及普通用户四种入口 68 项；隔离安装 46 项及协议 27 项，文件归属、不同 DLL 回滚与 UTF-8 配置在 PowerShell 5.1/7 各通过 33 项。准确安装包、脚本哈希和具名记录见 [P1 验收](../COVERAGE.md#p1-验收)。
+
+P1 安装集成专项可直接验证解压后的候选包，避免误用开发目录中后来编译的 DLL：
+
+```powershell
+./native/test-installer-files.ps1 -HostDirectory .tools/隔离宿主 -PackageDirectory artifacts/候选包
+./native/test-installation.ps1 -HostDirectory .tools/隔离宿主 -PackageDirectory artifacts/候选包
+./native/test-installed-lifecycle.ps1 -PackageDirectory artifacts/候选包 -StartupSettleMs 30000 -Elevate
+./native/test-installed-entrypoints.ps1 -PackageDirectory artifacts/候选包 -StartupSettleMs 30000
+```
+
+真实目录测试前关闭所有 Guitar Pro 实例。生命周期脚本更新已有插件，执行安装、更新、停用、启用、卸载和重装，最终保留候选版本并恢复原有用户设置；检查凭据、厂商二进制、原有快捷方式和文件关联是否保留。入口脚本通过真实 Windows Shell 打开 EXE、原有快捷方式、中文/空格路径的关联曲谱，并验证运行中转发和显式后台启动。证据包含准确的包内 DLL、脚本哈希、PowerShell 版本、进程身份及退出结果；失败时保留宿主，不强制结束真实进程。
+
+`StartupSettleMs` 是验收条件，不是快速退出挂起的修复。该宿主在短时间启动/退出时的 AMNetwork 等待仍按用户确认保留到 P7。
 
 P3 已按用户确认的必要范围完成。最终构建在 PowerShell 7.6.5 通过 19 组、3732 项完整回归，包含记谱 627 项、混合乐器 210 项和结构 307 项；宿主退出码为 0，连接描述已清理。已验证原弦调弦预检、跨轨及长连接链移调、跳转清除与结构引用；乐器配置复用模板和现有音轨，保留两层连音。准确哈希、证据及边界见 [P3 验收](../COVERAGE.md#p3-验收)。
 
