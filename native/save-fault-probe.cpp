@@ -12,6 +12,7 @@
 #include <tlhelp32.h>
 #include <cstring>
 #include <mutex>
+#include <stdexcept>
 #include "guitarpro_api.h"
 
 // This isolated probe substitutes Windows imports in memory. It is excluded
@@ -26,6 +27,7 @@ class FaultProbe : public QObject {
     std::recursive_mutex mutex;
     HANDLE lock = INVALID_HANDLE_VALUE;
     QHash<HANDLE, WriteState> streams;
+    QPointer<QObject> exceptionDocument;
     QList<Import> imports;
     QTimer poll{this};
 
@@ -46,7 +48,7 @@ class FaultProbe : public QObject {
         const auto config = QJsonDocument::fromJson(input.readAll()).object();
         if (config.value("request").toString().isEmpty()) return;
         if (config.value("request").toString() != request) {
-            release(); writers = 0; streams.clear(); request = config.value("request").toString();
+            release(); writers = 0; streams.clear(); exceptionDocument.clear(); request = config.value("request").toString();
             record({{"event", "configuration"}, {"mode", config.value("mode")}});
         }
         mode = config.value("mode").toString(); selectedWriter = config.value("writer").toInt(1);
@@ -73,9 +75,11 @@ class FaultProbe : public QObject {
         std::lock_guard<std::recursive_mutex> guard(probe.mutex);
         probe.refresh();
         if (probe.mode.isEmpty()) return WriteFile(file, data, size, written, overlapped);
-        if (probe.mode == "post_validate" && QThread::currentThread() == qApp->thread()) {
-            for (const auto &document : guitarpro::documents())
+        if ((probe.mode == "post_validate" || probe.mode == "post_exception" || probe.mode == "path_exception" || probe.mode == "recovery_exception") && QThread::currentThread() == qApp->thread()) {
+            for (const auto &document : guitarpro::documents()) {
                 QObject::connect(document.object, SIGNAL(isDirtyChanged(bool)), &probe, SLOT(onDirtyChanged(bool)), Qt::ConnectionType(Qt::DirectConnection | Qt::UniqueConnection));
+                QObject::connect(document.object, SIGNAL(openedFilePathChanged(QString)), &probe, SLOT(onOpenedPathChanged(QString)), Qt::ConnectionType(Qt::DirectConnection | Qt::UniqueConnection));
+            }
         }
         const QString candidate = probe.filePath(file);
         if (probe.matches(candidate)) probe.record({{"event", "candidate"}, {"path", candidate}, {"overlapped", overlapped != nullptr}, {"bytes", double(size)}});
@@ -165,7 +169,12 @@ class FaultProbe : public QObject {
 private slots:
     void onDirtyChanged(bool dirty) {
         std::lock_guard<std::recursive_mutex> guard(mutex);
-        if (dirty || mode != "post_validate" || !sender() || sender()->property("saveFilePath").toString().compare(target, Qt::CaseInsensitive)) return;
+        if (dirty || !sender() || sender()->property("saveFilePath").toString().compare(target, Qt::CaseInsensitive)) return;
+        if (mode == "post_exception") {
+            record({{"event", "native_exception"}, {"stage", "saved_state"}, {"native_dirty", dirty}});
+            throw std::runtime_error("Isolated exception after native saved-state notification");
+        }
+        if (mode != "post_validate") return;
         const HANDLE file = CreateFileW(reinterpret_cast<LPCWSTR>(target.utf16()), GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
         if (file == INVALID_HANDLE_VALUE) return;
         LARGE_INTEGER before{}, after{};
@@ -174,6 +183,15 @@ private slots:
         const bool corrupted = GetFileSizeEx(file, &before) && WriteFile(file, invalidSignature, sizeof(invalidSignature), &written, nullptr) && written == sizeof(invalidSignature) && GetFileSizeEx(file, &after);
         CloseHandle(file);
         record({{"event", "output_corrupted"}, {"writer", writers}, {"corrupted", corrupted}, {"bytes_before", double(before.QuadPart)}, {"bytes_after", double(after.QuadPart)}, {"native_dirty", dirty}, {"native_clean_observed", true}});
+    }
+    void onOpenedPathChanged(const QString &path) {
+        std::lock_guard<std::recursive_mutex> guard(mutex);
+        if ((mode != "path_exception" && mode != "recovery_exception") || !sender()) return;
+        const bool adopting = !path.compare(target, Qt::CaseInsensitive);
+        if (!adopting && (mode != "recovery_exception" || exceptionDocument != sender())) return;
+        if (adopting) exceptionDocument = sender();
+        record({{"event", "native_exception"}, {"stage", adopting ? "opened_path" : "restored_path"}, {"native_dirty", sender()->property("isDirty").toBool()}, {"opened_path", path}});
+        throw std::runtime_error("Isolated exception after native opened-path notification");
     }
 public:
     FaultProbe(const QString &path, const QString &name) : directory(path), target(path + "/" + name),

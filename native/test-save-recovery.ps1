@@ -24,7 +24,7 @@ $checks = 0; $passed = $false; $observations = @(); $connection = $null; $proces
 function Assert($condition, [string]$message) { if (-not $condition) { throw $message }; $script:checks++ }
 function Set-Fault([string]$mode = '', [int]$writer = 1) {
     $request = [guid]::NewGuid().ToString()
-    @{request=$request;mode=$mode;writer=$writer} | ConvertTo-Json -Compress | Set-Content -LiteralPath $control -Encoding ASCII
+    [IO.File]::WriteAllText($control, (@{request=$request;mode=$mode;writer=$writer} | ConvertTo-Json -Compress), [Text.Encoding]::ASCII)
     return $request
 }
 function Wait-Operation([string]$request, [string]$expected) {
@@ -76,7 +76,13 @@ try {
         @{name='as-invalid';tool='gp_save_as';mode='post_validate';writer=2;existing=$true},
         @{name='current-invalid';tool='gp_save_current';mode='post_validate';writer=2;existing=$true},
         @{name='save-close';tool='gp_close';mode='write';writer=2;existing=$true},
-        @{name='recovery-locked';tool='gp_save_as';mode='recovery';writer=1;existing=$true}
+        @{name='recovery-locked';tool='gp_save_as';mode='recovery';writer=1;existing=$true},
+        @{name='as-exception';tool='gp_save_as';mode='post_exception';writer=2;existing=$true},
+        @{name='current-exception';tool='gp_save_current';mode='post_exception';writer=2;existing=$true},
+        @{name='as-new-exception';tool='gp_save_as';mode='post_exception';writer=2;existing=$false},
+        @{name='close-exception';tool='gp_close';mode='post_exception';writer=2;existing=$true},
+        @{name='path-exception';tool='gp_save_as';mode='path_exception';writer=2;existing=$true},
+        @{name='recovery-exception';tool='gp_close';mode='recovery_exception';writer=2;existing=$true}
     )
     foreach ($case in $cases) {
         Set-Fault | Out-Null
@@ -120,6 +126,21 @@ try {
                 Assert ([bool]($events | Where-Object native_clean_observed)) 'Native clean state was not observed before output corruption.'
                 Assert ($failed.error -like 'Native output validation failed*') 'Corrupt native output did not reach post-save validation.'
             } else { Assert ($failed.error -like 'Native document save did not complete*') 'Host did not reject corrupted native output.' }
+        } elseif ($case.mode -eq 'recovery_exception') {
+            Assert (@($events | Where-Object event -EQ 'native_exception').Count -eq 2) 'The save and recovery notifications did not both throw.'
+            Assert ($state.status -eq 'error' -and $failed.native_exception -and $state.outcome_unknown -and $failed.outcome_unknown -and $failed.recovery_error) 'Failed recovery did not retain an unknown outcome.'
+            Assert ($failed.file_restored -and $failed.save_path_restored -and -not $failed.opened_path_restored -and $failed.dirty_state_restored -and $failed.dirty) 'Interrupted notification skipped file, save-path or unsaved-state restoration.'
+            Assert ($failed.recovery_path -and (Get-FileHash -LiteralPath $failed.recovery_path).Hash -eq $fixtureHash) 'Recovery exception lost the original backup.'
+            Assert ((Get-FileHash -LiteralPath $target).Hash -eq $fixtureHash -and (Get-FileHash -LiteralPath $source).Hash -eq $fixtureHash) 'Recovery exception changed original file bytes.'
+            $document = @((Invoke-McpTool $connection gp_documents).documents)
+            Assert ($document.Count -eq 1 -and $document[0].id -eq $id -and $document[0].dirty -and [IO.Path]::GetFullPath($document[0].save_path) -eq $source -and [IO.Path]::GetFullPath($document[0].opened_path) -eq $source) 'Incomplete recovery changed the test document identity or paths.'
+            Assert ((Invoke-McpTool $connection gp_score @{document=$id}).metadata.Title -eq $title) 'Recovery exception lost unsaved content.'
+            Assert ((Invoke-McpTool $connection gp_edit_metadata @{document=$id;property='Artist';value='Must not apply'} -AllowError).error) 'Incomplete recovery permitted another mutation.'
+            Set-Fault | Out-Null
+            break
+        } elseif ($case.mode -in @('post_exception','path_exception')) {
+            Assert (@($events | Where-Object event -EQ 'native_exception').Count -eq 1) 'The native save notification did not throw the test exception.'
+            Assert ($state.status -eq 'error' -and $failed.native_exception -and -not $state.outcome_unknown) 'Native exception did not finish with a recovered error outcome.'
         } else {
             Assert (@($events | Where-Object { $_.event -eq 'write_failed' -and $_.writer -eq $case.writer -and $_.bytes_written -gt 0 }).Count -eq 1) 'No partial native write was observed before failure.'
         }
@@ -154,12 +175,25 @@ try {
         $close = Invoke-McpTool $connection gp_close @{document=$reopened}
         Wait-Operation $close.request 'closed' | Out-Null
     }
-    Assert ((Invoke-McpTool $connection gp_documents).documents.Count -eq 0) 'Recovery suite retained a document.'
+    Assert ((Invoke-McpTool $connection gp_documents).documents.Count -eq 1 -and $case.mode -eq 'recovery_exception') 'Recovery suite retained an unexpected document.'
     $identity = Invoke-McpTool $connection gp_capabilities
     Assert ($identity.hidden_mode -and $identity.foreground_pid -ne $identity.pid) 'Save failures took foreground focus.'
     $w = Invoke-McpTool $connection gp_objects @{query='MainWindow';limit=100}
     $main = @($w.objects | Where-Object class -EQ 'gp::gui::MainWindow')
     try { Invoke-McpTool $connection gp_close_window @{snapshot=$w.snapshot;id=$main[0].id} | Out-Null }
+    catch { if (-not $process.WaitForExit(5000)) { throw } }
+    $deadline = [DateTime]::UtcNow.AddSeconds(8)
+    do {
+        $dialog = Invoke-McpTool $connection gp_dialogs
+        if ($dialog.blocked) { break }
+        Start-Sleep -Milliseconds 50
+    } while ([DateTime]::UtcNow -lt $deadline)
+    $discard = @($dialog.buttons | Where-Object standard_button -EQ 8388608)
+    Assert ($dialog.blocked -and $discard.Count -eq 1) 'The retained test document did not offer native discard on exit.'
+    $buttons = Invoke-McpTool $connection gp_objects @{query=$discard[0].text;limit=100}
+    $button = @($buttons.objects | Where-Object { $_.button -and $_.enabled -and $_.visible -and $_.properties.text -eq $discard[0].text })
+    Assert ($button.Count -eq 1) 'Could not identify the native discard button for the isolated test document.'
+    try { Invoke-McpTool $connection gp_trigger @{snapshot=$buttons.snapshot;id=$button[0].id} | Out-Null }
     catch { if (-not $process.WaitForExit(5000)) { throw } }
     Assert ($process.WaitForExit(15000) -and $process.ExitCode -eq 0) 'Recovery host did not exit cleanly.'
     Assert (-not (Test-Path -LiteralPath $sessionFile)) 'Recovery host retained its descriptor.'
@@ -167,7 +201,7 @@ try {
 } finally {
     Set-Fault | Out-Null
     if ($connection -and $process -and -not $process.HasExited) { Close-McpSession $connection }
-    @{passed=$passed;checks=$checks;observations=$observations;host_pid=$(if($process){$process.Id});session_file=$sessionFile;exit_code=$(if($process -and $process.HasExited){$process.ExitCode});powershell=$PSVersionTable.PSVersion.ToString();native_partial_write_recovery_verified=$passed;post_save_validation_recovery_verified=$passed;retained_backup_verified=$passed;save_error_dialog_control_verified=$passed;native_save_progress_cancellation_verified=$false;plugin_sha256=(Get-FileHash "$root/.tools/native/plugins/generic/guitarpro_mcp.dll").Hash;probe_sha256=(Get-FileHash $probe).Hash} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $run 'verification.json')
+    @{passed=$passed;checks=$checks;observations=$observations;host_pid=$(if($process){$process.Id});session_file=$sessionFile;exit_code=$(if($process -and $process.HasExited){$process.ExitCode});powershell=$PSVersionTable.PSVersion.ToString();native_partial_write_recovery_verified=$passed;post_save_validation_recovery_verified=$passed;native_save_exception_recovery_verified=$passed;recovery_exception_backup_verified=$passed;retained_backup_verified=$passed;save_error_dialog_control_verified=$passed;native_save_progress_cancellation_verified=$false;plugin_sha256=(Get-FileHash "$root/.tools/native/plugins/generic/guitarpro_mcp.dll").Hash;probe_sha256=(Get-FileHash $probe).Hash} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $run 'verification.json')
     if ($process) {
         if (-not $process.HasExited) { Write-Warning "Recovery host retained: PID $($process.Id), session $sessionFile" }
         $process.Dispose()

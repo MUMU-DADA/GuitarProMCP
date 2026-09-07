@@ -19,6 +19,7 @@
 #include <QtWidgets/QBoxLayout>
 #include <QtGui/QColor>
 #include <cmath>
+#include <exception>
 
 namespace guitarpro {
 inline QString validateGpFile(const QString &path) {
@@ -1408,37 +1409,70 @@ inline QJsonObject save(const QJsonObject &args, bool adopt = false, bool curren
                 restored = copied && output.commit();
             }
         } else restored = !QFileInfo::exists(absolute) || QFile::remove(absolute);
-        const bool pathRestored = chosen.object &&
-            (chosen.object->property("saveFilePath").toString() == oldPath ||
-             (QMetaObject::invokeMethod(chosen.object, "setSaveFilePath", Qt::DirectConnection, Q_ARG(QString, oldPath)) && chosen.object->property("saveFilePath").toString() == oldPath));
-        const bool openedPathRestored = updateOpenedPath(oldOpenedPath);
-        if (dirtyBefore && chosen.object && !chosen.object->property("isDirty").toBool())
-            QMetaObject::invokeMethod(chosen.object, "setIsDirty", Qt::DirectConnection, Q_ARG(bool, true));
+        bool pathRestored = false, openedPathRestored = false;
+        QStringList recoveryErrors;
+        try {
+            pathRestored = chosen.object &&
+                (chosen.object->property("saveFilePath").toString() == oldPath ||
+                 (QMetaObject::invokeMethod(chosen.object, "setSaveFilePath", Qt::DirectConnection, Q_ARG(QString, oldPath)) &&
+                  chosen.object && chosen.object->property("saveFilePath").toString() == oldPath));
+            openedPathRestored = updateOpenedPath(oldOpenedPath);
+        } catch (const std::exception &exception) { recoveryErrors.append(QString::fromUtf8(exception.what())); }
+        catch (...) { recoveryErrors.append("Unknown native path recovery exception"); }
+        // Even a failed path notification must not prevent restoring unsaved state.
+        try {
+            if (dirtyBefore && chosen.object && !chosen.object->property("isDirty").toBool())
+                QMetaObject::invokeMethod(chosen.object, "setIsDirty", Qt::DirectConnection, Q_ARG(bool, true));
+        } catch (const std::exception &exception) { recoveryErrors.append(QString::fromUtf8(exception.what())); }
+        catch (...) { recoveryErrors.append("Unknown native dirty-state recovery exception"); }
         QJsonObject result{{"error", message}, {"file_restored", restored}, {"save_path_restored", pathRestored}, {"dirty_before", dirtyBefore},
             {"opened_path_restored", openedPathRestored},
             {"dirty_state_restored", chosen.object && chosen.object->property("isDirty").toBool() == dirtyBefore},
             {"dirty", chosen.object ? QJsonValue(chosen.object->property("isDirty").toBool()) : QJsonValue()}};
-        if (!restored && existed) { recovery.setAutoRemove(false); result["recovery_path"] = backup; }
+        const bool unknown = !pathRestored || !openedPathRestored || !result.value("dirty_state_restored").toBool() || !recoveryErrors.isEmpty();
+        if (unknown) result["outcome_unknown"] = true;
+        if (!recoveryErrors.isEmpty()) result["recovery_error"] = recoveryErrors.join("; ");
+        recovery.setAutoRemove(restored && !unknown);
+        if ((!restored || unknown) && existed) result["recovery_path"] = backup;
         return result;
     };
-    bool saved = false;
-    if (!chosen.object->metaObject()->method(copyMethod).invoke(chosen.object, Qt::DirectConnection, Q_RETURN_ARG(bool, saved), Q_ARG(QString, absolute)) || !saved)
-        return recover("Native copy save did not report success; inspect recovery and document state before retrying");
-    if (adopt) {
-        bool committed = false;
-        if (!chosen.object || !QMetaObject::invokeMethod(chosen.object, "setSaveFilePath", Qt::DirectConnection, Q_ARG(QString, absolute)) ||
-            !QMetaObject::invokeMethod(chosen.object, "save", Qt::DirectConnection, Q_RETURN_ARG(bool, committed)) ||
-            !committed || !chosen.object || chosen.object->property("isDirty").toBool())
-            return recover("Native document save did not complete; inspect recovery and document state before retrying");
+    // Keep the backup alive through native calls, including exception unwinding.
+    recovery.setAutoRemove(false);
+    QJsonObject result;
+    bool nativeException = false;
+    try {
+        result = [&]() -> QJsonObject {
+            bool saved = false;
+            if (!chosen.object->metaObject()->method(copyMethod).invoke(chosen.object, Qt::DirectConnection, Q_RETURN_ARG(bool, saved), Q_ARG(QString, absolute)) || !saved)
+                return {{"error", "Native copy save did not report success; inspect recovery and document state before retrying"}};
+            if (adopt) {
+                bool committed = false;
+                if (!chosen.object || !QMetaObject::invokeMethod(chosen.object, "setSaveFilePath", Qt::DirectConnection, Q_ARG(QString, absolute)) ||
+                    !chosen.object || !QMetaObject::invokeMethod(chosen.object, "save", Qt::DirectConnection, Q_RETURN_ARG(bool, committed)) ||
+                    !committed || !chosen.object || chosen.object->property("isDirty").toBool())
+                    return {{"error", "Native document save did not complete; inspect recovery and document state before retrying"}};
+            }
+            const QFileInfo output(absolute);
+            if (!output.isFile() || !output.size()) return {{"error", "Native save returned without a completed file"}};
+            const QString validation = validateGpFile(absolute);
+            if (!validation.isEmpty()) return {{"error", "Native output validation failed: " + validation}};
+            if (adopt && !updateOpenedPath(absolute)) return {{"error", "Native saved path notifications did not complete; inspect recovery and document state before retrying"}};
+            if (!chosen.object) return {{"error", "Document disappeared during saving"}};
+            return {{"path", absolute}, {"bytes", double(output.size())}, {"document", chosen.id()},
+                {"copy_only", !adopt}, {"overwrote", existed}, {"dirty", chosen.object->property("isDirty").toBool()},
+                {"native_method", adopt ? "IDocument::saveToFile, setSaveFilePath, save, setOpenedFilePath and native path notifications" : "IDocument::saveToFile(QString)"}};
+        }();
+    } catch (const std::exception &exception) {
+        nativeException = true;
+        result = {{"error", QString::fromUtf8(exception.what())}};
+    } catch (...) {
+        nativeException = true;
+        result = {{"error", "Unknown native save exception"}};
     }
-    const QFileInfo output(absolute);
-    if (!output.isFile() || !output.size()) return recover("Native save returned without a completed file");
-    const QString validation = validateGpFile(absolute);
-    if (!validation.isEmpty()) return recover("Native output validation failed: " + validation);
-    if (adopt && !updateOpenedPath(absolute)) return recover("Native saved path notifications did not complete; inspect recovery and document state before retrying");
-    return {{"path", absolute}, {"bytes", double(output.size())}, {"document", chosen.id()},
-        {"copy_only", !adopt}, {"overwrote", existed}, {"dirty", chosen.object->property("isDirty").toBool()},
-        {"native_method", adopt ? "IDocument::saveToFile, setSaveFilePath, save, setOpenedFilePath and native path notifications" : "IDocument::saveToFile(QString)"}};
+    if (result.contains("error")) result = recover(result.value("error").toString());
+    else recovery.setAutoRemove(true);
+    if (nativeException) result["native_exception"] = true;
+    return result;
 }
 }
 

@@ -233,7 +233,11 @@ class Bridge : public QObject {
     QJsonObject performSave(const QJsonObject &args, bool adopt, bool current, QJsonObject &operation) {
         QScopedValueRollback<QJsonObject *> running(savingOperation, &operation);
         saveModal.clear();
-        try { return guitarpro::save(args, adopt, current); }
+        try {
+            auto result = guitarpro::save(args, adopt, current);
+            if (result.value("outcome_unknown").toBool()) operation["outcome_unknown"] = true;
+            return result;
+        }
         catch (const std::exception &exception) {
             operation["outcome_unknown"] = true;
             return {{"error", QString::fromUtf8(exception.what())}, {"outcome_unknown", true}};
@@ -740,7 +744,10 @@ class Bridge : public QObject {
                     saving["status"] = result.contains("error") ? "error" : "saved";
                     if (result.contains("error")) saving["error"] = result.value("error");
                     if (result.value("outcome_unknown").toBool()) saving["outcome_unknown"] = true;
-                    if (saving.value("cancel_requested").toBool() && saving.value("cancel_decision_available").toBool() && result.contains("error") && result.value("file_restored").toBool() && result.value("save_path_restored").toBool()) saving["status"] = "cancelled";
+                    if (saving.value("cancel_requested").toBool() && saving.value("cancel_decision_available").toBool() && result.contains("error") &&
+                        result.value("file_restored").toBool() && result.value("save_path_restored").toBool() &&
+                        result.value("opened_path_restored").toBool() && result.value("dirty_state_restored").toBool() &&
+                        !result.value("native_exception").toBool() && !result.value("outcome_unknown").toBool()) saving["status"] = "cancelled";
                 });
                 return saving;
             }
