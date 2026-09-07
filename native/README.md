@@ -343,9 +343,18 @@ Invoke-McpTool $connection gp_undo_redo @{operation='undo';document=$target}
 
 `gp_documents` 在验证宿主标签与页面映射后按标签顺序返回文档，每个文档包含从 0 开始的 `tab_index`。映射不可用时返回 `tab_order_available=false`、`tab_order_error` 和空索引；空文档列表的顺序有效。
 
-`gp_move_document` 必须提供 `document` UUID 与整数 `index`，目标位置为移动后的索引，范围是 `0..文档数-1`。原位置返回 `unchanged`，实际移动返回 `moved`，都包含 `previous_index`、`tab_index` 和 `undoable=false`。重排保留活动文档、未保存状态和曲谱撤销历史，仅影响当前会话。存在模态窗口或待完成文档操作时拒绝执行。
+`gp_move_document` 必须提供 `document` UUID 与整数 `index`，目标位置为移动后的索引，范围是 `0..文档数-1`。原位置返回 `unchanged`，实际移动返回 `moved`，都包含 `previous_index`、`tab_index`、`undoable=false` 和 `request`。操作同步完成，可在 `gp_operation` 或 `gp_documents.moving` 读取 `kind=move` 的结果，替换后的请求沿用 64 条历史记录。重排保留活动文档、未保存状态和曲谱撤销历史，仅影响当前会话。存在模态窗口或待完成文档操作时拒绝执行。
 
-该版本使用自定义 `am::gui::Tab`、`QBoxLayout` 与 `QStackedWidget`，并非 `QTabBar`。重排在 Qt 线程内同步移动标签项和页面，屏蔽页面栈的中间信号，恢复原活动页面后调用原活动标签的原生激活信号，并读回校验。校验失败会报告 `outcome_unknown=true`；这是同步重排后的校验失败，不是 `gp_operation` 中的异步请求，必须先检查 `gp_documents` 和实际界面，不能自动重试。
+该版本使用自定义 `am::gui::Tab`、`QBoxLayout` 与 `QStackedWidget`，并非 `QTabBar`。重排前保存全部标签和页面的对象快照，在 Qt 线程内同步排列并屏蔽页面栈的中间信号，再由原生标签通知更新宿主状态。完成校验包含全部标签/页面顺序和活动文档，不能只核对目标索引。
+
+原生通知抛异常或校验失败时，尝试恢复整个原排列；恢复时先同步当前页面对应标签，再选择原活动标签，避免宿主保留的选择索引使激活被跳过。确认恢复后返回 `error`、`rolled_back=true`，允许后续操作；异常另有 `native_exception=true`。回滚再次异常或无法确认时返回 `rolled_back=false`、`outcome_unknown=true`，异常细节在 `recovery_error`，请求保留写入阻塞。`gp_cancel` 不会把已经执行的重排当作可取消操作；需检查文档和原生界面，后续状态协调仍待完成。
+
+独立 `test-tab-recovery.ps1` 在四份隔离文档上执行 303 项检查：额外标签交换、活动文档切换、活动/非活动标签通知异常、回滚通知再次异常；核对完整原顺序、UUID、路径、未保存内容、撤销重做、保存副本重开、再次移动、历史记录和未知结果写入阻塞。探针只允许绑定标记目录中的四份测试文档，不进入生产包。
+
+```powershell
+./native/build-tab-fault-probe.ps1
+./native/test-tab-recovery.ps1 -Exe '<isolated .tools host>/GuitarPro.exe'
+```
 
 `native/test-document-tabs.ps1` 的基础 196 项覆盖同名路径、两份同模板未命名文档、四份未保存文档、边界及错误参数、活动文档与 UUID、撤销重做、标签坐标、模态拒绝、保存重开、错位关闭，以及原生关闭确认框存在时恢复窗口后仍可取消。`-VerifyDocumentMenu` 扩展到 281 项，实际触发重排前后及三次隐藏/恢复后的五个文档菜单，逐项核对目标并验证重新隐藏后不占前台。`test-all.ps1` 默认启用这一分支，动作未启用或目标不符均失败。
 
@@ -421,7 +430,7 @@ IDocumentsManager + 0x10 → 管理器实现对象
 
 ## 验证
 
-当前保存异常恢复检查点的核心在 Windows PowerShell 5.1 和 PowerShell 7 下分别通过十六组、2574 项完整回归，其中包含 281 项标签与原生菜单检查，另分别通过保存故障恢复 264 项。此前窗口恢复、另存修复、标签重排以及后台 DDE/连接 61 项、可见 DDE/连接 60 项属于旧构建证据。准确证据和运行条件见 [当前验证证据](../COVERAGE.md#当前验证证据)，完整任务见 [开发计划](../DEVELOPMENT_PLAN.md)。下方保留的旧轮次不代表当前完整验收结果。
+当前标签故障回滚检查点的核心在 Windows PowerShell 5.1 和 PowerShell 7 下分别通过十六组、2574 项完整回归，其中包含 281 项标签与原生菜单检查，另分别通过标签故障恢复 303 项，并在 Windows PowerShell 5.1 通过保存故障恢复 264 项。此前保存异常恢复、窗口恢复、另存修复、标签重排以及后台 DDE/连接 61 项、可见 DDE/连接 60 项属于旧构建证据。准确证据和运行条件见 [当前验证证据](../COVERAGE.md#当前验证证据)，完整任务见 [开发计划](../DEVELOPMENT_PLAN.md)。下方保留的旧轮次不代表当前完整验收结果。
 
 按根目录 [README](../README.md) 使用完整回归入口；可用 `-Exe` 指定隔离宿主：
 

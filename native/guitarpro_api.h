@@ -192,7 +192,7 @@ inline Document choose(const QJsonObject &args) {
 inline QJsonObject moveDocument(const QJsonObject &args, const QList<QPointer<QObject>> &objects) {
     const Document target = choose(args);
     if (!target.object || !target.view) return {{"error", "Choose an existing document id"}};
-    QObject *current = activeDocument(objects);
+    QPointer<QObject> current = activeDocument(objects);
     if (!current) return {{"error", "Native active-document state is unavailable"}};
     const auto tabs = documentTabs(documents(), current);
     if (!tabs.pages || !tabs.layout) return {{"error", tabs.error}};
@@ -201,21 +201,70 @@ inline QJsonObject moveDocument(const QJsonObject &args, const QList<QPointer<QO
     if (from == to) return {{"status", "unchanged"}, {"document", target.id()}, {"previous_index", from}, {"tab_index", to}, {"undoable", false}};
     QPointer<QWidget> activePage = tabs.pages->currentWidget();
     QPointer<QWidget> activeTab = tabs.layout->itemAt(tabs.pages->currentIndex())->widget();
-    // The host has no drag-reorder handler. Keep its tab layout and page stack
-    // aligned, then let the original tab activation signal update host state.
-    {
-        const QSignalBlocker blocked(tabs.pages);
-        auto item = tabs.layout->takeAt(from);
-        tabs.layout->insertItem(to, item);
-        tabs.pages->removeWidget(target.view);
-        tabs.pages->insertWidget(to, target.view);
-        tabs.pages->setCurrentWidget(activePage);
+    QList<QPointer<QWidget>> pagesBefore, tabsBefore;
+    QList<int> original;
+    for (int i = 0; i < tabs.pages->count(); ++i) {
+        pagesBefore.append(tabs.pages->widget(i));
+        tabsBefore.append(tabs.layout->itemAt(i)->widget());
+        original.append(i);
     }
-    const bool invoked = activeTab && QMetaObject::invokeMethod(activeTab, "clicked", Qt::DirectConnection);
-    const auto observed = documentTabs(documents(), activeDocument(objects));
-    if (!invoked || !observed.pages || !target.view || observed.pages->indexOf(target.view) != to || observed.pages->currentWidget() != activePage || activeDocument(objects) != current)
-        return {{"error", "Native tab order did not match the requested result; inspect gp_documents before retrying"}, {"outcome_unknown", true}};
-    return {{"status", "moved"}, {"document", target.id()}, {"previous_index", from}, {"tab_index", to}, {"undoable", false}};
+    auto requested = original;
+    requested.move(from, to);
+    const auto arrange = [&](const QList<int> &order) {
+        if (!tabs.pages || !tabs.layout || !activePage || !activeTab || !current ||
+            tabs.pages->count() != original.size() || tabs.layout->count() != original.size()) return false;
+        for (int i : original)
+            if (!pagesBefore[i] || !tabsBefore[i] || tabs.pages->indexOf(pagesBefore[i]) < 0 || tabs.layout->indexOf(tabsBefore[i]) < 0) return false;
+        // The host has no drag-reorder handler. Keep tab widgets and document
+        // pages aligned without emitting intermediate page changes.
+        const QPointer<QWidget> visiblePage = tabs.pages->currentWidget();
+        const QSignalBlocker blocked(tabs.pages);
+        for (int i = 0; i < order.size(); ++i) {
+            auto tab = tabsBefore[order[i]], page = pagesBefore[order[i]];
+            const int tabIndex = tabs.layout->indexOf(tab);
+            if (tabIndex != i) tabs.layout->insertItem(i, tabs.layout->takeAt(tabIndex));
+            if (tabs.pages->indexOf(page) != i) {
+                tabs.pages->removeWidget(page);
+                tabs.pages->insertWidget(i, page);
+            }
+        }
+        tabs.pages->setCurrentWidget(visiblePage);
+        return true;
+    };
+    const auto matches = [&](const QList<int> &order) {
+        const auto observed = documentTabs(documents(), activeDocument(objects));
+        if (!current || !activePage || !observed.pages || observed.pages != tabs.pages || observed.layout != tabs.layout ||
+            observed.pages->count() != order.size() || observed.pages->currentWidget() != activePage || activeDocument(objects) != current) return false;
+        for (int i = 0; i < order.size(); ++i)
+            if (observed.pages->widget(i) != pagesBefore[order[i]] || observed.layout->itemAt(i)->widget() != tabsBefore[order[i]]) return false;
+        return true;
+    };
+    QString failure;
+    bool nativeException = false;
+    try {
+        if (!arrange(requested) || !activeTab || !QMetaObject::invokeMethod(activeTab, "clicked", Qt::DirectConnection) || !matches(requested))
+            failure = "Native tab order did not match the requested result";
+    } catch (const std::exception &exception) { failure = QString::fromUtf8(exception.what()); nativeException = true; }
+    catch (...) { failure = "Unknown native tab move exception"; nativeException = true; }
+    if (failure.isEmpty()) return {{"status", "moved"}, {"document", target.id()}, {"previous_index", from}, {"tab_index", to}, {"undoable", false}};
+    bool restored = false;
+    QString recoveryError;
+    try {
+        if (arrange(original)) {
+            // Resync the current tab's index before selecting the old active
+            // tab; reordering can leave the host's selected index unchanged.
+            auto selected = tabs.layout->itemAt(tabs.pages->currentIndex())->widget();
+            const bool synced = selected == activeTab || QMetaObject::invokeMethod(selected, "clicked", Qt::DirectConnection);
+            restored = synced && activeTab && QMetaObject::invokeMethod(activeTab, "clicked", Qt::DirectConnection) && matches(original);
+        }
+    } catch (const std::exception &exception) { recoveryError = QString::fromUtf8(exception.what()); }
+    catch (...) { recoveryError = "Unknown native tab recovery exception"; }
+    QJsonObject result{{"error", failure}, {"document", args.value("document")}, {"previous_index", from},
+        {"requested_index", to}, {"rolled_back", restored}};
+    if (nativeException) result["native_exception"] = true;
+    if (!restored) result["outcome_unknown"] = true;
+    if (!recoveryError.isEmpty()) result["recovery_error"] = recoveryError;
+    return result;
 }
 inline QJsonObject activate(const QJsonObject &args, const QList<QPointer<QObject>> &objects) {
     const Document target = choose(args);
