@@ -1,0 +1,3 @@
+LIBRARY AMUtils
+EXPORTS
+?openHandle@FileSystem@filesystem@am@@QEAA?AV?$unique_ptr@VFileHandle@filesystem@am@@V?$function@$$A6AXPEAVFileHandle@filesystem@am@@@Z@std@@@std@@AEBVQString@@W4Mode@123@@Z

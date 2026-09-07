@@ -1,0 +1,8 @@
+LIBRARY AMAudio.dll
+EXPORTS
+?buffersSize@AudioLayer@audio@am@@QEBA?AV?$vector@HV?$allocator@H@std@@@std@@XZ
+?hasAsio@AudioLayer@audio@am@@QEBA_NXZ
+?inputDevices@AudioLayer@audio@am@@QEBA?AV?$QList@UAudioDeviceInfo@audio@am@@@@XZ
+?instance@AudioLayer@audio@am@@SAAEAV123@XZ
+?isRunning@AudioLayer@audio@am@@QEBA_NXZ
+?outputDevices@AudioLayer@audio@am@@QEBA?AV?$QList@UAudioDeviceInfo@audio@am@@@@XZ
