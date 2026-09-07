@@ -335,7 +335,19 @@ Invoke-McpTool $connection gp_undo_redo @{operation='undo';document=$target}
 
 `gp_close` 通过 `TabWidgetProxy::tabCloseRequested(int)` 进入宿主关闭流程。执行前激活目标，校验页面与索引，异步回调再次确认对象身份。`unsaved=save` 先通过原生保存更新状态，未命名文档需要 `path`；保存失败保留文档。`discard` 只在本次关闭栈内、目标主窗口所属的保存/丢弃/取消对话框中，按标准按钮枚举选择丢弃。`cancel` 不关闭文档；`prompt` 保留原生对话框，可使用 `gp_cancel` 取消。它不伪造已保存状态，不调用曲谱视图的 `QWidget::close()`，不模拟输入。
 
-新建、打开、保存、关闭一次只允许一个待完成操作，期间允许读回和对话框内操作。当前记录也出现在 `gp_documents` 的 `creation/opening/saving/closing` 中。请求 ID 可通过 `gp_operation` 读取，64 条被替换记录之外的旧 ID 明确报错。取消只针对原请求和观察到的对话框；已完成操作不能取消。`cancelling` 必须继续轮询，若原生操作已经成功，结果仍报告真实成功。手工重排标签、所有模态上下文、未知原生结果和保存进度取消仍需进一步验证。
+新建、打开、保存、关闭一次只允许一个待完成操作，期间允许读回和对话框内操作。当前记录也出现在 `gp_documents` 的 `creation/opening/saving/closing` 中。请求 ID 可通过 `gp_operation` 读取，64 条被替换记录之外的旧 ID 明确报错。取消只针对原请求和观察到的对话框；已完成操作不能取消。`cancelling` 必须继续轮询，若原生操作已经成功，结果仍报告真实成功。原生标签拖动、所有模态上下文、未知原生结果和保存进度取消仍需进一步处理。
+
+### 文档标签重排
+
+`gp_documents` 在验证宿主标签与页面映射后按标签顺序返回文档，每个文档包含从 0 开始的 `tab_index`。映射不可用时返回 `tab_order_available=false`、`tab_order_error` 和空索引；空文档列表的顺序有效。
+
+`gp_move_document` 必须提供 `document` UUID 与整数 `index`，目标位置为移动后的索引，范围是 `0..文档数-1`。原位置返回 `unchanged`，实际移动返回 `moved`，都包含 `previous_index`、`tab_index` 和 `undoable=false`。重排保留活动文档、未保存状态和曲谱撤销历史，仅影响当前会话。存在模态窗口或待完成文档操作时拒绝执行。
+
+该版本使用自定义 `am::gui::Tab`、`QBoxLayout` 与 `QStackedWidget`，并非 `QTabBar`。重排在 Qt 线程内同步移动标签项和页面，屏蔽页面栈的中间信号，恢复原活动页面后调用原活动标签的原生激活信号，并读回校验。校验失败会报告 `outcome_unknown=true`；这是同步重排后的校验失败，不是 `gp_operation` 中的异步请求，必须先检查 `gp_documents` 和实际界面，不能自动重试。
+
+`native/test-document-tabs.ps1` 的基础 193 项覆盖同名路径、两份同模板未命名文档、四份未保存文档、边界及错误参数、活动文档与 UUID、撤销重做、标签坐标、模态拒绝、保存重开和错位关闭。普通回归不验证原生文档菜单；在宿主菜单实际可用的环境加 `-VerifyDocumentMenu` 单独执行，脚本要求所有菜单动作启用并验证重排前后的目标，否则失败。当前生产构建在新隔离宿主通过该分支，共 221 项；已有宿主反复隐藏/恢复时曾因菜单动作保持禁用而失败，该上下文限制仍保留。
+
+用户确认直接拖动标签后顺序不变。插件重排不视为原生拖动验收；另存未命名文档后，宿主仍可能显示空白标签名称或提示，这项显示问题仍待修复与验收。
 
 GPIF 预检使用宿主 `Qt5Gui.dll` 的 `QZipReader` 和 Qt XML 流解析器，新增精确 DLL 哈希验证。要求唯一、普通的 `Content/score.gpif`，解压大小最多 64 MiB、根元素为 `GPIF`，拒绝 DTD 和 XML 语法错误；不做文件解压落盘，也不声称完成 GPIF 模型语义验证。保存后的文件也通过同一检查，不合格时进入已有恢复流程。
 
@@ -405,7 +417,7 @@ IDocumentsManager + 0x10 → 管理器实现对象
 
 ## 验证
 
-截至 `09185ab` 检查点，当前核心在 Windows PowerShell 5.1 和 PowerShell 7 下分别通过十五组、2276 项完整回归，另通过原生保存故障/恢复 167 项以及后台 DDE/连接 61 项、可见 DDE/连接 60 项。准确证据和运行条件见 [当前验证证据](../COVERAGE.md#当前验证证据)，完整任务见 [开发计划](../DEVELOPMENT_PLAN.md)。下方保留的旧轮次不代表当前完整验收结果。
+当前标签重排检查点的核心在 Windows PowerShell 5.1 和 PowerShell 7 下分别通过十六组、2469 项完整回归，另通过含原生菜单的标签专项 221 项和保存故障恢复 167 项。此前 `09185ab` 的十五组、2276 项以及后台 DDE/连接 61 项、可见 DDE/连接 60 项属于旧构建证据。准确证据和运行条件见 [当前验证证据](../COVERAGE.md#当前验证证据)，完整任务见 [开发计划](../DEVELOPMENT_PLAN.md)。下方保留的旧轮次不代表当前完整验收结果。
 
 按根目录 [README](../README.md) 准备并打开测试副本后执行：
 

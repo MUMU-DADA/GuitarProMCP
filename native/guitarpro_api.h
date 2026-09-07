@@ -12,9 +12,11 @@
 #include <QtCore/QSaveFile>
 #include <QtCore/QTemporaryDir>
 #include <QtCore/QXmlStreamReader>
+#include <QtCore/QSignalBlocker>
 #include <QtGui/private/qzipreader_p.h>
 #include <QtWidgets/QApplication>
 #include <QtWidgets/QStackedWidget>
+#include <QtWidgets/QBoxLayout>
 #include <QtGui/QColor>
 #include <cmath>
 
@@ -101,17 +103,83 @@ inline QObject *activeDocument(const QList<QPointer<QObject>> &objects) {
     }
     return result;
 }
+struct DocumentTabs {
+    QPointer<QStackedWidget> pages;
+    QPointer<QBoxLayout> layout;
+    QString error;
+};
+inline DocumentTabs documentTabs(const QList<Document> &available, QObject *current) {
+    DocumentTabs result;
+    result.error = "Native document tab mapping is unavailable";
+    if (available.isEmpty()) return result;
+    const auto first = available.first().view;
+    if (!first) return result;
+    auto pages = qobject_cast<QStackedWidget *>(first->parentWidget());
+    QWidget *window = first->window();
+    if (!pages || !window || QByteArray(window->metaObject()->className()) != "gp::gui::MainWindow" || pages->count() != available.size()) return result;
+    for (const auto &document : available)
+        if (!document.view || !document.object || document.view->parentWidget() != pages || pages->indexOf(document.view) < 0) return result;
+    QBoxLayout *layout = nullptr;
+    for (auto widget : window->findChildren<QWidget *>()) {
+        if (QByteArray(widget->metaObject()->className()) != "am::gui::TabBar") continue;
+        for (auto candidate : widget->findChildren<QBoxLayout *>()) {
+            bool matches = candidate->count() == available.size();
+            for (int i = 0; matches && i < candidate->count(); ++i) {
+                auto tab = candidate->itemAt(i)->widget();
+                matches = tab && QByteArray(tab->metaObject()->className()) == "am::gui::Tab";
+            }
+            if (!matches) continue;
+            if (layout) { result.error = "Ambiguous native document tab layout"; return result; }
+            layout = candidate;
+        }
+    }
+    if (!layout || pages->currentIndex() < 0) return result;
+    for (int i = 0; i < pages->count(); ++i) {
+        const Document *document = nullptr;
+        for (const auto &candidate : available) if (candidate.view == pages->widget(i)) { document = &candidate; break; }
+        auto tab = layout->itemAt(i)->widget();
+        if (!document || tab->metaObject()->indexOfSignal("clicked()") < 0 ||
+            tab->property("selected").toBool() != (i == pages->currentIndex()) ||
+            tab->property("dirty").toBool() != document->object->property("isDirty").toBool() ||
+            (current && (document->object == current) != (i == pages->currentIndex()))) return result;
+        const QString path = QDir::fromNativeSeparators(tab->toolTip());
+        const QString opened = QDir::fromNativeSeparators(document->object->property("openedFilePath").toString());
+        const QString saved = QDir::fromNativeSeparators(document->object->property("saveFilePath").toString());
+        // Unnamed tabs can retain an empty tooltip after Save As; dirty tabs
+        // prepend a localized label to the original opened path.
+        const auto matchesPath = [&](const QString &expected) {
+            return !expected.isEmpty() && (path == expected || (tab->property("dirty").toBool() && path.endsWith(" " + expected)));
+        };
+        if (!opened.isEmpty() && !matchesPath(opened) && !matchesPath(saved)) { result.error = "Native tab path differs from its document page"; return result; }
+    }
+    result.pages = pages;
+    result.layout = layout;
+    result.error.clear();
+    return result;
+}
 inline QJsonObject list(const QList<QPointer<QObject>> &objects = {}) {
     if (!supportedBuild()) return {{"error", "Private document ABI disabled: this Guitar Pro build is not verified"}};
     QJsonArray result;
     QObject *current = activeDocument(objects);
+    auto available = documents();
+    const auto tabs = documentTabs(available, current);
+    if (tabs.pages) {
+        QList<Document> ordered;
+        for (int i = 0; i < tabs.pages->count(); ++i)
+            for (const auto &document : available) if (document.view == tabs.pages->widget(i)) ordered.append(document);
+        available = ordered;
+    }
     QString activeId;
-    for (const auto &document : documents()) {
+    for (const auto &document : available) {
         if (document.object == current) activeId = document.id();
         result.append(QJsonObject{{"id", document.id()}, {"opened_path", document.object->property("openedFilePath").toString()},
-            {"save_path", document.object->property("saveFilePath").toString()}, {"dirty", document.object->property("isDirty").toBool()}, {"native_score_available", document.score != nullptr}, {"active", current ? QJsonValue(document.object == current) : QJsonValue()}});
+            {"save_path", document.object->property("saveFilePath").toString()}, {"dirty", document.object->property("isDirty").toBool()}, {"native_score_available", document.score != nullptr}, {"active", current ? QJsonValue(document.object == current) : QJsonValue()},
+            {"tab_index", tabs.pages ? QJsonValue(tabs.pages->indexOf(document.view)) : QJsonValue()}});
     }
-    return {{"documents", result}, {"active_document", activeId.isEmpty() ? QJsonValue() : QJsonValue(activeId)}, {"source", "Live gp::gui::IDocument objects inside GuitarPro.exe"}};
+    QJsonObject state{{"documents", result}, {"active_document", activeId.isEmpty() ? QJsonValue() : QJsonValue(activeId)},
+        {"tab_order_available", available.isEmpty() || bool(tabs.pages)}, {"source", "Live gp::gui::IDocument objects inside GuitarPro.exe"}};
+    if (!available.isEmpty() && !tabs.pages) state["tab_order_error"] = tabs.error;
+    return state;
 }
 inline Document choose(const QJsonObject &args) {
     const auto available = documents();
@@ -119,6 +187,34 @@ inline Document choose(const QJsonObject &args) {
     for (const auto &document : available)
         if (document.id() == id || (id.isEmpty() && available.size() == 1)) return document;
     return {};
+}
+inline QJsonObject moveDocument(const QJsonObject &args, const QList<QPointer<QObject>> &objects) {
+    const Document target = choose(args);
+    if (!target.object || !target.view) return {{"error", "Choose an existing document id"}};
+    QObject *current = activeDocument(objects);
+    if (!current) return {{"error", "Native active-document state is unavailable"}};
+    const auto tabs = documentTabs(documents(), current);
+    if (!tabs.pages || !tabs.layout) return {{"error", tabs.error}};
+    const int from = tabs.pages->indexOf(target.view), to = args.value("index").toInt(-1);
+    if (to < 0 || to >= tabs.pages->count()) return {{"error", "Tab index is outside the document list"}};
+    if (from == to) return {{"status", "unchanged"}, {"document", target.id()}, {"previous_index", from}, {"tab_index", to}, {"undoable", false}};
+    QPointer<QWidget> activePage = tabs.pages->currentWidget();
+    QPointer<QWidget> activeTab = tabs.layout->itemAt(tabs.pages->currentIndex())->widget();
+    // The host has no drag-reorder handler. Keep its tab layout and page stack
+    // aligned, then let the original tab activation signal update host state.
+    {
+        const QSignalBlocker blocked(tabs.pages);
+        auto item = tabs.layout->takeAt(from);
+        tabs.layout->insertItem(to, item);
+        tabs.pages->removeWidget(target.view);
+        tabs.pages->insertWidget(to, target.view);
+        tabs.pages->setCurrentWidget(activePage);
+    }
+    const bool invoked = activeTab && QMetaObject::invokeMethod(activeTab, "clicked", Qt::DirectConnection);
+    const auto observed = documentTabs(documents(), activeDocument(objects));
+    if (!invoked || !observed.pages || !target.view || observed.pages->indexOf(target.view) != to || observed.pages->currentWidget() != activePage || activeDocument(objects) != current)
+        return {{"error", "Native tab order did not match the requested result; inspect gp_documents before retrying"}, {"outcome_unknown", true}};
+    return {{"status", "moved"}, {"document", target.id()}, {"previous_index", from}, {"tab_index", to}, {"undoable", false}};
 }
 inline QJsonObject activate(const QJsonObject &args, const QList<QPointer<QObject>> &objects) {
     const Document target = choose(args);
@@ -148,11 +244,12 @@ inline QJsonObject closeDocument(const QJsonObject &args, const QList<QPointer<Q
     const QJsonObject activated = activate(args, objects);
     if (activated.contains("error")) return activated;
     if (!target.view || !target.object) return {{"error", "Document disappeared during activation"}};
-    auto stack = qobject_cast<QStackedWidget *>(target.view->parentWidget());
+    const auto tabs = documentTabs(documents(), activeDocument(objects));
+    auto stack = tabs.pages.data();
     QWidget *window = target.view->window();
     if (!stack || !window || QByteArray(window->metaObject()->className()) != "gp::gui::MainWindow" ||
         stack->currentWidget() != target.view || stack->count() != documents().size())
-        return {{"error", "Native document page mapping is unavailable"}};
+        return {{"error", tabs.error.isEmpty() ? "Native document page mapping is unavailable" : tabs.error}};
     for (int i = 0; i < stack->count(); ++i)
         if (QByteArray(stack->widget(i)->metaObject()->className()) != "gp::gui::IDocumentView")
             return {{"error", "Unexpected page in native document stack"}};

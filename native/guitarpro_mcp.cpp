@@ -534,10 +534,11 @@ class Bridge : public QObject {
             {"required", QJsonArray{"track", "staff", "bar", "voice", "beat"}}, {"additionalProperties", false}};
         add("gp_selection", "原生选区：state 读取状态；beats 列出明确选区的实际节拍位置和总数，跳过空占位拍，最多 128 小节、20000 拍；range 用 base/extent 指定同轨同谱表同声部的节拍范围（含端点）；note 用 base 和 notes 数组的 note_index 选择单音；all 选择当前谱表；clear 取消选区并停在末端。range/all 可用 all_voices 扩展声部，all_tracks 扩展为所选整小节的全部音轨、谱表和声部。所有索引从 0 开始。", {{"document", str}, {"operation", str}, {"base", endpoint}, {"extent", endpoint}, {"note_index", integer}, {"all_voices", boolean}, {"all_tracks", boolean}});
         add("gp_activate", "通过原生文档导航方法切换指定文档并读回活动文档；无需前台窗口。", {{"document", str}}, {"document"});
+        add("gp_move_document", "将指定文档标签移动到从 0 开始的 index；同步 Qt 标签和文档页面，保留活动文档、曲谱内容和撤销历史。位置从 gp_documents.tab_index 读取；仅改变当前会话的标签顺序，不加入曲谱撤销栈。", {{"document", str}, {"index", integer}}, {"document", "index"});
         add("gp_playback", "调用原生播放控制器。seek 使用原曲谱 bar 与小节内 tick；seek_tick 使用展开反复后的时间线绝对 tick。另支持 state/play/stop/set_loop/set_metronome/set_countdown。", {{"document", str}, {"operation", str}, {"bar", integer}, {"tick", integer}, {"enabled", boolean}});
         add("gp_open", "通过宿主原生文件打开事件异步打开已有 .gp 文件；用 gp_documents 的路径读回确认完成。", {{"path", str}}, {"path"});
         add("gp_close", "异步关闭文档；unsaved: reject（默认）、save、discard、cancel、prompt。save 可指定 path 和 overwrite；轮询 gp_documents.closing 确认结果。", {{"document", str}, {"unsaved", str}, {"path", str}, {"overwrite", boolean}}, {"document"});
-        add("gp_documents", "读取实时文档 ID、原始路径、保存路径和未保存状态。", {});
+        add("gp_documents", "按标签顺序读取实时文档 ID、tab_index、原始路径、保存路径和未保存状态；映射不可用时 tab_order_available=false，不推断顺序。", {});
         add("gp_operation", "Read a new/open/save/close operation by request ID, including the last 64 replaced records.", {{"request", str}}, {"request"});
         add("gp_cancel", "Cancel a queued document operation or its observed native dialog; poll gp_operation for the outcome.", {{"request", str}}, {"request"});
         add("gp_save_as", "异步原生另存为 .gp；已有目标须 overwrite=true。轮询 gp_operation，saved 后读取 result。", {{"document", str}, {"path", str}, {"overwrite", boolean}}, {"path"});
@@ -648,6 +649,7 @@ class Bridge : public QObject {
             if (tool == "gp_selection") return guitarpro::selection(args, services());
             if (tool == "gp_clipboard") return guitarpro::clipboard(args, clipboardBuffer, services());
             if (tool == "gp_activate") return guitarpro::activate(args, services());
+            if (tool == "gp_move_document") return guitarpro::moveDocument(args, services());
             if (tool == "gp_playback") return guitarpro::playback(args, services());
             if (tool == "gp_open") {
                 if (!guitarpro::supportedBuild()) return QJsonObject{{"error", "Document opening requires the verified host build"}};
