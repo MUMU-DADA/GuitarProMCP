@@ -1,5 +1,23 @@
 LIBRARY GPRSE
 EXPORTS
+?setExportMetronome@AudioExportManager@rse@gp@@QEAAX_N@Z
+?setExportCountdown@AudioExportManager@rse@gp@@QEAAX_N@Z
+?setExportSelection@AudioExportManager@rse@gp@@QEAAX_N@Z
+??0AudioExportManager@rse@gp@@QEAA@AEBV?$shared_ptr@VScore@core@gp@@@std@@@Z
+??1AudioExportManager@rse@gp@@UEAA@XZ
+?isUpdatingData@Conductor@rse@gp@@QEBA_NXZ
+?prepareConductorForEncoding@AudioExportManager@rse@gp@@QEAAXAEBV?$optional@H@std@@@Z
+?processFrame@AudioExportManager@rse@gp@@QEAAIAEAV?$vector@MV?$allocator@M@std@@@std@@0@Z
+?soundingLengthInFrames@AudioExportManager@rse@gp@@QEBA_JXZ
+?updateTempoManagerAsync@Conductor@rse@gp@@QEAAXAEBV?$function@$$A6AXXZ@std@@@Z
+?endTickOffset@PlaybackRange@rse@gp@@QEBAHXZ
+?frameCount@Conductor@rse@gp@@QEBA_JHH@Z
+?frameCount@Conductor@rse@gp@@QEBA_JXZ
+?loopEndTickOffset@PlaybackRange@rse@gp@@QEBAHXZ
+?loopPlayTickOffset@PlaybackRange@rse@gp@@QEBAHXZ
+?playTickOffset@PlaybackRange@rse@gp@@QEBAHXZ
+?playbackRange@Conductor@rse@gp@@QEBAAEBVPlaybackRange@23@XZ
+?resetPlaybackRange@Conductor@rse@gp@@QEAAXXZ
 ?seek@ConductorController@rse@gp@@QEAAXH@Z
 ?barCount@Conductor@rse@gp@@QEBAIXZ
 ?conductor@ConductorController@rse@gp@@QEBAAEBV?$shared_ptr@VConductor@rse@gp@@@std@@XZ

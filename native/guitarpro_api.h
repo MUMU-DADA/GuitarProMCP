@@ -1868,6 +1868,8 @@ inline QJsonObject playback(const QJsonObject &args, const QList<QPointer<QObjec
     }
     if (!controller) return {{"error", "No native playback controller is bound to this document; activate it with gp_activate first"}};
     const QString operation = args.value("operation").toString("state");
+    if (operation != "state" && activeDocument(objects) != document.object)
+        return {{"error", "Activate the requested document before playback control"}};
     if (operation == "play") controller->play();
     else if (operation == "stop") controller->stop();
     else if (operation == "seek") {
@@ -1883,6 +1885,44 @@ inline QJsonObject playback(const QJsonObject &args, const QList<QPointer<QObjec
         if (args.contains("bar") || args.contains("enabled") || tick < 0 || tick >= controller->conductor()->tickCount())
             return {{"error", "seek_tick requires tick in 0..total_ticks-1 and accepts no bar or enabled parameter"}};
         controller->seek(tick);
+    } else if (operation == "timeline") {
+        const int offset = args.value("offset").toInt(0), limit = args.value("limit").toInt(128);
+        if (offset < 0 || limit < 1 || limit > 1024) return {{"error", "offset must be nonnegative; limit must be 1..1024"}};
+        const auto &timeline = document.score->masterTrack()->timeline();
+        const auto &conductor = controller->conductor();
+        std::vector<std::pair<int, int>> entries;
+        for (unsigned bar = 0; bar < conductor->barCount(); ++bar) {
+            for (int tick : timeline.tickOffsets(int(bar))) {
+                if (entries.size() >= 100000) return {{"error", "Timeline exceeds 100000 occurrences"}};
+                entries.emplace_back(tick, int(bar));
+            }
+        }
+        std::sort(entries.begin(), entries.end());
+        QJsonArray bars;
+        for (size_t i = size_t(offset); i < entries.size() && i - size_t(offset) < size_t(limit); ++i) {
+            const int end = i + 1 < entries.size() ? entries[i + 1].first : timeline.tickCount();
+            bars.append(QJsonObject{{"index", int(i)}, {"bar", entries[i].second}, {"start_tick", entries[i].first}, {"end_tick", end},
+                {"frames", double(conductor->frameCount(entries[i].first, end))}});
+        }
+        return {{"document", document.id()}, {"bars", bars}, {"count", int(entries.size())},
+            {"total_ticks", timeline.tickCount()}, {"total_frames", double(conductor->frameCount())},
+            {"next_offset", size_t(offset) + size_t(limit) < entries.size() ? QJsonValue(offset + limit) : QJsonValue()}};
+    } else if (operation == "set_loop_range" || operation == "clear_loop_range") {
+        if (controller->isPlaying() || controller->isCountingDown()) return {{"error", "Stop playback before changing its selection range"}};
+        QJsonObject selected{{"document", document.id()}, {"operation", operation == "set_loop_range" ? "range" : "clear"}};
+        if (operation == "set_loop_range") { selected["base"] = args.value("base"); selected["extent"] = args.value("extent"); }
+        const auto result = selection(selected, objects);
+        if (result.contains("error")) return result;
+        controller->conductor()->resetPlaybackRange();
+        controller->setLoopEnabled(operation == "set_loop_range");
+    } else if (operation == "set_metronome_volume") {
+        const double value = args.value("value").toDouble(-1);
+        if (!args.value("value").isDouble() || !std::isfinite(value) || value < 0 || value > 1) return {{"error", "value must be in 0..1"}};
+        controller->setMetronomeVolume(float(value));
+    } else if (operation == "set_countdown_bars") {
+        const int value = args.value("value").toInt(-1);
+        if (value < 1 || value > 4) return {{"error", "value must be an integer in 1..4"}};
+        controller->setCountdownBarCount(unsigned(value));
     } else if (operation == "set_loop" || operation == "set_metronome" || operation == "set_countdown") {
         if (!args.value("enabled").isBool()) return {{"error", "enabled boolean required"}};
         const bool enabled = args.value("enabled").toBool();
@@ -1897,6 +1937,10 @@ inline QJsonObject playback(const QJsonObject &args, const QList<QPointer<QObjec
         {"countdown", controller->metronome().isCountdownEnabled()}, {"counting_down", controller->isCountingDown()},
         {"countdown_bars", int(controller->metronome().countdownBarCount())}, {"metronome_volume", controller->metronomeVolume()},
         {"tick", conductor->tickOffset()}, {"total_ticks", conductor->tickCount()}, {"score_bar_count", int(conductor->barCount())}, {"frame", double(conductor->frameOffset())},
+        {"total_frames", double(conductor->frameCount())},
+        {"updating", conductor->isUpdatingData()},
+        {"range", QJsonObject{{"start_tick", conductor->playbackRange().playTickOffset()}, {"end_tick", conductor->playbackRange().endTickOffset()},
+            {"loop_start_tick", conductor->playbackRange().loopPlayTickOffset()}, {"loop_end_tick", conductor->playbackRange().loopEndTickOffset()}}},
         {"source", "Native GPRSE ConductorController matched to the document Score"}};
 }
 inline QJsonObject save(const QJsonObject &args, std::function<QJsonObject()> &recoveryAction, bool adopt = false, bool current = false) {

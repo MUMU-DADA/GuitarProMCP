@@ -5,8 +5,30 @@
 #include <vector>
 #include <array>
 #include <set>
+#include <map>
+#include <optional>
+#include <functional>
 #include <utility>
 namespace am::music { enum class Accidental : int {}; }
+namespace am::audio {
+// AudioDeviceInfo owns QString fields at +0x10/+0x18 and a scalar vector at
+// +0x28. The remaining native fields are copied without interpreting them.
+struct AudioDeviceInfo {
+    unsigned char nativePrefix[16];
+    QString name, nativeLabel;
+    unsigned char nativeOptions[8];
+    std::vector<int> nativeValues;
+};
+static_assert(sizeof(AudioDeviceInfo) == 64);
+class __declspec(dllimport) AudioLayer {
+public:
+    static AudioLayer &instance();
+    QList<AudioDeviceInfo> outputDevices() const;
+    QList<AudioDeviceInfo> inputDevices() const;
+    std::vector<int> buffersSize() const;
+    bool hasAsio() const; bool isRunning() const;
+};
+}
 namespace am::utils {
 class rational;
 // Verified Color copy/read code uses exactly three bytes, without alpha.
@@ -91,7 +113,31 @@ public:
     bool hasDoubleBar() const; bool hasFreeTime() const;
     int alternateEndingMask() const;
 };
-class __declspec(dllimport) MasterTrack {
+class __declspec(dllimport) Automation {
+public:
+    enum class Type : int {};
+    virtual ~Automation();
+    virtual unsigned barIndex() const;
+    float position() const; float value() const; bool isLinear() const;
+    const std::string &text() const;
+    virtual void setBarIndex(unsigned);
+    void setPosition(float); void setValue(float); void setLinear(bool); void setText(const std::string &);
+};
+class __declspec(dllimport) TempoAutomation : public Automation {
+public:
+    virtual std::shared_ptr<Automation> cloneAutomation() const;
+    TempoUnit unit() const; void setUnit(TempoUnit);
+};
+class __declspec(dllimport) AutomationContainerProxy {
+public:
+    virtual void getAutomations(Automation::Type, std::vector<std::shared_ptr<Automation>> &) const;
+};
+class __declspec(dllimport) Timeline {
+public:
+    std::vector<int> tickOffsets(int) const;
+    int tickCount() const;
+};
+class __declspec(dllimport) MasterTrack : public AutomationContainerProxy {
 public:
     unsigned masterBarCount() const;
     const std::string &tempoLabel() const;
@@ -99,6 +145,7 @@ public:
     std::shared_ptr<MasterBar> masterBar(unsigned) const;
     std::set<DirectionMark> directionsAtBarIndex(int) const;
     static QString directionToQString(DirectionMark);
+    const Timeline &timeline() const;
 };
 class Beat;
 class Note;
@@ -284,6 +331,38 @@ public:
     const am::utils::Color &color() const;
     ScoreModel *parentScoreModel() const;
 };
+class __declspec(dllimport) Effect {
+public:
+    virtual ~Effect();
+    const std::string &id() const; bool isBypass() const;
+    const std::vector<float> &parameters() const;
+    void setBypass(bool); void setParameter(unsigned, float);
+};
+class __declspec(dllimport) EffectChain {
+public:
+    const std::vector<std::unique_ptr<Effect>> &effects() const;
+    Effect *effect(unsigned) const;
+    void swapEffects(unsigned, unsigned); void removeEffect(unsigned);
+};
+class __declspec(dllimport) RSESound {
+public:
+    const EffectChain &effectChain() const; EffectChain &mutableEffectChain();
+};
+class __declspec(dllimport) MIDISound {
+public:
+    unsigned program() const; unsigned msbBank() const; unsigned lsbBank() const;
+    void setProgram(unsigned);
+};
+class __declspec(dllimport) Sound {
+    void *implementation;
+public:
+    Sound(const Sound &); ~Sound();
+    Sound &operator=(const Sound &) = delete;
+    const std::string &name() const; const std::string &label() const;
+    const RSESound &rseSound() const; RSESound &mutableRseSound();
+    const MIDISound &midiSound() const; MIDISound &mutableMidiSound();
+};
+static_assert(sizeof(Sound) == 8);
 class __declspec(dllimport) Track {
 public:
     const std::vector<std::shared_ptr<Staff>> &staves() const;
@@ -291,6 +370,8 @@ public:
     InstrumentSet::Type type() const; int transpositionOffset() const;
     const InstrumentSet &instrumentSet() const;
     int defaultBarCountBySystem() const;
+    const std::vector<std::shared_ptr<Sound>> &sounds() const;
+    int forcedSoundIndex() const;
 };
 class __declspec(dllimport) Score {
 public:
@@ -362,6 +443,9 @@ public:
     void createBeat(const ScoreModelRange &, const RhythmValue &);
     void setProperty(ScoreProperty, const std::string &);
     void setTempo(const std::string &, TempoUnit, float);
+    void modifyMasterTrackAutomations(const std::vector<std::shared_ptr<Automation>> &, const std::map<Automation::Type, bool> &);
+    void setTrackSound(Track &, unsigned, const Sound &, bool);
+    void setForcedSoundIndex(Track &, int);
     void setMasterBarTimeSignature(const ScoreModelRange &, bool, const TimeSignature &);
     void setMasterBarKeySignature(const ScoreModelRange &, bool, const KeySignature &, bool);
     void setBarRepeatStart(const ScoreModelRange &, bool);
@@ -404,6 +488,11 @@ __declspec(dllimport) std::string ottaviaToString(Ottavia);
 __declspec(dllimport) std::string rasgueadoToString(Rasgueado);
 }
 namespace gp::rse {
+class __declspec(dllimport) PlaybackRange {
+public:
+    int playTickOffset() const; int endTickOffset() const;
+    int loopPlayTickOffset() const; int loopEndTickOffset() const;
+};
 class __declspec(dllimport) Metronome {
 public:
     bool isEnabled() const; bool isCountdownEnabled() const; unsigned countdownBarCount() const;
@@ -414,6 +503,12 @@ public:
     unsigned barCount() const;
     int tickCount() const; int tickOffset() const; int tickOffset(unsigned) const;
     long long frameOffset() const;
+    long long frameCount() const;
+    long long frameCount(int, int) const;
+    const PlaybackRange &playbackRange() const;
+    void resetPlaybackRange();
+    bool isUpdatingData() const;
+    void updateTempoManagerAsync(const std::function<void()> &);
 };
 class __declspec(dllimport) ConductorController {
 public:
@@ -424,4 +519,15 @@ public:
     void setLoopEnabled(bool); void setMetronomeEnabled(bool); void setCountdownEnabled(bool);
     void setMetronomeVolume(float); void setCountdownBarCount(unsigned);
 };
+class __declspec(dllimport) AudioExportManager {
+    void *implementation;
+public:
+    AudioExportManager(const std::shared_ptr<gp::core::Score> &);
+    virtual ~AudioExportManager();
+    void prepareConductorForEncoding(const std::optional<int> &);
+    void setExportMetronome(bool); void setExportCountdown(bool); void setExportSelection(bool);
+    unsigned processFrame(std::vector<float> &, std::vector<float> &);
+    long long soundingLengthInFrames() const;
+};
+static_assert(sizeof(AudioExportManager) == 16);
 }

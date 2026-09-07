@@ -17,6 +17,8 @@ Enter-VsDevShell -VsInstallPath $vsInstall -SkipAutomaticLocation -DevCmdArgumen
 if ($LASTEXITCODE -ne 0) { throw '生成 GPCore 导入库失败。' }
 & lib /nologo /machine:x64 "/def:$PSScriptRoot/gprse.def" "/out:$buildDir/GPRSE.lib"
 if ($LASTEXITCODE -ne 0) { throw '生成 GPRSE 导入库失败。' }
+& lib /nologo /machine:x64 "/def:$PSScriptRoot/amaudio.def" "/out:$buildDir/AMAudio.lib"
+if ($LASTEXITCODE -ne 0) { throw '生成 AMAudio 导入库失败。' }
 $includeDirs = @((Join-Path $QtDir 'include'), (Join-Path $QtDir 'include/QtCore'), (Join-Path $QtDir 'include/QtGui'), (Join-Path $QtDir 'include/QtWidgets'), (Join-Path $QtDir 'include/QtNetwork'), $buildDir)
 $qtVersion = & (Join-Path $QtDir 'bin/qmake.exe') -query QT_VERSION
 if ($LASTEXITCODE -ne 0 -or $qtVersion -notmatch '^5\.\d+\.\d+$') { throw 'Cannot determine the Qt 5 private-header version.' }
@@ -29,7 +31,7 @@ $source = Join-Path $PSScriptRoot 'guitarpro_mcp.cpp'
 & (Join-Path $QtDir 'bin/moc.exe') @mocIncludes $source -o (Join-Path $buildDir 'guitarpro_mcp.moc')
 if ($LASTEXITCODE -ne 0) { throw 'Qt moc 生成失败。' }
 $clIncludes = $includeDirs | ForEach-Object { "/I$_" }
-& cl /nologo /std:c++17 /EHsc /MD /O2 /utf-8 /LD /DQT_NO_DEBUG /DQT_PLUGIN @clIncludes $source (Join-Path $PSScriptRoot 'mcp_server.cpp') "/Fo$buildDir/" "/Fd$buildDir/guitarpro_mcp.pdb" "/Fe$pluginDir/guitarpro_mcp.dll" /link "/LIBPATH:$QtDir/lib" Qt5Core.lib Qt5Gui.lib Qt5Widgets.lib Qt5Network.lib User32.lib "$buildDir/GPCore.lib" "$buildDir/GPRSE.lib" "/IMPLIB:$buildDir/guitarpro_mcp.lib"
+& cl /nologo /std:c++17 /EHsc /MD /O2 /utf-8 /LD /DQT_NO_DEBUG /DQT_PLUGIN @clIncludes $source (Join-Path $PSScriptRoot 'mcp_server.cpp') "/Fo$buildDir/" "/Fd$buildDir/guitarpro_mcp.pdb" "/Fe$pluginDir/guitarpro_mcp.dll" /link "/LIBPATH:$QtDir/lib" Qt5Core.lib Qt5Gui.lib Qt5Widgets.lib Qt5Network.lib User32.lib "$buildDir/GPCore.lib" "$buildDir/GPRSE.lib" "$buildDir/AMAudio.lib" "/IMPLIB:$buildDir/guitarpro_mcp.lib"
 if ($LASTEXITCODE -ne 0) { throw '原生插件编译失败。' }
 Write-Output "插件已生成：$pluginDir/guitarpro_mcp.dll"
 $autoloadDir = Join-Path $projectRoot '.tools/native/plugins/imageformats'

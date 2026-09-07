@@ -12,7 +12,8 @@
 | `mcp_server.cpp` / `.h` | HTTP、JSON-RPC、初始化、会话、鉴权和工具参数校验 |
 | `guitarpro_api.h` | 文档定位/切换、实时曲谱编辑、光标、撤销重做、保存和播放 |
 | `guitarpro_clipboard.h` | 原生曲谱快照、复制/剪切/粘贴及兼容性检查 |
-| `guitarpro_abi.h` / `gpcore.def` / `gprse.def` | 已确认的原生导出声明及导入库定义 |
+| `guitarpro_audio.h` | 速度自动化、音色效果、设备及开发音频验收 |
+| `guitarpro_abi.h` / `gpcore.def` / `gprse.def` / `amaudio.def` | 已确认的原生导出声明及导入库定义 |
 | `object_registry.h` | Qt 对象生命周期观察和失效指针保护 |
 | `discovery.h` | 只读指针与 RTTI 校验；开发模式下的对象关系探索 |
 | `build.ps1` | 使用项目内 Qt SDK 和已安装的 Visual Studio 构建 DLL |
@@ -412,13 +413,39 @@ GPIF 预检使用宿主 `Qt5Gui.dll` 的 `QZipReader` 和 Qt XML 流解析器，
 | `seek_tick` | `document?`, `tick` | 展开反复后的绝对 tick，范围 `0..total_ticks-1`；不接受 `bar` 或 `enabled` |
 | `set_loop` / `set_metronome` / `set_countdown` | `document?`, `enabled` | 修改相应开关并返回状态 |
 
-测试使用初始速度 90 和 120 的两份曲谱核对第二小节起点的帧数比为 0.75，并验证播放时间线实际推进、停止后保持不动。当前尚未暴露完整混音、分段变速编辑和音频设备控制。
+测试使用初始速度 90 和 120 的两份曲谱核对第二小节起点的帧数比为 0.75，并验证播放时间线实际推进、停止后保持不动。P5 扩展见下方“播放与音频”。
 
 两个 4/4 小节的测试曲谱原长为 3840 tick，反复 3 次后为 11520 tick，原谱小节数仍为 2。`seek bar=1,tick=0` 定位到原谱第二小节的首次出现（1920 tick）；第三次的第二小节使用 `seek_tick tick=9600`。最后有效位置为 11519；反复 100 次时为 383999。P3 结构专项另验证六小节曲谱的反复房子展开为 8 小节，反复内插入小节后为 10 小节，嵌套反复为 15 小节，D.C. al Fine 为 8 小节；均核对末尾 tick 定位，并验证实际播放帧推进。
 
 `gp_score.tempo` 读取主音轨的初始速度，字段为 `value`、`unit`、`label`、`quarter_bpm` 和可用单位 `units`，不代表当前播放位置的速度。单位包括 `Eighth`、`Quarter`、`QuarterDotted`、`Half`、`HalfDotted`，等效四分音符 BPM 分别为速度值的 0.5、1、1.5、2、3 倍，使用宿主转换函数计算。
 
-`gp_edit_tempo` 调用 `Score::setTempo`，支持撤销重做。`value` 为以指定单位计数的 1–400 整数；宿主虽然接收浮点参数，实际会截断小数，因此插件预先拒绝。省略 `unit` 或 `label` 时保留当前值，文字使用与元数据相同的字符检查。读回包括未保存状态和撤销可用性，播放控制器可能异步更新时间线。五种单位的保存值、中文标记、定位帧数以及后续变速点不被覆盖均已实测；渐变速度和任意位置自动化尚未实现。
+`gp_edit_tempo` 调用 `Score::setTempo`，支持撤销重做。`value` 为以指定单位计数的 1–400 整数；宿主虽然接收浮点参数，实际会截断小数，因此插件预先拒绝。省略 `unit` 或 `label` 时保留当前值，文字使用与元数据相同的字符检查。五种单位的保存值、中文标记、定位帧数以及后续变速点不被覆盖均已实测。
+
+## 播放与音频
+
+`gp_tempo` 的 `state` 返回 `points`；`set` 以 `bar` 和 `position` 定位速度点，`remove` 删除该点。`position` 是原谱小节内比例 `[0,1)`，默认 0；`value` 为 1..400 整数；`unit` 使用 `gp_score.tempo.units`。已有点省略单位、文字或渐变时保留原值，新点默认初始单位、空文字、不渐变。`linear=true` 从该点向下一个速度点渐变；最后一点的渐变没有后续目标。最多 4096 点，初始 `(0,0)` 不可删除。克隆原生自动化后通过 `Score::modifyMasterTrackAutomations` 一次提交，不直接修改活跃指针；支持撤销重做和保存。编辑及撤销后调用原生 `updateTempoManagerAsync`，解决停止时帧数沿用旧值的问题。该宿主 `isUpdatingData` 可能长期为真，返回的 `updating` 只作原始诊断，完成应以预期 tick/帧数和播放状态核验。
+
+`gp_playback operation=timeline` 返回实际展开序列 `bars`：`bar` 为原谱小节，`start_tick/end_tick` 为展开位置，`frames` 为本次播放时长。使用 `offset` 和 `limit=1..1024` 分页，最多 100000 次小节出现；总长度为 `total_ticks/total_frames`。定位同一小节的后续反复应使用 `seek_tick`。反复、反复房子和 D.C. al Fine 已逐小节核对，嵌套反复沿用 P3 回归；未穷举所有跳转组合。
+
+`set_loop_range` 使用 `base/extent` 的五个索引（`track/staff/voice/bar/beat`），端点包含在内，通过原生选区设置播放范围。它会改变光标和选区，不额外保存插件循环范围。`clear_loop_range` 清选区并关闭循环；两者均要求停止播放。状态 `range` 返回实际 `start_tick/end_tick/loop_start_tick/loop_end_tick`，结束 tick 不包含在范围内；`-1` 表示宿主尚未形成范围。普通 `set_loop` 只改变启停状态。另提供 `set_metronome_volume value=0..1`、`set_countdown_bars value=1..4`。播放控制必须先激活目标文档；`stop` 用于停止或取消尚未开始的播放，仍须轮询确认。
+
+`gp_audio_track track=...` 的操作：
+
+| operation | 参数与行为 |
+| --- | --- |
+| `state` | 返回 `sounds`、效果 ID/旁路/参数、MIDI bank/program 和 `forced_sound` |
+| `select` | `sound` 为现有索引，`-1` 恢复曲谱音色自动化；不进宿主撤销栈 |
+| `copy` | 将 `source_document/source_track/source_sound` 的已有音色写入目标 `sound`（默认 0）；可从 `gp_new` 模板复用，拒绝有音高/打击乐混用 |
+| `midi_program` | `value=0..127`，只修改 MIDI 音色部分 |
+| `effect_bypass` | `effect` 索引和 `enabled`，true 表示旁路 |
+| `effect_parameter` | `effect`、`parameter` 现有索引和归一化 `value=0..1` |
+| `effect_swap` / `effect_remove` | 交换 `effect/other` 或删除 `effect` |
+
+除 `select` 外，修改独立的原生 `Sound` 副本后通过 `Score::setTrackSound` 提交，支持撤销重做及保存重开。音色复制保留目标音轨的 MIDI/RSE 引擎选择；RSE 音轨可从模板创建或通过 `gp_insert_track` 复用，不增加引擎或乐器定义系统。效果参数沿用宿主索引，不引入参数名称数据库、任意新效果构造或自动化曲线编辑。音量、声像、独奏和静音继续使用 `gp_edit_track`。
+
+`gp_audio_device state` 返回 `scope=application`、`configuration`、当前 `choices` 和 `running`。`set property=... value=...` 只接受 `choices` 中的输入设备、输出设备、后端和缓冲区值；通过宿主配置模型的 Qt 属性提交，原生配置负责持久化，不进入曲谱撤销。播放中拒绝设备修改；未知选项在修改前拒绝，原生设置失败尝试恢复旧值。Standard、Studio 2 PRO 输出与 512/1024 缓冲区已验证；ASIO、热拔插、厂商控制面板及驱动故障未验收，不声明自动恢复所有设备错误。
+
+`GPMCP_DEVELOPMENT=1` 时提供 `gp_audio_probe`，通过宿主 `AudioExportManager` 渲染最多 30 秒的测试曲谱，返回双声道浮点 PCM 的帧数、RMS、峰值及哈希。仅用于验收，不作为 P6 文件导出接口，不采集系统或麦克风声音。`test-audio.ps1 -Render` 验证速度、渐变、反复、音量/声像、效果和音色变化；默认最小夹具是 MIDI 音轨，测试副本改为 RSE 并复用 Steel Guitar / Acoustic Piano 模板。验收使用 `C:/ProgramData/Arobas Music/Soundbanks/com.arobas-music.soundbank.standard`，不能用接近静音的 MIDI 渲染证明 RSE 发声正确。
 
 ## Qt 对象工具
 

@@ -24,6 +24,7 @@
 #include "plugin_config.h"
 #include "discovery.h"
 #include "guitarpro_api.h"
+#include "guitarpro_audio.h"
 #include "guitarpro_clipboard.h"
 #include "object_registry.h"
 #include <QtCore/QEvent>
@@ -614,6 +615,8 @@ class Bridge : public QObject {
                 {"inputSchema", QJsonObject{{"type", "object"}, {"properties", properties}, {"required", required}, {"additionalProperties", false}}}});
         };
         if (qEnvironmentVariableIsSet("GPMCP_DEVELOPMENT")) add("gp_debug_objects", "开发用：从已知 Qt 对象读取关联的 C++ RTTI，定位原生模型。", {});
+        if (qEnvironmentVariableIsSet("GPMCP_DEVELOPMENT")) add("gp_audio_probe", "开发验收：原生渲染最多 30 秒测试曲谱，返回 PCM 帧数、能量和哈希。", {{"document", str}});
+        add("gp_audio_device", "原生全局音频设备：state/set。property/value 必须来自返回的 choices；修改前停止播放，不加入曲谱撤销栈。", {{"operation", str}, {"property", str}, {"value", QJsonObject{{"anyOf", QJsonArray{str, integer}}}}});
         if (qEnvironmentVariableIsSet("GPMCP_DEVELOPMENT")) add("gp_debug_resources", "开发用：只读枚举宿主嵌入的 Qt 资源路径。", {{"query", str}});
         add("gp_templates", "枚举宿主内置曲谱模板，供 gp_new 使用。", {});
         add("gp_edit_connection", "原生编辑连奏和延音线，支持撤销。kind 为 legato/tie，enabled 必填；scope 为 cursor（默认）或 selection。cursor 的 legato 连接下一拍，tie 连接前一拍；tie 可用 string 指定单音，省略时整拍处理，可能改写音高/升降号或补入音符。selection 支持跨声部/音轨，沿用 128 小节、20000 拍上限。返回 observed_beats 和 changed_selected_beats，后者不含选区外的相邻端点；status=executed 不保证每个音符都可连接。重复命令可能增加原生撤销记录。", {{"document", str}, {"kind", str}, {"enabled", boolean}, {"scope", str}, {"string", integer}}, {"kind", "enabled"});
@@ -630,6 +633,8 @@ class Bridge : public QObject {
         add("gp_read_master_bars", "读取全曲共享的小节拍号、实音调号、反复记号和小节线；分页最多 128 小节。", {{"document", str}, {"bar", integer}, {"count", integer}});
         add("gp_edit_measure", "原生修改光标小节，支持撤销。time_signature(numerator,denominator)、key_signature(accidentals,major)、repeat_start/repeat_end/double_bar/free_time(enabled)，反复次数 repeat_count 2..100。alternate_endings 使用 endings（1..8 的不重复数组，空数组清除）；direction 使用 gp_read_master_bars.direction_marks 中的 ID 和 enabled。", {{"document", str}, {"operation", str}, {"numerator", integer}, {"denominator", integer}, {"accidentals", integer}, {"major", boolean}, {"enabled", boolean}, {"repeat_count", integer}, {"endings", QJsonObject{{"type", "array"}, {"items", integer}}}, {"direction", integer}}, {"operation"});
         add("gp_edit_tempo", "原生修改曲谱初始速度，支持撤销。value 为 1..400 的整数，unit 使用 gp_score.tempo.units 中的值，默认保留当前单位和 label；不编辑后续变速点。", {{"document", str}, {"value", QJsonObject{{"type", "number"}, {"minimum", 1}, {"maximum", 400}, {"multipleOf", 1}}}, {"unit", str}, {"label", str}}, {"value"});
+        add("gp_tempo", "原生速度自动化：state/set/remove。bar 为原谱小节，position 为小节内 0..1（不含 1）的比例；value 为 1..400 整数，linear 使用宿主渐变语义。初始点不可删除。支持撤销。", {{"document", str}, {"operation", str}, {"bar", integer}, {"position", QJsonObject{{"type", "number"}}}, {"value", integer}, {"unit", str}, {"linear", boolean}, {"label", str}});
+        add("gp_audio_track", "原生音色和已有效果链：state/select/copy/midi_program/effect_bypass/effect_parameter/effect_swap/effect_remove。select 的 sound=-1 恢复自动音色；copy 复用 source_document/source_track/source_sound。效果参数为 0..1；MIDI program 为 0..127，仅影响 MIDI 音源。音轨混音使用 gp_edit_track。", {{"document", str}, {"operation", str}, {"track", integer}, {"sound", integer}, {"source_document", str}, {"source_track", integer}, {"source_sound", integer}, {"effect", integer}, {"parameter", integer}, {"other", integer}, {"value", QJsonObject{{"type", "number"}}}, {"enabled", boolean}}, {"track"});
         add("gp_edit_track", "原生设置音轨 name/short_name、color (#RRGGBB)、volume/pan (0..1)、transposition（记谱移调偏移 -24..24 半音，保留发声音高）或 playback_state (Default/Solo/Mute)。播放状态不加入撤销栈，其余属性支持撤销。", {{"document", str}, {"track", integer}, {"property", str}, {"value", QJsonObject{{"anyOf", QJsonArray{str, QJsonObject{{"type", "number"}}}}}}}, {"track", "property", "value"});
         add("gp_edit_tracks", "原生复制、删除或交换音轨，支持撤销；operation 为 duplicate/remove/swap，复制到原轨之后，swap 需要 other 索引。", {{"document", str}, {"operation", str}, {"track", integer}, {"other", integer}}, {"operation", "track"});
         add("gp_edit_tuning", "原生修改弦乐音轨谱表调弦及变调夹，支持撤销。tuning 为按宿主弦顺序的 1..12 个 MIDI 音高；capo/partial_capo 为 0..24，partial_capo_strings 为逐弦布尔数组。preserve_pitch 默认 true。省略字段保留原值，staff 默认 0。", {{"document", str}, {"track", integer}, {"staff", integer}, {"tuning", QJsonObject{{"type", "array"}, {"items", integer}}}, {"capo", integer}, {"partial_capo", integer}, {"partial_capo_strings", QJsonObject{{"type", "array"}, {"items", boolean}}}, {"preserve_pitch", boolean}}, {"track"});
@@ -642,7 +647,7 @@ class Bridge : public QObject {
         add("gp_selection", "原生选区：state 读取状态；beats 列出明确选区的实际节拍位置和总数，可用 tracks/staves/voices 非空索引数组筛选本次结果，筛选不改变原生选区；跳过空占位拍，最多 128 小节、20000 拍。range 用 base/extent 指定同轨同谱表同声部的范围（含端点）；note 用 base 和 note_index 选择单音；all 选择当前谱表；clear 取消选区。range/all 可用 all_voices 扩展声部，all_tracks 扩展为所选整小节的全部音轨、谱表和声部。索引从 0 开始。", {{"document", str}, {"operation", str}, {"base", endpoint}, {"extent", endpoint}, {"note_index", integer}, {"all_voices", boolean}, {"all_tracks", boolean}, {"tracks", indices}, {"staves", indices}, {"voices", indices}});
         add("gp_activate", "通过原生文档导航方法切换指定文档并读回活动文档；无需前台窗口。", {{"document", str}}, {"document"});
         add("gp_move_document", "将指定文档标签移动到从 0 开始的 index，保留活动文档、曲谱内容和撤销历史；同步返回结果及 request，可用 gp_operation 查阅。失败时尝试恢复完整原顺序；rolled_back=false 且 outcome_unknown=true 时阻止后续修改。位置从 gp_documents.tab_index 读取；仅改变会话标签顺序，不加入曲谱撤销栈。", {{"document", str}, {"index", integer}}, {"document", "index"});
-        add("gp_playback", "调用原生播放控制器。seek 使用原曲谱 bar 与小节内 tick；seek_tick 使用展开反复后的时间线绝对 tick。另支持 state/play/stop/set_loop/set_metronome/set_countdown。", {{"document", str}, {"operation", str}, {"bar", integer}, {"tick", integer}, {"enabled", boolean}});
+        add("gp_playback", "原生播放：state/play/stop/seek/seek_tick/set_loop/set_metronome/set_countdown。seek 使用原谱 bar 和小节内 tick；seek_tick 使用展开绝对 tick。timeline 分页读取实际反复/跳转序列。set_loop_range 用 base/extent（含端点）设置原生选区并启用循环；clear_loop_range 清选区并关闭循环。状态包含实际循环边界和帧数。", {{"document", str}, {"operation", str}, {"bar", integer}, {"tick", integer}, {"enabled", boolean}, {"base", endpoint}, {"extent", endpoint}, {"offset", integer}, {"limit", integer}, {"value", QJsonObject{{"type", "number"}}}});
         add("gp_open", "通过宿主原生文件打开事件异步打开已有 .gp 文件；用 gp_documents 的路径读回确认完成。", {{"path", str}}, {"path"});
         add("gp_close", "异步关闭文档；unsaved: reject（默认）、save、discard、cancel、prompt。save 可指定 path 和 overwrite；轮询 gp_documents.closing 确认结果。", {{"document", str}, {"unsaved", str}, {"path", str}, {"overwrite", boolean}}, {"document"});
         add("gp_documents", "按标签顺序读取实时文档 ID、tab_index、原生打开路径、保存路径和未保存状态；另存成功后两种路径都更新。映射不可用时 tab_order_available=false，不推断顺序。", {});
@@ -687,7 +692,7 @@ class Bridge : public QObject {
             // Host command observers update the active document's dirty state.
             // Bind every model mutation to its document before calling native APIs.
             static const QSet<QString> mutations{"gp_edit_note", "gp_edit_note_effect", "gp_edit_beat_effect", "gp_edit_tuning", "gp_transpose", "gp_edit_connection", "gp_edit_beat", "gp_edit_bars", "gp_edit_track", "gp_edit_tracks", "gp_insert_track", "gp_edit_tempo", "gp_edit_measure", "gp_set_fret", "gp_edit_metadata", "gp_cursor", "gp_undo_redo"};
-            if (mutations.contains(tool)) {
+            if (mutations.contains(tool) || ((tool == "gp_tempo" || tool == "gp_audio_track") && args.value("operation").toString("state") != "state")) {
                 const auto target = guitarpro::choose(args);
                 if (!target.view || !target.score) return QJsonObject{{"error", "Choose a document with a verified native score"}};
                 const QJsonObject activated = guitarpro::activate(QJsonObject{{"document", target.id()}}, services());
@@ -755,13 +760,25 @@ class Bridge : public QObject {
             if (tool == "gp_edit_tracks") return guitarpro::editTracks(args);
             if (tool == "gp_insert_track") return guitarpro::insertTrack(args);
             if (tool == "gp_edit_metadata") return guitarpro::editMetadata(args);
-            if (tool == "gp_edit_tempo") return guitarpro::editTempo(args);
+            if (tool == "gp_edit_tempo" || tool == "gp_tempo") {
+                const auto result = tool == "gp_edit_tempo" ? guitarpro::editTempo(args) : guitarpro::tempoAutomation(args);
+                if (!result.contains("error") && (tool == "gp_edit_tempo" || args.value("operation").toString("state") != "state"))
+                    guitarpro::refreshTempo(args, services());
+                return result;
+            }
+            if (tool == "gp_audio_track") return guitarpro::audioTrack(args);
+            if (tool == "gp_audio_device") return guitarpro::audioDevice(args, services());
+            if (tool == "gp_audio_probe" && qEnvironmentVariableIsSet("GPMCP_DEVELOPMENT")) return guitarpro::audioProbe(args, services());
             if (tool == "gp_read_master_bars") return guitarpro::readMasterBars(args);
             if (tool == "gp_edit_note_effect") return guitarpro::editNoteEffect(args);
             if (tool == "gp_edit_beat_effect") return guitarpro::editBeatEffect(args);
             if (tool == "gp_edit_connection") return guitarpro::editConnection(args);
             if (tool == "gp_edit_measure") return guitarpro::editMeasure(args);
-            if (tool == "gp_undo_redo") return guitarpro::undoRedo(args);
+            if (tool == "gp_undo_redo") {
+                const auto result = guitarpro::undoRedo(args);
+                if (!result.contains("error")) guitarpro::refreshTempo(args, services());
+                return result;
+            }
             if (tool == "gp_cursor") return guitarpro::moveCursor(args);
             if (tool == "gp_selection") return guitarpro::selection(args, services());
             if (tool == "gp_clipboard") return guitarpro::clipboard(args, clipboardBuffer, services());
