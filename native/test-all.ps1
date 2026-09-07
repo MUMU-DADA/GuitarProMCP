@@ -39,7 +39,9 @@ try {
             $fixtureBefore = @((Invoke-McpTool $connection gp_documents).documents | Where-Object opened_path -EQ $fixture.Replace('\','/'))
             if ($fixtureBefore.Count -ne 1 -or $fixtureBefore[0].dirty) { throw 'Regression fixture is missing or dirty.' }
         } finally { Close-McpSession $connection }
-        $output = @(& "$PSScriptRoot/test-$suite.ps1" -SessionFile $sessionFile | Tee-Object -FilePath (Join-Path $run "$suite.log"))
+        $parameters = @{SessionFile=$sessionFile}
+        if ($suite -eq 'document-tabs') { $parameters.VerifyDocumentMenu = $true }
+        $output = @(& "$PSScriptRoot/test-$suite.ps1" @parameters | Tee-Object -FilePath (Join-Path $run "$suite.log"))
         $pass = @($output | Where-Object { $_ -match '^PASS:\s*(\d+)' })
         if ($pass.Count -ne 1 -or $pass[0] -notmatch '^PASS:\s*(\d+)') { throw "No unambiguous passing result from $suite." }
         $results += [pscustomobject]@{suite=$suite;checks=[int]$Matches[1];result=$pass[0]}

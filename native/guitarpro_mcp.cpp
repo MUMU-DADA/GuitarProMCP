@@ -544,7 +544,7 @@ class Bridge : public QObject {
         add("gp_save_as", "异步原生另存为 .gp；已有目标须 overwrite=true。轮询 gp_operation，saved 后读取 result。", {{"document", str}, {"path", str}, {"overwrite", boolean}}, {"path"});
         add("gp_save", "异步保存 .gp 副本并保留文档状态；已有目标须 overwrite=true。轮询 gp_operation 的 saved/result。", {{"document", str}, {"path", str}, {"overwrite", boolean}}, {"path"});
         add("gp_save_current", "异步保存当前 .gp 路径；轮询 gp_operation 的 saved/result。未命名文档须先 gp_save_as。", {{"document", str}});
-        add("gp_window", "通过 Qt 原生窗口方法设置测试窗口状态；控制操作本身不需要前台窗口。", {{"state", str}}, {"state"});
+        add("gp_window", "通过 Qt 原生窗口方法隐藏、最小化或恢复主窗口；restore 会显示并请求激活窗口，hide 重新进入不抢焦点的后台模式。", {{"state", str}}, {"state"});
         add("gp_capabilities", "原生 C++ 插件身份、后台控制能力及尚未覆盖的范围。", {});
         add("gp_dialogs", "Read the active modal dialog, its message labels and available buttons. Native score mutations are blocked until it is resolved.", {});
         add("gp_objects", "读取宿主 Qt 对象、属性和可调用方法；无需窗口可见或前台。", {{"query", str}, {"offset", integer}, {"limit", integer}, {"include_hidden", boolean}});
@@ -757,6 +757,7 @@ class Bridge : public QObject {
                             if (widget->windowHandle()) widget->windowHandle()->setFlag(Qt::WindowDoesNotAcceptFocus, false);
                         }
                         widget->showNormal();
+                        widget->activateWindow();
                         qApp->setQuitOnLastWindowClosed(originalQuitOnLastWindow);
                     } else {
                         preventActivation(widget);

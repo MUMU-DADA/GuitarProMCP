@@ -143,6 +143,14 @@ try {
     if ($VerifyDocumentMenu) {
         $menuAfter = Menu-Targets
         foreach ($name in $menuBefore.Keys) { Assert ($menuAfter[$name] -eq $menuBefore[$name]) 'Moving retargeted a native document menu action.' }
+        foreach ($cycle in 1..3) {
+            Assert (-not (Invoke-McpTool $connection gp_window @{state='hide'}).visible) 'Window did not hide between menu checks.'
+            $hidden = Invoke-McpTool $connection gp_capabilities
+            Assert ($hidden.hidden_mode -and $hidden.foreground_pid -ne $hidden.pid) 'Menu checks lost background focus isolation.'
+            Assert ((Invoke-McpTool $connection gp_window @{state='restore'}).visible) 'Window did not restore between menu checks.'
+            $cycleTargets = Menu-Targets
+            foreach ($name in $menuBefore.Keys) { Assert ($cycleTargets[$name] -eq $menuBefore[$name]) 'Restoring changed a document menu target.' }
+        }
     }
     $tabs = @((Invoke-McpTool $connection gp_objects @{query='am::gui::Tab';limit=100}).objects | Where-Object class -EQ 'am::gui::Tab' | Sort-Object { $_.properties.x })
     Assert ($tabs.Count -eq 5 -and $tabs[2].properties.toolTip -eq $baseline.opened_path -and $tabs[3].properties.toolTip.EndsWith($paths[$a].Replace('\','/')) -and $tabs[4].properties.toolTip.EndsWith($paths[$b].Replace('\','/'))) 'Visible tab positions differ from document order.'
@@ -155,9 +163,13 @@ try {
         Start-Sleep -Milliseconds 50
     } while ([DateTime]::UtcNow -lt $deadline)
     Assert ($dialog.blocked) 'Expected native close dialog.'
+    Assert ((Invoke-McpTool $connection gp_window @{state='restore'}).visible) 'Main window did not restore with a pending close dialog.'
+    $restoredDialog = Invoke-McpTool $connection gp_dialogs
+    Assert ($restoredDialog.blocked -and $restoredDialog.class -eq $dialog.class -and $restoredDialog.title -eq $dialog.title) 'Restoring lost the native close dialog.'
     Assert ((Invoke-McpTool $connection gp_move_document @{document=$a;index=0} -AllowError).error) 'Move entered an active document operation/dialog.'
     Invoke-McpTool $connection gp_cancel @{request=$prompt.request} | Out-Null
     Wait-Operation $prompt.request 'cancelled' | Out-Null
+    Assert (-not (Invoke-McpTool $connection gp_window @{state='hide'}).visible) 'Window did not hide after cancelling the close dialog.'
     Check-Order @($c,$d,$baseline.id,$a,$b) $c
     Invoke-McpTool $connection gp_save_current @{document=$a} | Out-Null
     $paths[$b] = Join-Path $run 'adopted.gp'
