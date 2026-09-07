@@ -147,13 +147,12 @@ bool McpServer::start(const QString &path, QJsonObject identity, QJsonArray tool
     identity["port"] = int(listener.serverPort()); identity["url"] = url;
     identity["preferred_port"] = port; identity["port_fallback"] = listener.serverPort() != port;
     identity["transport"] = "streamable-http"; identity["protocolVersion"] = Version;
-    auto clientConfig = [&](bool bound) {
-        QJsonObject headers{{"Authorization", "Bearer " + token}};
-        if (bound) headers["GuitarProMCP-Instance-Id"] = instanceIdentity;
-        return QJsonObject{{"mcpServers", QJsonObject{{"guitarpro", QJsonObject{{"url", url}, {"headers", headers}}}}}};
+    auto clientConfig = [&]() {
+        QJsonObject headers{{"Authorization", "Bearer " + token}, {"GuitarProMCP-Instance-Id", instanceIdentity}};
+        return QJsonObject{{"mcpServers", QJsonObject{{"guitarpro", QJsonObject{{"type", "streamable-http"}, {"url", url}, {"headers", headers}}}}}};
     };
-    if (!saveJson(instanceClientPath, clientConfig(true)) || !saveJson(descriptorPath, identity) ||
-        (!aliasPath.isEmpty() && (!saveJson(directory.filePath("mcp-client.json"), clientConfig(false)) || !saveJson(aliasPath, identity)))) {
+    if (!saveJson(instanceClientPath, clientConfig()) || !saveJson(descriptorPath, identity) ||
+        (!aliasPath.isEmpty() && (!saveJson(directory.filePath("mcp-client.json"), clientConfig()) || !saveJson(aliasPath, identity)))) {
         stop(); return fail("Cannot publish MCP session or client configuration");
     }
     connect(&listener, &QTcpServer::newConnection, this, &McpServer::accept);

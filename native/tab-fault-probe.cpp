@@ -1,7 +1,10 @@
 #include <QtGui/QGenericPlugin>
 #include <QtCore/QJsonDocument>
 #include <QtCore/QTimer>
+#include <QtGui/QFileOpenEvent>
+#include <QtWidgets/QMessageBox>
 #include <stdexcept>
+#include <cstring>
 #include "guitarpro_api.h"
 
 // Test-only native signal faults. Every open document must belong to the
@@ -12,6 +15,57 @@ class TabFaultProbe : public QObject {
     QMetaObject::Connection connection;
     QTimer poll{this};
     int remaining = 0;
+    inline static TabFaultProbe *active = nullptr;
+    void **sendSlot = nullptr;
+    void *originalSend = nullptr;
+    static bool send(QObject *object, QEvent *event) {
+        if (active && active->defer(object, event)) return true;
+        bool failAfter = false;
+        if (active && active->remaining > 0 && object == qApp && event->type() == QEvent::FileOpen) {
+            const QString path = QDir::fromNativeSeparators(static_cast<QFileOpenEvent *>(event)->file());
+            failAfter = (active->mode == "throw_after_open" && path.startsWith(active->directory + "/", Qt::CaseInsensitive)) ||
+                (active->mode == "throw_after_create" && path.startsWith(":/GPBase/MainWindow/Templates/"));
+            if (failAfter) --active->remaining;
+        }
+        const bool result = QCoreApplication::sendEvent(object, event);
+        if (failAfter) {
+            active->record({{"event", "native_exception"}, {"stage", "load_returned"}, {"send_result", result}});
+            throw std::runtime_error("Isolated exception after native file loading");
+        }
+        return result;
+    }
+    bool replaceSend(bool install) {
+        if (!sendSlot) return false;
+        DWORD protection = 0;
+        if (!VirtualProtect(sendSlot, sizeof(void *), PAGE_READWRITE, &protection)) return false;
+        void *replacement = reinterpret_cast<void *>(&send);
+        const bool changed = InterlockedCompareExchangePointer(sendSlot, install ? replacement : originalSend, install ? originalSend : replacement) == (install ? originalSend : replacement);
+        DWORD unused = 0; VirtualProtect(sendSlot, sizeof(void *), protection, &unused);
+        return changed;
+    }
+    bool hookSend() {
+        const auto base = reinterpret_cast<unsigned char *>(GetModuleHandleW(L"guitarpro_mcp.dll"));
+        if (!base) return false;
+        const auto dos = reinterpret_cast<const IMAGE_DOS_HEADER *>(base);
+        const auto nt = reinterpret_cast<const IMAGE_NT_HEADERS64 *>(base + dos->e_lfanew);
+        const auto imports = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+        if (!imports.VirtualAddress) return false;
+        auto descriptor = reinterpret_cast<const IMAGE_IMPORT_DESCRIPTOR *>(base + imports.VirtualAddress);
+        for (; descriptor->Name; ++descriptor) {
+            if (!descriptor->OriginalFirstThunk) continue;
+            auto names = reinterpret_cast<const IMAGE_THUNK_DATA64 *>(base + descriptor->OriginalFirstThunk);
+            auto addresses = reinterpret_cast<IMAGE_THUNK_DATA64 *>(base + descriptor->FirstThunk);
+            for (; names->u1.AddressOfData; ++names, ++addresses) {
+                if (IMAGE_SNAP_BY_ORDINAL64(names->u1.Ordinal)) continue;
+                const auto symbol = reinterpret_cast<const IMAGE_IMPORT_BY_NAME *>(base + names->u1.AddressOfData);
+                if (!std::strstr(reinterpret_cast<const char *>(symbol->Name), "?sendEvent@QCoreApplication@@")) continue;
+                sendSlot = reinterpret_cast<void **>(&addresses->u1.Function);
+                originalSend = *sendSlot;
+                return replaceSend(true);
+            }
+        }
+        return false;
+    }
     void record(QJsonObject event) const {
         event["request"] = request;
         QFile output(directory + "/probe.jsonl");
@@ -26,10 +80,48 @@ class TabFaultProbe : public QObject {
         if (next.isEmpty() || next == request) return;
         QObject::disconnect(connection);
         request = next; mode = config.value("mode").toString();
-        target = config.value("document").toString();
+        target = QDir::fromNativeSeparators(config.value("document").toString());
         remaining = mode == "throw_recovery" ? 2 : 1;
         if (mode.isEmpty()) { record({{"event", "disarmed"}}); return; }
         const auto docs = guitarpro::documents();
+        if (mode == "delay_open" || mode == "delay_create" || mode == "error_open" || mode == "error_create" || mode == "throw_after_open" || mode == "throw_after_create" ||
+            mode == "throw_close" || mode == "close_external" || mode == "open_external") {
+            for (const auto &doc : docs) {
+                const QString path = QDir::fromNativeSeparators(doc.object->property("openedFilePath").toString());
+                if (!path.isEmpty() && !path.startsWith(directory + "/", Qt::CaseInsensitive)) { record({{"event", "rejected"}}); mode.clear(); return; }
+            }
+            if (mode == "throw_close") {
+                if (docs.size() != 1) { record({{"event", "rejected"}}); mode.clear(); return; }
+                for (QObject *child : docs.first().view->window()->children())
+                    if (QByteArray(child->metaObject()->className()) == "gp::gui::TabWidgetProxy")
+                        connection = QObject::connect(child, SIGNAL(tabCloseRequested(int)), this, SLOT(onCloseRequested(int)), Qt::DirectConnection);
+                if (!connection) { record({{"event", "rejected"}}); mode.clear(); return; }
+            }
+            if (mode == "close_external") {
+                if (docs.isEmpty()) { record({{"event", "rejected"}}); mode.clear(); return; }
+                for (const auto &doc : docs) if (doc.object->property("isDirty").toBool()) {
+                    record({{"event", "rejected"}}); mode.clear(); return;
+                }
+                QPointer<QObject> proxy;
+                for (QObject *child : docs.first().view->window()->children())
+                    if (QByteArray(child->metaObject()->className()) == "gp::gui::TabWidgetProxy") proxy = child;
+                if (!proxy) { record({{"event", "rejected"}}); mode.clear(); return; }
+                QTimer::singleShot(0, this, [this, proxy, docs] {
+                    for (int i = 0; i < docs.size() && proxy; ++i)
+                        QMetaObject::invokeMethod(proxy, "tabCloseRequested", Qt::DirectConnection, Q_ARG(int, 0));
+                    record({{"event", "external_close"}, {"remaining_documents", guitarpro::documents().size()}});
+                });
+            }
+            record({{"event", "armed"}});
+            if (mode == "open_external" && target.startsWith(directory + "/", Qt::CaseInsensitive) && QFile::exists(target)) {
+                QTimer::singleShot(0, this, [this, path = target] {
+                    QFileOpenEvent open(path);
+                    QCoreApplication::sendEvent(qApp, &open);
+                    record({{"event", "external_open"}, {"path", path}});
+                });
+            }
+            return;
+        }
         if (docs.size() != 4) { record({{"event", "rejected"}}); return; }
         for (const auto &doc : docs)
             if (!QDir::fromNativeSeparators(doc.object->property("openedFilePath").toString()).startsWith(directory + "/", Qt::CaseInsensitive)) {
@@ -41,7 +133,40 @@ class TabFaultProbe : public QObject {
         connection = QObject::connect(activeTab, SIGNAL(clicked()), this, SLOT(onClicked()), Qt::DirectConnection);
         record({{"event", "armed"}, {"mode", mode}, {"connected", bool(connection)}});
     }
+    bool defer(QObject *object, QEvent *event) {
+        if (object != qApp || event->type() != QEvent::FileOpen || remaining <= 0) return false;
+        const QString path = QDir::fromNativeSeparators(static_cast<QFileOpenEvent *>(event)->file());
+        const bool match = ((mode == "delay_open" || mode == "error_open") && path.startsWith(directory + "/", Qt::CaseInsensitive)) ||
+            ((mode == "delay_create" || mode == "error_create") && path.startsWith(":/GPBase/MainWindow/Templates/"));
+        if (!match) return false;
+        --remaining;
+        if (mode.startsWith("error_")) {
+            QWidget *window = nullptr;
+            for (auto widget : QApplication::topLevelWidgets())
+                if (QByteArray(widget->metaObject()->className()) == "gp::gui::MainWindow") window = widget;
+            if (!window) return false;
+            QMessageBox dialog(QMessageBox::Critical, "Isolated load error", "Injected file loading failure", QMessageBox::Ok, window);
+            QTimer::singleShot(8000, &dialog, &QDialog::reject);
+            dialog.exec();
+            record({{"event", "load_error_dismissed"}});
+            event->accept();
+            return true;
+        }
+        record({{"event", "deferred"}, {"path", path}});
+        QTimer::singleShot(11500, this, [this, path] {
+            QFileOpenEvent later(path);
+            QCoreApplication::sendEvent(qApp, &later);
+            record({{"event", "delivered"}, {"path", path}});
+        });
+        event->accept();
+        return true;
+    }
 private slots:
+    void onCloseRequested(int) {
+        if (mode != "throw_close" || remaining-- <= 0) return;
+        record({{"event", "native_exception"}, {"stage", "close_notified"}});
+        throw std::runtime_error("Isolated exception after native close notification");
+    }
     void onClicked() {
         if (remaining-- <= 0) return;
         record({{"event", "fault"}, {"mode", mode}, {"remaining", remaining}});
@@ -73,10 +198,14 @@ private slots:
     }
 public:
     explicit TabFaultProbe(const QString &path) : directory(path) {
+        active = this;
+        const bool hooked = hookSend();
+        connect(qApp, &QCoreApplication::aboutToQuit, this, [this] { replaceSend(false); active = nullptr; });
         connect(&poll, &QTimer::timeout, this, [this] { refresh(); });
         poll.start(20);
-        record({{"event", "ready"}});
+        record({{"event", "ready"}, {"load_hook", hooked}});
     }
+    ~TabFaultProbe() override { replaceSend(false); if (active == this) active = nullptr; }
 };
 
 class TabFaultPlugin : public QGenericPlugin {

@@ -53,6 +53,7 @@ class Bridge : public QObject {
     QHash<QObject *, QPointer<QObject>> nativeObjects;
     QJsonObject creation;
     QList<QPointer<QObject>> creationBefore;
+    QPointer<QObject> creationDocument;
     QElapsedTimer creationElapsed;
     QTimer creationPoll{this};
     QJsonObject opening;
@@ -134,13 +135,23 @@ class Bridge : public QObject {
     void checkClosing() {
         if (!pending(closing)) return;
         if (savingOperation == &closing) return;
+        if (closingNativeActive) {
+            if (QApplication::activeModalWidget()) closing["dialog"] = modalState();
+            return;
+        }
         if (!closingView) { closing["status"] = "closed"; closing.remove("outcome_unknown"); closing.remove("error"); }
-        else if (closingNativeActive && QApplication::activeModalWidget()) closing["dialog"] = modalState();
         else if (closingElapsed.elapsed() > 10000) {
             closing["status"] = "error";
             closing["error"] = "Document still exists after close request; inspect documents and dialogs";
             closing["outcome_unknown"] = true;
         }
+    }
+
+    static void nativeFailure(QJsonObject &operation, const QString &message) {
+        operation["status"] = "error";
+        operation["error"] = message;
+        operation["native_error"] = message;
+        operation["outcome_unknown"] = true;
     }
 
     void checkCreation() {
@@ -151,17 +162,45 @@ class Bridge : public QObject {
         }
         const QString path = creation.value("template_path").toString();
         for (const auto &document : guitarpro::documents()) {
-            if (creationBefore.contains(document.object) || !document.score || document.object->property("saveFilePath").toString() != path) continue;
-            const QString empty;
-            const bool adopted = QMetaObject::invokeMethod(document.object, "setOpenedFilePath", Qt::DirectConnection, Q_ARG(QString, empty)) &&
-                QMetaObject::invokeMethod(document.object, "setSaveFilePath", Qt::DirectConnection, Q_ARG(QString, empty));
+            if (creationBefore.contains(document.object) || !document.score ||
+                (document.object != creationDocument && document.object->property("saveFilePath").toString() != path)) continue;
+            creationDocument = document.object;
             creation["document"] = document.id();
-            creation["status"] = adopted && document.object->property("saveFilePath").toString().isEmpty() &&
-                document.object->property("openedFilePath").toString().isEmpty() ? "created" : "error";
-            creation.remove("outcome_unknown"); creation.remove("error");
-            creationPoll.stop(); creationBefore.clear(); return;
+            const QString documentId = document.id();
+            const QString openedBefore = document.object->property("openedFilePath").toString();
+            const auto adopt = [document, path, openedBefore, documentId]() -> QJsonObject {
+                if (!document.object || !document.view)
+                    return {{"resolution", "document_closed"}, {"document", documentId}};
+                for (const char *property : {"openedFilePath", "saveFilePath"}) {
+                    const QString current = document.object->property(property).toString();
+                    const QString expected = QByteArray(property) == "openedFilePath" ? openedBefore : path;
+                    if (!current.isEmpty() && current != expected)
+                        return {{"error", "New document path changed; retained recovery cannot overwrite it"}, {"outcome_unknown", true}};
+                }
+                const QString empty;
+                if (!QMetaObject::invokeMethod(document.object, "setOpenedFilePath", Qt::DirectConnection, Q_ARG(QString, empty)) ||
+                    !document.object || !QMetaObject::invokeMethod(document.object, "setSaveFilePath", Qt::DirectConnection, Q_ARG(QString, empty)) ||
+                    !document.object || !document.object->property("openedFilePath").toString().isEmpty() || !document.object->property("saveFilePath").toString().isEmpty())
+                    return {{"error", "Native template path reset did not complete"}, {"outcome_unknown", true}};
+                return {{"resolution", "created"}, {"document", document.id()}};
+            };
+            QJsonObject result;
+            try { result = adopt(); }
+            catch (const std::exception &exception) { result = {{"error", QString::fromUtf8(exception.what())}, {"outcome_unknown", true}}; }
+            catch (...) { result = {{"error", "Unknown native template path exception"}, {"outcome_unknown", true}}; }
+            creationPoll.stop(); creationBefore.clear();
+            if (result.contains("error")) {
+                nativeFailure(creation, result.value("error").toString());
+                pendingRecovery = adopt; recoveryRequest = creation.value("request").toString();
+                creation["recovery_available"] = true;
+            } else {
+                creation["status"] = result.value("resolution") == "created" ? "created" : "error";
+                creation.remove("outcome_unknown"); creation.remove("error");
+                if (creation.value("status") == "error") creation["error"] = "New document closed before initialization completed";
+            }
+            return;
         }
-        if (creation.value("status") == "cancelling") {
+        if (creation.value("status") == "cancelling" && creation.value("cancel_decision_available").toBool()) {
             creation["status"] = "cancelled"; creationPoll.stop(); creationBefore.clear(); return;
         }
         if (creationElapsed.elapsed() > 10000 && !creation.contains("error")) {
@@ -195,7 +234,7 @@ class Bridge : public QObject {
                 opening.remove("error"); opening.remove("outcome_unknown"); openingPoll.stop(); return;
             }
         }
-        if (opening.value("status") == "cancelling") { opening["status"] = "cancelled"; openingPoll.stop(); return; }
+        if (opening.value("status") == "cancelling" && opening.value("cancel_decision_available").toBool()) { opening["status"] = "cancelled"; openingPoll.stop(); return; }
         if (openingElapsed.elapsed() > 10000 && !opening.contains("error")) {
             opening["status"] = "error";
             opening["error"] = "No document observed within 10 seconds; inspect documents and dialogs before retrying";
@@ -216,12 +255,18 @@ class Bridge : public QObject {
                     openingPoll.stop(); return;
                 }
             }
-            loadingKind = kind; loadModal.clear(); loadNativeActive = true;
-            QFileOpenEvent event(path);
-            QCoreApplication::sendEvent(qApp, &event);
-            loadNativeActive = false;
+            loadingKind = kind; loadModal.clear();
+            {
+                QScopedValueRollback<bool> active(loadNativeActive, true);
+                try {
+                    QFileOpenEvent event(path);
+                    QCoreApplication::sendEvent(qApp, &event);
+                } catch (const std::exception &exception) { nativeFailure(operation, QString::fromUtf8(exception.what())); }
+                catch (...) { nativeFailure(operation, "Unknown native document load exception"); }
+            }
+            operation["native_returned"] = true;
             if (kind == "open") checkOpening(); else checkCreation();
-            if (pending(operation) && operation.contains("dialog") && !QApplication::activeModalWidget()) {
+            if (pending(operation) && !operation.contains("native_error") && !operation.value("recovery_available").toBool() && operation.contains("dialog") && !QApplication::activeModalWidget()) {
                 operation["status"] = "error";
                 operation["error"] = "Native file operation ended after a dialog without the expected document";
                 operation.remove("outcome_unknown");
@@ -238,8 +283,12 @@ class Bridge : public QObject {
     QJsonObject performSave(const QJsonObject &args, bool adopt, bool current, QJsonObject &operation) {
         QScopedValueRollback<QJsonObject *> running(savingOperation, &operation);
         saveModal.clear();
+        pendingRecovery = {};
+        recoveryRequest = operation.value("request").toString();
         try {
-            auto result = guitarpro::save(args, adopt, current);
+            auto result = guitarpro::save(args, pendingRecovery, adopt, current);
+            result["recovery_available"] = bool(pendingRecovery);
+            operation["recovery_available"] = bool(pendingRecovery);
             if (result.value("outcome_unknown").toBool()) operation["outcome_unknown"] = true;
             return result;
         }
@@ -247,6 +296,17 @@ class Bridge : public QObject {
             operation["outcome_unknown"] = true;
             return {{"error", QString::fromUtf8(exception.what())}, {"outcome_unknown", true}};
         }
+        catch (...) {
+            operation["outcome_unknown"] = true;
+            return {{"error", "Unknown native save exception"}, {"outcome_unknown", true}};
+        }
+    }
+
+    static bool cancelledSave(const QJsonObject &operation, const QJsonObject &result) {
+        return operation.value("cancel_requested").toBool() && operation.value("cancel_decision_available").toBool() && result.contains("error") &&
+            result.value("file_restored").toBool() && result.value("save_path_restored").toBool() &&
+            result.value("opened_path_restored").toBool() && result.value("dirty_state_restored").toBool() &&
+            !result.value("native_exception").toBool() && !result.value("outcome_unknown").toBool();
     }
 
     QJsonObject cancelOperation(const QString &request) {
@@ -288,6 +348,10 @@ class Bridge : public QObject {
             } else if (loadNativeActive && loadModal == QApplication::activeModalWidget() && loadModal &&
                        ((operation == &opening && loadingKind == "open") || (operation == &creation && loadingKind == "create"))) {
                 (*operation)["status"] = "cancelling";
+                bool cancelAvailable = false;
+                if (auto box = qobject_cast<QMessageBox *>(loadModal)) cancelAvailable = box->button(QMessageBox::Cancel) != nullptr;
+                else for (auto box : loadModal->findChildren<QDialogButtonBox *>()) cancelAvailable |= box->button(QDialogButtonBox::Cancel) != nullptr;
+                (*operation)["cancel_decision_available"] = cancelAvailable;
                 QPointer<QDialog> dialog = loadModal;
                 const QString kind = loadingKind;
                 QTimer::singleShot(0, this, [this, dialog, kind, request]() {
@@ -580,7 +644,7 @@ class Bridge : public QObject {
         add("gp_documents", "按标签顺序读取实时文档 ID、tab_index、原生打开路径、保存路径和未保存状态；另存成功后两种路径都更新。映射不可用时 tab_order_available=false，不推断顺序。", {});
         add("gp_operation", "Read a new/open/save/close/tab-move operation by request ID, including the last 64 replaced records.", {{"request", str}}, {"request"});
         add("gp_cancel", "Cancel a queued document operation or its observed native dialog; poll gp_operation for the outcome.", {{"request", str}}, {"request"});
-        add("gp_recover", "按 request 重试 recovery_available=true 的失败恢复，目前支持标签重排回滚及部分文档已关闭后的剩余状态核验。只执行保留的恢复步骤，不重放原操作或重新打开文档；核验成功后解除写入阻塞，原始失败和 recovery 结果可通过 gp_operation 查阅。", {{"request", str}}, {"request"});
+        add("gp_recover", "按 request 重试 recovery_available=true 的失败恢复：标签回滚和文档集变化核验、保存失败后的路径和未保存状态恢复、新建模板路径复原。只执行保留步骤，不重放保存、覆盖文件或重新打开文档；核验成功后解除写入阻塞，原失败和 recovery 结果由 gp_operation 保留。未知新建/打开结果继续自动观察，未确认前不能强制解除阻塞。", {{"request", str}}, {"request"});
         add("gp_save_as", "异步原生另存为 .gp；已有目标须 overwrite=true。轮询 gp_operation，saved 后读取 result。", {{"document", str}, {"path", str}, {"overwrite", boolean}}, {"path"});
         add("gp_save", "异步保存 .gp 副本并保留文档状态；已有目标须 overwrite=true。轮询 gp_operation 的 saved/result。", {{"document", str}, {"path", str}, {"overwrite", boolean}}, {"path"});
         add("gp_save_current", "异步保存当前 .gp 路径；轮询 gp_operation 的 saved/result。未命名文档须先 gp_save_as。", {{"document", str}});
@@ -610,7 +674,10 @@ class Bridge : public QObject {
             static const QSet<QString> dialogActions{"gp_trigger", "gp_set_property", "gp_close_window", "gp_window"};
             if (QApplication::activeModalWidget() && !modalReads.contains(tool) && !dialogActions.contains(tool))
                 return QJsonObject{{"error", "A modal dialog blocks native operations; inspect gp_dialogs"}, {"dialog", modalState()}};
-            if ((loadNativeActive || closingNativeActive || savingOperation || pending(creation) || pending(opening) || pending(closing) || pending(saving) || pending(moving)) && !modalReads.contains(tool) && !dialogActions.contains(tool))
+            const bool operationPending = recoveryActive || loadNativeActive || closingNativeActive || savingOperation ||
+                pending(creation) || pending(opening) || pending(closing) || pending(saving) || pending(moving);
+            const bool outsideDialogEdit = !QApplication::activeModalWidget() && (tool == "gp_trigger" || tool == "gp_set_property");
+            if (operationPending && !modalReads.contains(tool) && (!dialogActions.contains(tool) || outsideDialogEdit))
                 return QJsonObject{{"error", "A document operation is pending; inspect gp_documents or cancel its request before another mutation"}};
             // Host command observers update the active document's dirty state.
             // Bind every model mutation to its document before calling native APIs.
@@ -631,6 +698,7 @@ class Bridge : public QObject {
                 if (!templates.entryList({"*.gpt"}, QDir::Files).contains(name + ".gpt")) return QJsonObject{{"error", "Unknown built-in template name"}};
                 if (creationPoll.isActive()) return QJsonObject{{"error", "A template creation is already pending"}, {"creation", creation}};
                 creationBefore.clear();
+                creationDocument.clear();
                 for (const auto &document : guitarpro::documents()) creationBefore.append(document.object);
                 const QString path = templates.filePath(name + ".gpt");
                 archiveOperation(creation);
@@ -763,15 +831,23 @@ class Bridge : public QObject {
                     }
                     closing["status"] = "requested";
                     if (policy == "save") {
-                        auto saved = guitarpro::activate(args, services());
-                        if (!saved.contains("error")) saved = performSave(args, true, !args.contains("path"), closing);
+                        QJsonObject saved;
+                        try {
+                            saved = guitarpro::activate(args, services());
+                            if (!saved.contains("error")) saved = performSave(args, true, !args.contains("path"), closing);
+                        } catch (const std::exception &exception) { nativeFailure(closing, QString::fromUtf8(exception.what())); saved = {{"error", closing.value("error")}}; }
+                        catch (...) { nativeFailure(closing, "Unknown native close/save exception"); saved = {{"error", closing.value("error")}}; }
                         closing["save"] = saved;
-                        if (saved.contains("error")) { closing["status"] = "error"; closing["error"] = saved.value("error"); return; }
+                        if (saved.contains("error")) { closing["status"] = cancelledSave(closing, saved) ? "cancelled" : "error"; closing["error"] = saved.value("error"); return; }
                     }
                     closing["status"] = "requested";
-                    closingNativeActive = true;
-                    const auto result = guitarpro::closeDocument(args, services(), policy == "discard" || policy == "prompt");
-                    closingNativeActive = false;
+                    QJsonObject result;
+                    {
+                        QScopedValueRollback<bool> active(closingNativeActive, true);
+                        try { result = guitarpro::closeDocument(args, services(), policy == "discard" || policy == "prompt"); }
+                        catch (const std::exception &exception) { nativeFailure(closing, QString::fromUtf8(exception.what())); result = {{"error", closing.value("error")}}; }
+                        catch (...) { nativeFailure(closing, "Unknown native document close exception"); result = {{"error", closing.value("error")}}; }
+                    }
                     if (result.contains("error")) closing["status"] = "error";
                     if (result.contains("error")) closing["error"] = result.value("error");
                     if (closingView && closing.value("decision") == "cancel") closing["status"] = "cancelled";
@@ -792,17 +868,17 @@ class Bridge : public QObject {
                     QJsonObject result;
                     if (!target.object || !target.view || guitarpro::choose(bound).object != target.object) result = {{"error", "Document changed before saving"}};
                     else {
-                        result = guitarpro::activate(bound, services());
-                        if (!result.contains("error")) result = performSave(bound, tool != "gp_save", tool == "gp_save_current", saving);
+                        try {
+                            result = guitarpro::activate(bound, services());
+                            if (!result.contains("error")) result = performSave(bound, tool != "gp_save", tool == "gp_save_current", saving);
+                        } catch (const std::exception &exception) { result = {{"error", QString::fromUtf8(exception.what())}, {"outcome_unknown", true}}; }
+                        catch (...) { result = {{"error", "Unknown native save activation exception"}, {"outcome_unknown", true}}; }
                     }
                     saving["result"] = result;
                     saving["status"] = result.contains("error") ? "error" : "saved";
                     if (result.contains("error")) saving["error"] = result.value("error");
                     if (result.value("outcome_unknown").toBool()) saving["outcome_unknown"] = true;
-                    if (saving.value("cancel_requested").toBool() && saving.value("cancel_decision_available").toBool() && result.contains("error") &&
-                        result.value("file_restored").toBool() && result.value("save_path_restored").toBool() &&
-                        result.value("opened_path_restored").toBool() && result.value("dirty_state_restored").toBool() &&
-                        !result.value("native_exception").toBool() && !result.value("outcome_unknown").toBool()) saving["status"] = "cancelled";
+                    if (cancelledSave(saving, result)) saving["status"] = "cancelled";
                 });
                 return saving;
             }
@@ -864,7 +940,21 @@ protected:
         if (savingOperation && event->type() == QEvent::Show) {
             if (auto modal = qobject_cast<QDialog *>(object)) {
                 const auto target = guitarpro::choose({{"document", savingOperation->value("document")}});
-                if (modal->isModal() && target.view && modal->parentWidget() == target.view->window()) saveModal = modal;
+                if (modal->isModal() && target.view && modal->parentWidget() == target.view->window()) {
+                    saveModal = modal;
+                    const QString request = savingOperation->value("request").toString();
+                    const auto cancelled = [this, request]() {
+                        if (savingOperation && savingOperation->value("request") == request) {
+                            (*savingOperation)["cancel_requested"] = true;
+                            (*savingOperation)["cancel_decision_available"] = true;
+                        }
+                    };
+                    if (auto box = qobject_cast<QMessageBox *>(modal)) {
+                        if (auto button = box->button(QMessageBox::Cancel)) connect(button, &QAbstractButton::clicked, this, cancelled);
+                    } else for (auto box : modal->findChildren<QDialogButtonBox *>()) {
+                        if (auto button = box->button(QDialogButtonBox::Cancel)) connect(button, &QAbstractButton::clicked, this, cancelled);
+                    }
+                }
             }
         }
         if (loadNativeActive && event->type() == QEvent::Show) {

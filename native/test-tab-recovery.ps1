@@ -1,4 +1,4 @@
-param([Parameter(Mandatory=$true)][string]$Exe, [switch]$CloseCleanDocuments)
+﻿param([Parameter(Mandatory=$true)][string]$Exe, [switch]$CloseCleanDocuments, [switch]$AddDocumentDuringRecovery)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $Exe = (Resolve-Path -LiteralPath $Exe).Path
@@ -33,7 +33,7 @@ function Wait-Operation($request, [string]$expected) {
     $deadline = [DateTime]::UtcNow.AddSeconds(12)
     do {
         $state = (Invoke-McpTool $connection gp_operation @{request=$request}).operation
-        if ($state.status -in @($expected,'error','cancelled')) { break }
+        if ($state.status -eq $expected -or ($state.status -in @('error','cancelled') -and -not $state.outcome_unknown)) { break }
         Start-Sleep -Milliseconds 50
     } while ([DateTime]::UtcNow -lt $deadline)
     Assert ($state.status -eq $expected) 'Unexpected document operation outcome.'
@@ -69,6 +69,84 @@ try {
     } while ([DateTime]::UtcNow -lt $deadline)
     $connection = New-McpSession -SessionFile $sessionFile
     Assert ([bool](Get-Content -LiteralPath (Join-Path $run 'probe.jsonl') | ForEach-Object { $_ | ConvertFrom-Json } | Where-Object event -EQ 'ready')) 'Fault probe did not load.'
+    foreach ($mode in @('delay_open','delay_create','throw_after_open','throw_after_create')) {
+        $kind = if ($mode.EndsWith('_open')) { 'open' } else { 'create' }
+        $delayedCase = $mode.StartsWith('delay_')
+        $path = Join-Path $run 'delayed.gp'
+        if ($kind -eq 'open') { Copy-Item -LiteralPath $fixture -Destination $path }
+        $fault = Set-Fault $mode
+        $delayed = if ($kind -eq 'open') { Invoke-McpTool $connection gp_open @{path=$path} } else {
+            $templates = Invoke-McpTool $connection gp_templates
+            Invoke-McpTool $connection gp_new @{template=$templates.templates[0]}
+        }
+        $pending = $null
+        if ($delayedCase) {
+            $deadline = [DateTime]::UtcNow.AddSeconds(11)
+            do {
+                $pending = (Invoke-McpTool $connection gp_operation @{request=$delayed.request}).operation
+                if ($pending.outcome_unknown) { break }
+                Start-Sleep -Milliseconds 50
+            } while ([DateTime]::UtcNow -lt $deadline)
+            Assert ($pending.status -eq 'error' -and $pending.outcome_unknown) 'Delayed native loading did not retain an unknown outcome.'
+            Assert ((Invoke-McpTool $connection gp_close @{document=[guid]::NewGuid().ToString();unsaved='cancel'} -AllowError).error -like '*pending*') 'Unknown load outcome did not block mutations.'
+            Assert ((Invoke-McpTool $connection gp_cancel @{request=$delayed.request} -AllowError).error) 'An unobserved native load was falsely cancelled.'
+            Assert ((Invoke-McpTool $connection gp_recover @{request=$delayed.request} -AllowError).error) 'Recovery cleared a load whose result was not observed.'
+        }
+        $deadline = [DateTime]::UtcNow.AddSeconds(8)
+        do {
+            $completed = (Invoke-McpTool $connection gp_operation @{request=$delayed.request}).operation
+            if ($completed.status -eq $(if($kind -eq 'open'){'opened'}else{'created'})) { break }
+            Start-Sleep -Milliseconds 50
+        } while ([DateTime]::UtcNow -lt $deadline)
+        Assert ($completed.document -and -not $completed.outcome_unknown -and $completed.status -eq $(if($kind -eq 'open'){'opened'}else{'created'})) 'Late native completion was not reconciled.'
+        $documents = (Invoke-McpTool $connection gp_documents).documents
+        Assert ($documents.Count -eq 1 -and $documents[0].id -eq $completed.document) 'Late completion created duplicate documents.'
+        $events = @(Get-Content -LiteralPath (Join-Path $run 'probe.jsonl') | ForEach-Object { $_ | ConvertFrom-Json } | Where-Object request -EQ $fault)
+        if ($delayedCase) {
+            Assert (@($events | Where-Object event -EQ 'deferred').Count -eq 1 -and @($events | Where-Object event -EQ 'delivered').Count -eq 1) 'Native file event was not delivered exactly once.'
+        } else {
+            Assert ($completed.native_error -and @($events | Where-Object event -EQ 'native_exception').Count -eq 1) 'Native exception was not retained with the real completed outcome.'
+        }
+        $observations += @{kind=$kind;mode=$mode;unknown=$pending;completed=$completed;events=$events}
+        Set-Fault | Out-Null
+        Invoke-McpTool $connection gp_edit_metadata @{document=$completed.document;property='Title';value='Edit after late native completion'} | Out-Null
+        $copy = Join-Path $run ($mode + '-completion.gp')
+        Invoke-McpTool $connection gp_save_as @{document=$completed.document;path=$copy} | Out-Null
+        $close = Invoke-McpTool $connection gp_close @{document=$completed.document}
+        Wait-Operation $close.request 'closed' | Out-Null
+        $reopen = Invoke-McpTool $connection gp_open @{path=$copy}
+        $reopened = (Wait-Operation $reopen.request 'opened').document
+        Assert ((Invoke-McpTool $connection gp_score @{document=$reopened}).metadata.Title -eq 'Edit after late native completion') 'Late completion broke subsequent editing and saving.'
+        if ($mode -eq 'throw_after_create') { $closeFault = Set-Fault 'throw_close' }
+        $close = Invoke-McpTool $connection gp_close @{document=$reopened}
+        $closed = Wait-Operation $close.request 'closed'
+        if ($mode -eq 'throw_after_create') {
+            Assert ($closed.native_error -and -not $closed.outcome_unknown -and (Invoke-McpTool $connection gp_documents).documents.Count -eq 0) 'Native close exception did not reconcile the closed document.'
+            Assert ((Invoke-McpTool $connection gp_score @{document=$reopened} -AllowError).error) 'Closed document remains addressable after a native exception.'
+            $observations += @{mode='throw_close';operation=$closed}
+            Set-Fault | Out-Null
+        }
+    }
+    foreach ($kind in @('open','create')) {
+        $fault = Set-Fault ('error_' + $kind)
+        $failedLoad = if ($kind -eq 'open') { Invoke-McpTool $connection gp_open @{path=(Join-Path $run 'delayed.gp')} } else {
+            Invoke-McpTool $connection gp_new @{template=$templates.templates[0]}
+        }
+        $deadline = [DateTime]::UtcNow.AddSeconds(5)
+        do {
+            $dialog = Invoke-McpTool $connection gp_dialogs
+            if ($dialog.blocked) { break }
+            Start-Sleep -Milliseconds 50
+        } while ([DateTime]::UtcNow -lt $deadline)
+        Assert ($dialog.blocked -and $dialog.title -eq 'Isolated load error' -and @($dialog.buttons | Where-Object standard_button -EQ 4194304).Count -eq 0) 'Expected the injected load error with no Cancel decision.'
+        $dismissed = Invoke-McpTool $connection gp_cancel @{request=$failedLoad.request}
+        Assert ($dismissed.status -eq 'cancelling' -and -not $dismissed.cancel_decision_available) 'Error dialog dismissal claimed a Cancel decision.'
+        $failure = Wait-Operation $failedLoad.request 'error'
+        Assert (-not $failure.outcome_unknown -and (Invoke-McpTool $connection gp_documents).documents.Count -eq 0) 'Load error was not reconciled as a confirmed failure.'
+        Assert ((Invoke-McpTool $connection gp_cancel @{request=$failedLoad.request} -AllowError).error) 'Completed load failure was cancelled again.'
+        $observations += @{mode=('error_' + $kind);dialog=$dialog;operation=$failure}
+        Set-Fault | Out-Null
+    }
     $ids = @(); $paths = @{}; $titles = @{}
     foreach ($i in 0..3) {
         $path = Join-Path $run ("source-$i.gp")
@@ -109,6 +187,15 @@ try {
             Assert (-not $result.rolled_back -and $result.outcome_unknown -and $operation.outcome_unknown -and $result.recovery_error) 'Recovery exception falsely reported a completed rollback.'
             Assert ((Invoke-McpTool $connection gp_edit_metadata @{document=$ids[0];property='Artist';value='Must not apply'} -AllowError).error) 'Unknown tab outcome permitted a mutation.'
             Assert ((Invoke-McpTool $connection gp_move_document @{document=$ids[0];index=1} -AllowError).error) 'Unknown tab outcome permitted another move.'
+            $stacks = Invoke-McpTool $connection gp_objects @{query='QStackedWidget';limit=100}
+            $stack = @($stacks.objects | Where-Object { $_.pages.Count -eq 4 -and $_.pages[0].class -eq 'gp::gui::IDocumentView' })
+            Assert ($stack.Count -eq 1) 'Could not identify the native document stack.'
+            $property = Invoke-McpTool $connection gp_set_property @{snapshot=$stacks.snapshot;id=$stack[0].id;property='currentIndex';value=$stack[0].properties.currentIndex} -AllowError
+            Assert ($property.error -like '*operation is pending*') 'Native property writing bypassed the unknown-outcome guard.'
+            $actions = Invoke-McpTool $connection gp_actions @{query='Undo';limit=100}
+            Assert ($actions.objects.Count -gt 0) 'Could not identify a native undo action.'
+            $trigger = Invoke-McpTool $connection gp_trigger @{snapshot=$actions.snapshot;id=$actions.objects[0].id} -AllowError
+            Assert ($trigger.error -like '*operation is pending*') 'Native action triggering bypassed the unknown-outcome guard.'
             Assert ((Invoke-McpTool $connection gp_cancel @{request=$result.request} -AllowError).error) 'A completed native move was falsely cancelled.'
             Assert ((Invoke-McpTool $connection gp_operation @{request=$result.request}).operation.outcome_unknown) 'Cancellation cleared an unresolved native outcome.'
             Assert ($operation.recovery_available -and $result.recovery_available) 'The failed rollback has no retained recovery context.'
@@ -139,12 +226,31 @@ try {
                 if (-not (Invoke-McpTool $connection gp_dialogs).blocked) { break }
                 Start-Sleep -Milliseconds 50
             } while ([DateTime]::UtcNow -lt $deadline)
+            $addedId = $null
+            if ($AddDocumentDuringRecovery) {
+                $extraPath = Join-Path $run 'manual-open-during-recovery.gp'
+                Copy-Item -LiteralPath $fixture -Destination $extraPath
+                Set-Fault 'open_external' $extraPath | Out-Null
+                $deadline = [DateTime]::UtcNow.AddSeconds(8)
+                do {
+                    $added = @((Invoke-McpTool $connection gp_documents).documents | Where-Object { $_.id -notin $ids })
+                    if ($added.Count -eq 1) { break }
+                    Start-Sleep -Milliseconds 50
+                } while ([DateTime]::UtcNow -lt $deadline)
+                Assert ($added.Count -eq 1 -and -not $added[0].dirty) 'Native file open did not add a clean document during recovery.'
+                $addedId = $added[0].id
+                Set-Fault | Out-Null
+            }
             $recovery = Invoke-McpTool $connection gp_recover @{request=$result.request}
             $recovered = (Invoke-McpTool $connection gp_operation @{request=$result.request}).operation
             $observations += @{mode='explicit-recovery';failed=$failedRecovery;recovery=$recovery;operation=$recovered}
             Assert ($recovery.status -eq 'recovered' -and $recovered.recovered -and -not $recovered.outcome_unknown -and -not $recovered.recovery_available -and $recovered.recovery_attempts -eq 2) 'Explicit recovery did not verify and release the original request.'
             Assert ($recovered.status -eq 'error' -and $recovered.result.error -eq $result.error -and $recovered.result.outcome_unknown -and $recovered.recovery.status -eq 'recovered') 'Recovery rewrote the original failed result.'
-            if ($CloseCleanDocuments) {
+            if ($AddDocumentDuringRecovery) {
+                Assert (-not $recovery.rolled_back -and $recovery.resolution -eq 'documents_changed' -and $recovery.added_documents.Count -eq 1 -and $recovery.added_documents[0] -eq $addedId) 'Added document was not reconciled accurately.'
+                $remainingIds = @($(if ($CloseCleanDocuments) {$ids[0]} else {$ids})) + @($addedId)
+                $remainingActive = $addedId
+            } elseif ($CloseCleanDocuments) {
                 Assert (-not $recovery.rolled_back -and $recovery.resolution -eq 'documents_closed' -and ($recovery.closed_documents -join ',') -eq ($ids[1..3] -join ',')) 'Closed documents were not reconciled accurately.'
                 $remainingIds = @($ids[0]); $remainingActive = $ids[0]
             } else {
@@ -195,6 +301,28 @@ try {
         Invoke-McpTool $connection gp_move_document @{document=$ids[0];index=0} | Out-Null
         Assert ((Invoke-McpTool $connection gp_operation @{request=$result.request}).operation.result.rolled_back) 'A later move lost the failure record.'
     }
+    if (-not $CloseCleanDocuments -and -not $AddDocumentDuringRecovery) {
+        Set-Fault 'throw_recovery' $ids[0] | Out-Null
+        $unknownMove = Invoke-McpTool $connection gp_move_document @{document=$ids[0];index=2} -AllowError
+        Assert ($unknownMove.outcome_unknown -and $unknownMove.recovery_available) 'Expected an unresolved move before native close-all.'
+        Set-Fault 'close_external' | Out-Null
+        $deadline = [DateTime]::UtcNow.AddSeconds(5)
+        do {
+            $empty = Invoke-McpTool $connection gp_documents
+            if ($empty.documents.Count -eq 0) { break }
+            Start-Sleep -Milliseconds 50
+        } while ([DateTime]::UtcNow -lt $deadline)
+        Assert ($empty.documents.Count -eq 0 -and $empty.tab_order_available) 'Native close-all retained a document.'
+        Set-Fault | Out-Null
+        $reconciled = Invoke-McpTool $connection gp_recover @{request=$unknownMove.request}
+        Assert ($reconciled.status -eq 'recovered' -and $reconciled.resolution -eq 'documents_closed' -and -not $reconciled.rolled_back -and $reconciled.closed_documents.Count -eq 4) 'Recovery failed to reconcile all original documents being closed.'
+        $observations += @{mode='all_documents_closed';recovery=$reconciled}
+        $open = Invoke-McpTool $connection gp_open @{path=$paths[$ids[0]]}
+        $reopened = (Wait-Operation $open.request 'opened').document
+        Assert ($reopened -notin $ids -and (Invoke-McpTool $connection gp_score @{document=$reopened}).metadata.Artist -eq 'Recovered edit') 'Opening after close-all recovery lost identity or saved content.'
+        $close = Invoke-McpTool $connection gp_close @{document=$reopened}
+        Wait-Operation $close.request 'closed' | Out-Null
+    }
     Assert (@((Invoke-McpTool $connection gp_documents).documents | Where-Object dirty).Count -eq 0) 'Recovery test left unsaved data before exit.'
     $identity = Invoke-McpTool $connection gp_capabilities
     Assert ($identity.hidden_mode -and $identity.foreground_pid -ne $identity.pid) 'Tab recovery took foreground focus.'
@@ -210,7 +338,7 @@ try {
     Set-Fault | Out-Null
     $connection = $connectionForReset
     if ($connection -and $process -and -not $process.HasExited) { Close-McpSession $connection }
-    @{passed=$passed;checks=$checks;observations=$observations;host_pid=$(if($process){$process.Id});session_file=$sessionFile;exit_code=$(if($process -and $process.HasExited){$process.ExitCode});powershell=$PSVersionTable.PSVersion.ToString();plugin_sha256=(Get-FileHash "$root/.tools/native/plugins/generic/guitarpro_mcp.dll").Hash;probe_sha256=(Get-FileHash $probe).Hash;tab_rollback_verified=$passed;recovery_exception_guard_verified=$passed;explicit_recovery_verified=$passed;closed_document_reconciliation_verified=($passed -and $CloseCleanDocuments.IsPresent)} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $run 'verification.json') -Encoding UTF8
+    @{passed=$passed;checks=$checks;observations=$observations;host_pid=$(if($process){$process.Id});session_file=$sessionFile;exit_code=$(if($process -and $process.HasExited){$process.ExitCode});powershell=$PSVersionTable.PSVersion.ToString();plugin_sha256=(Get-FileHash "$root/.tools/native/plugins/generic/guitarpro_mcp.dll").Hash;probe_sha256=(Get-FileHash $probe).Hash;late_native_load_reconciliation_verified=$passed;changed_document_set_verified=($passed -and $AddDocumentDuringRecovery.IsPresent);tab_rollback_verified=$passed;recovery_exception_guard_verified=$passed;explicit_recovery_verified=$passed;closed_document_reconciliation_verified=($passed -and $CloseCleanDocuments.IsPresent)} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $run 'verification.json') -Encoding UTF8
     if ($process) {
         if (-not $process.HasExited) { Write-Warning "Tab recovery host retained: PID $($process.Id), session $sessionFile" }
         $process.Dispose()

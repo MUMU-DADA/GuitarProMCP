@@ -21,6 +21,7 @@
 #include <cmath>
 #include <exception>
 #include <functional>
+#include <memory>
 
 namespace guitarpro {
 inline QString validateGpFile(const QString &path) {
@@ -38,6 +39,7 @@ inline QString validateGpFile(const QString &path) {
     if (archive.status() != QZipReader::NoError || content.isEmpty() || content.size() > 64 * 1024 * 1024) return "Cannot decompress the GPIF entry";
     QXmlStreamReader xml(content);
     bool root = false;
+    int depth = 0;
     while (!xml.atEnd()) {
         const auto token = xml.readNext();
         if (token == QXmlStreamReader::DTD) return "GPIF document type declarations are not supported";
@@ -45,6 +47,16 @@ inline QString validateGpFile(const QString &path) {
             if (xml.name() != "GPIF") return "Expected a GPIF XML root";
             root = true;
         }
+        if (token == QXmlStreamReader::StartElement) {
+            ++depth;
+            if (depth == 2 && xml.name() == "GPRevision" && xml.attributes().hasAttribute("required")) {
+                bool valid = false;
+                const int required = xml.attributes().value("required").toInt(&valid);
+                if (!valid || required < 0) return "Invalid required GPIF revision";
+                // The hash-verified GP 8.1.1.17 host writes GPIF revision 13007.
+                if (required > 13007) return "Required GPIF revision exceeds the supported Guitar Pro build (13007)";
+            }
+        } else if (token == QXmlStreamReader::EndElement) --depth;
     }
     if (!root) return "Expected a GPIF XML root";
     return xml.hasError() ? "Invalid GPIF XML: " + xml.errorString() : QString();
@@ -259,17 +271,23 @@ inline QJsonObject moveDocument(const QJsonObject &args, const QList<QPointer<QO
             if (pagesBefore[i]) surviving.append(i);
             else closed.append(idsBefore[i]);
         }
-        if (!closed.isEmpty()) {
-            const auto live = documents();
+        const auto live = documents();
+        if (!closed.isEmpty() || live.size() != original.size()) {
             const auto liveActive = activeDocument(objects);
             const auto observed = documentTabs(live, liveActive);
             bool consistent = live.isEmpty() && surviving.isEmpty();
-            if (liveActive && !live.isEmpty() && observed.pages == tabs.pages && observed.layout == tabs.layout && observed.pages && observed.pages->count() == surviving.size()) {
+            QJsonArray added;
+            for (const auto &doc : live) if (!pagesBefore.contains(doc.view)) added.append(doc.id());
+            if (liveActive && !live.isEmpty() && observed.pages == tabs.pages && observed.layout == tabs.layout && observed.pages) {
                 consistent = true;
-                for (int i = 0; i < surviving.size(); ++i)
-                    if (observed.pages->widget(i) != pagesBefore[surviving[i]] || observed.layout->itemAt(i)->widget() != tabsBefore[surviving[i]]) consistent = false;
+                int previous = -1;
+                for (int i : surviving) {
+                    const int index = observed.pages->indexOf(pagesBefore[i]);
+                    if (index <= previous || !tabsBefore[i] || observed.layout->itemAt(index)->widget() != tabsBefore[i]) consistent = false;
+                    previous = index;
+                }
             }
-            if (consistent) return QJsonObject{{"rolled_back", false}, {"resolution", "documents_closed"}, {"closed_documents", closed}};
+            if (consistent) return QJsonObject{{"rolled_back", false}, {"resolution", added.isEmpty() ? "documents_closed" : "documents_changed"}, {"closed_documents", closed}, {"added_documents", added}};
             return QJsonObject{{"error", "Document set changed and the remaining tab state cannot be verified"}, {"outcome_unknown", true}, {"rolled_back", false}};
         }
         bool restored = false;
@@ -348,7 +366,9 @@ inline QJsonObject closeDocument(const QJsonObject &args, const QList<QPointer<Q
     // Closing the last score can close a host window. Keep MCP alive for reopen.
     const bool quitOnLastWindow = qApp->quitOnLastWindowClosed();
     qApp->setQuitOnLastWindowClosed(false);
-    const bool invoked = QMetaObject::invokeMethod(proxy, "tabCloseRequested", Qt::DirectConnection, Q_ARG(int, index));
+    bool invoked = false;
+    try { invoked = QMetaObject::invokeMethod(proxy, "tabCloseRequested", Qt::DirectConnection, Q_ARG(int, index)); }
+    catch (...) { qApp->setQuitOnLastWindowClosed(quitOnLastWindow); throw; }
     qApp->setQuitOnLastWindowClosed(quitOnLastWindow);
     if (!invoked)
         return {{"error", "Native document close request is unavailable"}};
@@ -1424,9 +1444,11 @@ inline QJsonObject playback(const QJsonObject &args, const QList<QPointer<QObjec
         {"tick", conductor->tickOffset()}, {"total_ticks", conductor->tickCount()}, {"score_bar_count", int(conductor->barCount())}, {"frame", double(conductor->frameOffset())},
         {"source", "Native GPRSE ConductorController matched to the document Score"}};
 }
-inline QJsonObject save(const QJsonObject &args, bool adopt = false, bool current = false) {
+inline QJsonObject save(const QJsonObject &args, std::function<QJsonObject()> &recoveryAction, bool adopt = false, bool current = false) {
+    recoveryAction = {};
     const Document chosen = choose(args);
     if (!chosen.object || !chosen.view) return {{"error", "Choose an existing document id from gp_documents"}};
+    const QString documentId = chosen.id();
     const QString oldPath = chosen.object->property("saveFilePath").toString();
     const QString oldOpenedPath = chosen.object->property("openedFilePath").toString();
     const bool dirtyBefore = chosen.object->property("isDirty").toBool();
@@ -1455,10 +1477,10 @@ inline QJsonObject save(const QJsonObject &args, bool adopt = false, bool curren
         return {{"error", "Native document save methods are unavailable"}};
     if (adopt) for (const char *method : {"setOpenedFilePath(QString)", "openedFilePathChanged(QString)", "filePathChanged(QString,QString)"})
         if (chosen.object->metaObject()->indexOfMethod(method) < 0) return {{"error", "Native document path notifications are unavailable"}};
-    const auto updateOpenedPath = [&](const QString &nextPath) {
+    const auto updateOpenedPath = [chosen](const QString &nextPath, bool notifyAgain = false, const QString &notifyFrom = QString()) {
         if (!chosen.object) return false;
-        const QString previous = chosen.object->property("openedFilePath").toString();
-        if (previous == nextPath) return true;
+        const QString previous = notifyAgain ? notifyFrom : chosen.object->property("openedFilePath").toString();
+        if (!notifyAgain && previous == nextPath) return true;
         // Native saveAs updates this path, then notifies document and window
         // observers. The setters alone do not emit either notification.
         return QMetaObject::invokeMethod(chosen.object, "setOpenedFilePath", Qt::DirectConnection, Q_ARG(QString, nextPath)) &&
@@ -1468,9 +1490,9 @@ inline QJsonObject save(const QJsonObject &args, bool adopt = false, bool curren
     };
     // Preserve existing bytes before the host writes, and retain the backup if
     // recovery cannot finish. All files stay on the destination volume.
-    QTemporaryDir recovery(destination.absolutePath() + "/.gpmcp-save-XXXXXX");
-    if (!recovery.isValid()) return {{"error", "Cannot create a recovery directory beside the destination"}};
-    const QString backup = recovery.filePath("original.gp");
+    const auto recovery = std::make_shared<QTemporaryDir>(destination.absolutePath() + "/.gpmcp-save-XXXXXX");
+    if (!recovery->isValid()) return {{"error", "Cannot create a recovery directory beside the destination"}};
+    const QString backup = recovery->filePath("original.gp");
     if (existed && !QFile::copy(absolute, backup)) return {{"error", "Cannot back up the existing destination"}};
     QFile probe(absolute);
     if (!probe.open(existed ? QIODevice::ReadWrite : QIODevice::WriteOnly | QIODevice::NewOnly))
@@ -1491,35 +1513,64 @@ inline QJsonObject save(const QJsonObject &args, bool adopt = false, bool curren
                 restored = copied && output.commit();
             }
         } else restored = !QFileInfo::exists(absolute) || QFile::remove(absolute);
-        bool pathRestored = false, openedPathRestored = false;
-        QStringList recoveryErrors;
-        try {
-            pathRestored = chosen.object &&
-                (chosen.object->property("saveFilePath").toString() == oldPath ||
-                 (QMetaObject::invokeMethod(chosen.object, "setSaveFilePath", Qt::DirectConnection, Q_ARG(QString, oldPath)) &&
-                  chosen.object && chosen.object->property("saveFilePath").toString() == oldPath));
-            openedPathRestored = updateOpenedPath(oldOpenedPath);
-        } catch (const std::exception &exception) { recoveryErrors.append(QString::fromUtf8(exception.what())); }
-        catch (...) { recoveryErrors.append("Unknown native path recovery exception"); }
-        // Even a failed path notification must not prevent restoring unsaved state.
-        try {
-            if (dirtyBefore && chosen.object && !chosen.object->property("isDirty").toBool())
-                QMetaObject::invokeMethod(chosen.object, "setIsDirty", Qt::DirectConnection, Q_ARG(bool, true));
-        } catch (const std::exception &exception) { recoveryErrors.append(QString::fromUtf8(exception.what())); }
-        catch (...) { recoveryErrors.append("Unknown native dirty-state recovery exception"); }
-        QJsonObject result{{"error", message}, {"file_restored", restored}, {"save_path_restored", pathRestored}, {"dirty_before", dirtyBefore},
-            {"opened_path_restored", openedPathRestored},
-            {"dirty_state_restored", chosen.object && chosen.object->property("isDirty").toBool() == dirtyBefore},
-            {"dirty", chosen.object ? QJsonValue(chosen.object->property("isDirty").toBool()) : QJsonValue()}};
-        const bool unknown = !pathRestored || !openedPathRestored || !result.value("dirty_state_restored").toBool() || !recoveryErrors.isEmpty();
-        if (unknown) result["outcome_unknown"] = true;
-        if (!recoveryErrors.isEmpty()) result["recovery_error"] = recoveryErrors.join("; ");
-        recovery.setAutoRemove(restored && !unknown);
-        if ((!restored || unknown) && existed) result["recovery_path"] = backup;
+        const QString openedBeforeRecovery = chosen.object ? chosen.object->property("openedFilePath").toString() : QString();
+        const bool dirtyNotification = dirtyBefore && chosen.object && !chosen.object->property("isDirty").toBool();
+        const auto restoreState = [=]() {
+            bool pathRestored = false, openedPathRestored = false;
+            QStringList recoveryErrors;
+            try {
+                pathRestored = chosen.object &&
+                    (chosen.object->property("saveFilePath").toString() == oldPath ||
+                     (QMetaObject::invokeMethod(chosen.object, "setSaveFilePath", Qt::DirectConnection, Q_ARG(QString, oldPath)) &&
+                      chosen.object && chosen.object->property("saveFilePath").toString() == oldPath));
+                // A prior notification may have thrown after setting the path.
+                openedPathRestored = updateOpenedPath(oldOpenedPath, openedBeforeRecovery != oldOpenedPath, openedBeforeRecovery);
+            } catch (const std::exception &exception) { recoveryErrors.append(QString::fromUtf8(exception.what())); }
+            catch (...) { recoveryErrors.append("Unknown native path recovery exception"); }
+            // Even a failed path notification must not prevent restoring unsaved state.
+            try {
+                if (dirtyBefore && chosen.object) {
+                    if (!chosen.object->property("isDirty").toBool())
+                        QMetaObject::invokeMethod(chosen.object, "setIsDirty", Qt::DirectConnection, Q_ARG(bool, true));
+                    else if (dirtyNotification && !QMetaObject::invokeMethod(chosen.object, "isDirtyChanged", Qt::DirectConnection, Q_ARG(bool, true)))
+                        recoveryErrors.append("Native dirty-state notification is unavailable");
+                }
+            } catch (const std::exception &exception) { recoveryErrors.append(QString::fromUtf8(exception.what())); }
+            catch (...) { recoveryErrors.append("Unknown native dirty-state recovery exception"); }
+            QJsonObject result{{"file_restored", restored}, {"save_path_restored", pathRestored}, {"dirty_before", dirtyBefore},
+                {"opened_path_restored", openedPathRestored},
+                {"dirty_state_restored", chosen.object && chosen.object->property("isDirty").toBool() == dirtyBefore},
+                {"dirty", chosen.object ? QJsonValue(chosen.object->property("isDirty").toBool()) : QJsonValue()}};
+            const bool unknown = !pathRestored || !openedPathRestored || !result.value("dirty_state_restored").toBool() || !recoveryErrors.isEmpty();
+            if (unknown) { result["outcome_unknown"] = true; result["error"] = "Native save-state recovery is incomplete"; }
+            else result["resolution"] = "native_state_restored";
+            if (!recoveryErrors.isEmpty()) result["recovery_error"] = recoveryErrors.join("; ");
+            recovery->setAutoRemove(restored && !unknown);
+            if ((!restored || unknown) && existed) result["recovery_path"] = backup;
+            return result;
+        };
+        auto result = restoreState();
+        if (result.value("outcome_unknown").toBool()) recoveryAction = [=]() {
+            if (!chosen.object && !chosen.view) {
+                recovery->setAutoRemove(restored);
+                QJsonObject closed{{"resolution", "document_closed"}, {"document", documentId}, {"file_restored", restored}};
+                if (!restored && existed) closed["recovery_path"] = backup;
+                return closed;
+            }
+            if (!chosen.object || !chosen.view)
+                return QJsonObject{{"error", "The original document is no longer available for save-state recovery"}, {"outcome_unknown", true}};
+            const QString savedNow = chosen.object->property("saveFilePath").toString();
+            const QString openedNow = chosen.object->property("openedFilePath").toString();
+            if ((savedNow != oldPath && savedNow != absolute) || (openedNow != oldOpenedPath && openedNow != absolute))
+                return QJsonObject{{"error", "Document paths changed after the failed save; retained recovery cannot overwrite this state"}, {"outcome_unknown", true}};
+            // Retry native state only; the file may have changed since failure.
+            return restoreState();
+        };
+        result["error"] = message;
         return result;
     };
     // Keep the backup alive through native calls, including exception unwinding.
-    recovery.setAutoRemove(false);
+    recovery->setAutoRemove(false);
     QJsonObject result;
     bool nativeException = false;
     try {
@@ -1552,7 +1603,7 @@ inline QJsonObject save(const QJsonObject &args, bool adopt = false, bool curren
         result = {{"error", "Unknown native save exception"}};
     }
     if (result.contains("error")) result = recover(result.value("error").toString());
-    else recovery.setAutoRemove(true);
+    else recovery->setAutoRemove(true);
     if (nativeException) result["native_exception"] = true;
     return result;
 }

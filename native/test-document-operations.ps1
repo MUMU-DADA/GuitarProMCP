@@ -113,7 +113,9 @@ try {
         @{name='invalid-xml';entry='Content/score.gpif';xml='<GPIF><Score></GPIF>';error='Invalid GPIF XML*'},
         @{name='wrong-root';entry='Content/score.gpif';xml='<Other/>';error='Expected a GPIF XML root*'},
         @{name='doctype';entry='Content/score.gpif';xml='<!DOCTYPE GPIF [<!ENTITY value "test">]><GPIF>&value;</GPIF>';error='GPIF document type declarations*'},
-        @{name='duplicate-entry';entry='Content/score.gpif';xml='<GPIF/>';duplicate=$true;error='Expected one Content/score.gpif*'}
+        @{name='duplicate-entry';entry='Content/score.gpif';xml='<GPIF/>';duplicate=$true;error='Expected one Content/score.gpif*'},
+        @{name='future-revision';entry='Content/score.gpif';xml='<GPIF><GPRevision required="999999">999999</GPRevision></GPIF>';error='Required GPIF revision exceeds*'},
+        @{name='invalid-revision';entry='Content/score.gpif';xml='<GPIF><GPRevision required="invalid">13007</GPRevision></GPIF>';error='Invalid required GPIF revision*'}
     )
     foreach ($case in $invalidArchives) {
         $path = Join-Path $run ($case.name + '.gp')
@@ -128,7 +130,26 @@ try {
         $request = Invoke-McpTool $connection gp_open @{path=$path}
         $failure = Wait-Operation $request.request 'error'
         Assert ($failure.failure_stage -eq 'validation' -and $failure.error -like $case.error) "Unexpected ${path} validation result."
+        Assert (-not $failure.outcome_unknown -and (Invoke-McpTool $connection gp_close @{document=$baseline.id;unsaved='cancel'}).status -eq 'cancelled') 'Rejected archive left subsequent document operations blocked.'
     }
+    $revisionPath = Join-Path $run 'compatible-revision.gp'
+    Copy-Item -LiteralPath $fixture -Destination $revisionPath
+    $zip = [IO.Compression.ZipFile]::Open($revisionPath, [IO.Compression.ZipArchiveMode]::Update)
+    try {
+        $entry = $zip.GetEntry('Content/score.gpif')
+        $reader = [IO.StreamReader]::new($entry.Open())
+        try { [xml]$xml = $reader.ReadToEnd() } finally { $reader.Dispose() }
+        $xml.GPIF.GPRevision.SetAttribute('required','13007')
+        $xml.GPIF.GPRevision.SetAttribute('recommended','999999')
+        $entry.Delete()
+        $writer = [IO.StreamWriter]::new($zip.CreateEntry('Content/score.gpif').Open(), [Text.UTF8Encoding]::new($false))
+        try { $xml.Save($writer) } finally { $writer.Dispose() }
+    } finally { $zip.Dispose() }
+    $compatible = Invoke-McpTool $connection gp_open @{path=$revisionPath}
+    $compatibleId = (Wait-Operation $compatible.request 'opened').document
+    Assert ((Invoke-McpTool $connection gp_score @{document=$compatibleId}).metadata.Title -eq 'MCP Test') 'Compatible required revision was rejected due to a newer recommendation.'
+    $closeCompatible = Invoke-McpTool $connection gp_close @{document=$compatibleId}
+    Wait-Operation $closeCompatible.request 'closed' | Out-Null
     $after = Invoke-McpTool $connection gp_documents
     Assert ($after.documents.Count -eq 1 -and $after.documents[0].id -eq $baseline.id -and -not $after.documents[0].dirty) 'Lifecycle checks changed baseline state.'
     Assert ((Get-FileHash -LiteralPath $baseline.opened_path).Hash -eq $fixtureHash) 'Lifecycle checks changed baseline bytes.'

@@ -21,7 +21,7 @@
 
 配置与凭据存放在 `%LOCALAPPDATA%/GuitarProMCP`，独立于源码目录。文件包括 `native-session.json`、`mcp-client.json`、`mcp-auth-token`、`settings.json`，以及不含凭据的 `status.json`。开发脚本和隔离测试可通过 `GPMCP_DATA_DIR` 指定其他数据目录。
 
-P2 还为当前实例生成 `native-session-<UUID>.json` 和 `mcp-client-<UUID>.json`，退出时清理。进程重启后，需要刷新绑定实例的客户端配置。归档的 P1 候选包仍使用原来的固定端口行为，不包含这些 P2 改动。
+P2 还为当前实例生成 `native-session-<UUID>.json` 和 `mcp-client-<UUID>.json`，退出时清理。固定的 `mcp-client.json` 和独立实例配置都绑定当前 UUID；进程重启后，即使端口相同，也要重新导入新配置。旧配置会被拒绝，避免意外操作新进程。端口变化后同样需要重新导入；运行中的客户端不会因为配置文件变化就必然自动刷新。归档的 P1 候选包仍使用原来的固定端口行为，不包含这些 P2 改动。
 
 ## 更新、停用和卸载
 

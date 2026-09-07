@@ -1,4 +1,4 @@
-param([Parameter(Mandatory=$true)][string]$HostDirectory, [switch]$CheckLaunchForwarding, [switch]$Visible, [ValidateRange(0,60000)][int]$StartupSettlingMs = 5000)
+﻿param([Parameter(Mandatory=$true)][string]$HostDirectory, [switch]$CheckLaunchForwarding, [switch]$CheckMcpClient, [string]$NodeExe = 'node', [switch]$Visible, [ValidateRange(0,60000)][int]$StartupSettlingMs = 5000)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $HostDirectory = [IO.Path]::GetFullPath($HostDirectory)
@@ -16,9 +16,33 @@ $checks = 0
 $observations = @()
 $processes = [Collections.Generic.List[object]]::new()
 $connections = [Collections.Generic.List[object]]::new()
+$inspector = Join-Path $root '.tools/mcp-client/node_modules/@modelcontextprotocol/inspector/clients/cli/build/index.js'
+if ($CheckMcpClient -and -not (Test-Path -LiteralPath $inspector)) { throw 'Install the pinned MCP Inspector test dependency under .tools/mcp-client first.' }
 $saved = @{}
-foreach ($name in @('QT_PLUGIN_PATH','QT_QPA_GENERIC_PLUGINS','GPMCP_SESSION_FILE','GPMCP_DATA_DIR','GPMCP_BACKGROUND','GPMCP_PORT','TEMP','TMP')) { $saved[$name] = [Environment]::GetEnvironmentVariable($name,'Process') }
+foreach ($name in @('QT_PLUGIN_PATH','QT_QPA_GENERIC_PLUGINS','GPMCP_SESSION_FILE','GPMCP_DATA_DIR','GPMCP_BACKGROUND','GPMCP_PORT','TEMP','TMP','MCP_STORAGE_DIR','MCP_CLIENT_CONFIG_PATH')) { $saved[$name] = [Environment]::GetEnvironmentVariable($name,'Process') }
 function Assert($condition, [string]$message) { if (-not $condition) { throw $message }; $script:checks++ }
+function Test-Inspector([string]$config, [string]$instance, [switch]$RejectStale) {
+    $env:MCP_STORAGE_DIR = Join-Path $run 'inspector-storage'
+    $env:MCP_CLIENT_CONFIG_PATH = Join-Path $run 'inspector-client.json'
+    $stderr = Join-Path $run ('inspector-' + [guid]::NewGuid().ToString('N') + '.stderr.log')
+    $preference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        $output = @(& $NodeExe $inspector --config $config --server guitarpro --method tools/call --tool-name gp_capabilities 2> $stderr)
+        $code = $LASTEXITCODE
+    } finally { $ErrorActionPreference = $preference }
+    if ($RejectStale) {
+        Assert ($code -ne 0 -and (Get-Content -LiteralPath $stderr -Raw) -match '409') 'MCP Inspector accepted a stale instance configuration.'
+        $script:observations += @{client='MCP Inspector';stale_config_rejected=$true;exit_code=$code}
+    } else {
+        Assert ($code -eq 0) "MCP Inspector failed; see $stderr"
+        $result = ($output -join [Environment]::NewLine) | ConvertFrom-Json
+        if ($result.result) { $result = $result.result }
+        $state = ($result.content | Where-Object type -EQ 'text' | Select-Object -First 1).text | ConvertFrom-Json
+        Assert (-not $result.isError -and $state.instance_id -eq $instance) 'Imported client configuration reached the wrong instance.'
+        $script:observations += @{client='MCP Inspector';instance_id=$state.instance_id;host_pid=$state.pid;protocol_version=$state.protocol_version}
+    }
+}
 function Reject([scriptblock]$operation, [string]$pattern) {
     $rejected = $false
     try { & $operation | Out-Null } catch { $rejected = $_.Exception.Message -like $pattern }
@@ -116,6 +140,15 @@ try {
     $alias = Join-Path $data 'native-session.json'
     $aliasHash = (Get-FileHash -LiteralPath $alias).Hash
     $clientHash = (Get-FileHash -LiteralPath (Join-Path $data 'mcp-client.json')).Hash
+    $clientConfig = Get-Content -LiteralPath (Join-Path $data 'mcp-client.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+    Assert ($clientConfig.mcpServers.guitarpro.headers.'GuitarProMCP-Instance-Id' -eq $first.descriptor.instance_id) 'Default client configuration is not bound to its instance.'
+    Assert ($clientConfig.mcpServers.guitarpro.type -eq 'streamable-http') 'Client configuration does not declare the HTTP transport.'
+    $oldClientConfig = Join-Path $run 'stale-client.json'
+    Copy-Item -LiteralPath (Join-Path $data 'mcp-client.json') -Destination $oldClientConfig
+    if ($CheckMcpClient) {
+        Test-Inspector (Join-Path $data 'mcp-client.json') $first.descriptor.instance_id
+        Test-Inspector (Join-Path $data 'mcp-client.json') $first.descriptor.instance_id
+    }
     $tokenHash = (Get-FileHash -LiteralPath (Join-Path $data 'mcp-auth-token')).Hash
     Assert (@(Get-McpInstances -DataDirectory $data).Count -eq 1) 'Alias and unique descriptors were not deduplicated.'
     $settle = $StartupSettlingMs - ([DateTime]::Now - $first.process.StartTime).TotalMilliseconds
@@ -212,6 +245,10 @@ try {
     Assert ((Http-Status $stale $stale.InstanceId $mutation) -eq 409) 'Stale connection reached the restarted host.'
     Assert ((Invoke-McpTool $restarted.connection gp_score).metadata.Title -eq $before.metadata.Title) 'Stale mutation changed the restarted score.'
     Assert ($restarted.document -ne $first.document) 'Host restart reused a document identity.'
+    if ($CheckMcpClient) {
+        Test-Inspector $oldClientConfig '' -RejectStale
+        Test-Inspector (Join-Path $data 'mcp-client.json') $restarted.descriptor.instance_id
+    }
     Assert ((Invoke-McpTool $restarted.connection gp_score @{document=$first.document} -AllowError).error) 'Restart accepted a stale document ID.'
     $selected = Reconnect-McpSession $stale -InstanceId $restarted.descriptor.instance_id
     $connections.Add($selected)
@@ -223,6 +260,7 @@ try {
     $fallback = Start-Host
     Assert ($fallback.descriptor.port_fallback -and $fallback.descriptor.port -ne 18432) 'Default port contention did not use an independent loopback port.'
     Assert ((Invoke-McpTool $fallback.connection gp_capabilities).pid -eq $fallback.process.Id) 'Fallback endpoint did not reach the intended host.'
+    if ($CheckMcpClient) { Test-Inspector (Join-Path $data 'mcp-client.json') $fallback.descriptor.instance_id }
     Stop-Host $fallback
     $blocker.Stop(); $blocker = $null
     Assert (@(Get-McpInstances -DataDirectory $data).Count -eq 0) 'Discovery retained an exited instance.'
@@ -241,6 +279,6 @@ try {
     }
     foreach ($name in $saved.Keys) { [Environment]::SetEnvironmentVariable($name,$saved[$name],'Process') }
     if (-not $retained.Count) { & "$root/install-plugin.ps1" -Action Uninstall -InstallDirectory $HostDirectory | Out-Null }
-    @{passed=$passed;checks=$checks;launch_forwarding_test=[bool]$CheckLaunchForwarding;file_association_dde_verified=($passed -and [bool]$CheckLaunchForwarding);visible=[bool]$Visible;startup_settling_ms=$StartupSettlingMs;powershell=$PSVersionTable.PSVersion.ToString();independent_gui_instances_verified=$false;retained_hosts=$retained;observations=$observations;plugin_sha256=(Get-FileHash "$root/.tools/native/plugins/generic/guitarpro_mcp.dll").Hash;host_sha256=(Get-FileHash $exe).Hash;client_sha256=(Get-FileHash "$PSScriptRoot/mcp-client.ps1").Hash;dde_client_sha256=$(if($CheckLaunchForwarding){(Get-FileHash -LiteralPath $ddeClient).Hash})} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $run 'verification.json') -Encoding UTF8
+    @{passed=$passed;checks=$checks;launch_forwarding_test=[bool]$CheckLaunchForwarding;file_association_dde_verified=($passed -and [bool]$CheckLaunchForwarding);visible=[bool]$Visible;startup_settling_ms=$StartupSettlingMs;powershell=$PSVersionTable.PSVersion.ToString();independent_gui_instances_verified=$false;mcp_inspector_verified=($passed -and $CheckMcpClient.IsPresent);mcp_inspector_version=$(if($CheckMcpClient){(Get-Content -LiteralPath (Join-Path $root '.tools/mcp-client/node_modules/@modelcontextprotocol/inspector/package.json') -Raw | ConvertFrom-Json).version});retained_hosts=$retained;observations=$observations;plugin_sha256=(Get-FileHash "$root/.tools/native/plugins/generic/guitarpro_mcp.dll").Hash;host_sha256=(Get-FileHash $exe).Hash;client_sha256=(Get-FileHash "$PSScriptRoot/mcp-client.ps1").Hash;dde_client_sha256=$(if($CheckLaunchForwarding){(Get-FileHash -LiteralPath $ddeClient).Hash})} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $run 'verification.json') -Encoding UTF8
 }
 Write-Output "PASS: $checks discovery, concurrent clients, binding, reconnection, restart and port checks. File-association DDE tested: $CheckLaunchForwarding. Independent GUI instances remain unverified. Evidence: $run"

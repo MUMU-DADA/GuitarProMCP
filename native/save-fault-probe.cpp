@@ -75,7 +75,7 @@ class FaultProbe : public QObject {
         std::lock_guard<std::recursive_mutex> guard(probe.mutex);
         probe.refresh();
         if (probe.mode.isEmpty()) return WriteFile(file, data, size, written, overlapped);
-        if ((probe.mode == "post_validate" || probe.mode == "post_exception" || probe.mode == "path_exception" || probe.mode == "recovery_exception") && QThread::currentThread() == qApp->thread()) {
+        if ((probe.mode == "post_validate" || probe.mode == "post_exception" || probe.mode == "path_exception" || probe.mode == "recovery_exception" || probe.mode == "dirty_recovery_exception") && QThread::currentThread() == qApp->thread()) {
             for (const auto &document : guitarpro::documents()) {
                 QObject::connect(document.object, SIGNAL(isDirtyChanged(bool)), &probe, SLOT(onDirtyChanged(bool)), Qt::ConnectionType(Qt::DirectConnection | Qt::UniqueConnection));
                 QObject::connect(document.object, SIGNAL(openedFilePathChanged(QString)), &probe, SLOT(onOpenedPathChanged(QString)), Qt::ConnectionType(Qt::DirectConnection | Qt::UniqueConnection));
@@ -169,6 +169,13 @@ class FaultProbe : public QObject {
 private slots:
     void onDirtyChanged(bool dirty) {
         std::lock_guard<std::recursive_mutex> guard(mutex);
+        if (mode == "dirty_recovery_exception" && sender() &&
+            ((!dirty && !sender()->property("saveFilePath").toString().compare(target, Qt::CaseInsensitive)) ||
+             (dirty && exceptionDocument == sender()))) {
+            exceptionDocument = sender();
+            record({{"event", "native_exception"}, {"stage", dirty ? "restored_dirty" : "saved_state"}, {"native_dirty", dirty}});
+            throw std::runtime_error("Isolated exception after native dirty-state notification");
+        }
         if (dirty || !sender() || sender()->property("saveFilePath").toString().compare(target, Qt::CaseInsensitive)) return;
         if (mode == "post_exception") {
             record({{"event", "native_exception"}, {"stage", "saved_state"}, {"native_dirty", dirty}});

@@ -54,7 +54,7 @@ Windows `.gp` 文件关联包含两个部分：启动命令 `--open "%1"`，以�
 
 `-Visible` 验证正常可见模式。`-StartupSettlingMs` 默认仍为 5000，实际等待值写入证据；较长等待下的通过不代表较早退出的宿主网络死锁已经解决。失败时保留仍在运行的测试宿主和连接数据，供检查后正常保存关闭。DDE 测试客户端构建在 `.tools/dde-client`，生产包不包含它。完整回归入口 `test-all.ps1` 加载 Windows PowerShell 所需的压缩程序集；含中文的测试脚本带 UTF-8 BOM。
 
-`Get-McpInstances -DataDirectory ...` 发现有效实例；`New-McpSession -InstanceId ...` 选择实例，`Reconnect-McpSession` 默认只重连原进程。重启后必须显式选择新的 UUID。实例绑定头为 `GuitarProMCP-Instance-Id`，不匹配时返回 HTTP 409；协议初始化也返回实例 UUID 和 PID。传输失败不会自动重放编辑。实际客户端在端口变化后重读连接配置的能力仍需验证。
+`Get-McpInstances -DataDirectory ...` 发现有效实例；`New-McpSession -InstanceId ...` 选择实例，`Reconnect-McpSession` 默认只重连原进程。重启后必须显式选择新的 UUID。实例绑定头为 `GuitarProMCP-Instance-Id`，不匹配时返回 HTTP 409；协议初始化也返回实例 UUID 和 PID。传输失败不会自动重放编辑。官方 MCP Inspector 2.5.0 已验证配置导入、客户端重新启动、宿主重启后旧配置拒绝及端口变化后重新导入连接；运行中的客户端仍需按自身机制重新加载配置。
 
 ## 协议边界
 
@@ -94,7 +94,7 @@ try {
 | `gp_close` | `document`, `unsaved?`, `path?`, `overwrite?` | 明确保存、丢弃或取消后关闭；默认拒绝未保存修改；返回请求 ID |
 | `gp_operation` | `request` | 返回 `operation` 状态，查询当前新建/打开/保存/关闭及最近 64 条被替换的请求记录 |
 | `gp_cancel` | `request` | 取消未调度的操作或识别到的原生对话框；返回 `cancelling` 时须继续确认结果 |
-| `gp_recover` | `request` | 重试 `recovery_available=true` 的标签回滚，或核验部分文档关闭后的剩余状态；不会重放原操作 |
+| `gp_recover` | `request` | 重试 `recovery_available=true` 的标签回滚、保存状态恢复或新建模板路径复原；文档集合变化时只核验当前映射，不重新打开文档或覆盖文件 |
 | `gp_activate` | `document` | 调用原生 `activateNextDocumentView` 导航至目标，并读回文档管理器确认 |
 | `gp_score` | `document?` | 读取元数据、音轨摘要、光标、未保存和撤销重做状态 |
 | `gp_read_bars` | `document?`, `track?=0`, `staff?=0`, `bar?=0`, `count?=1` | 每次读取 1–16 个完整存在的小节，音符包括 `effects`；单次节拍/音符读取量有上限 |
@@ -137,12 +137,16 @@ PowerShell 的 `Invoke-McpTool` 默认等待三个保存工具的结果，保持
 
 `test-saving.ps1` 的 47 项检查覆盖当前路径保存、显式覆盖、复制和另存为、跨文档保护、锁定目标和缺失目录、GPIF 与原生重开、未命名文档拒绝及临时文件清理，并检查中文文件名、两种路径、标签/提示/窗口/对应菜单名称、旧路径独立打开和新路径复用。菜单名称检查按当前 `Tab_N` 对应的 `OpenedDocumentAction_N` 定位，因为宿主会保留已关闭文档的动作对象；此检查不证明菜单可用性。锁定文件的拒绝发生在原生写入之前，不能代替写入中途失败后的恢复验证。保存后撤销再重做恢复内容，当前宿主仍可能报告未保存；再次保存会恢复其原生已保存状态。
 
-`test-save-recovery.ps1` 另有 265 项故障检查：向独立测试进程加载 `save-fault-probe`，只对随机命名的目标及其宿主备份注入 Windows 部分写入错误、输出损坏、恢复锁定和原生通知 C++ 异常。宿主会先重试备份写入，再尝试直接写目标，因此写入故障持续到当前请求结束。保存后校验测试在观察到原生 `isDirtyChanged(false)` 后破坏输出，验证原文件、路径和未保存标记恢复，以及撤销、重做和再次保存重开。异常测试覆盖当前保存、另存、全新文件、保存后关闭和打开路径通知；恢复通知再次异常时验证备份保留、未保存内容可读和写入阻塞，未支持的 `gp_recover` 请求不能清除未知结果，最后通过原生关闭确认丢弃唯一的测试文档并检查正常退出。探针通过独立构建生成，生产安装包不包含它；测试只接受 `.tools` 下的隔离宿主。
+`test-save-recovery.ps1` 向独立测试进程加载 `save-fault-probe`，只对随机命名的目标及其宿主备份注入 Windows 部分写入错误、输出损坏、恢复锁定和原生通知 C++ 异常。宿主会先重试备份写入，再尝试直接写目标，因此写入故障持续到当前请求结束。保存后校验测试在观察到原生 `isDirtyChanged(false)` 后破坏输出，验证原文件、路径和未保存标记恢复，以及撤销、重做和再次保存重开。恢复再次异常时保留备份、未保存内容和写入阻塞；`gp_recover` 只重试保留的路径及未保存状态通知，不重新写文件。测试也锁定已恢复的输出文件，确认状态恢复不依赖再次覆盖文件。探针通过独立构建生成，生产安装包不包含它；测试只接受 `.tools` 下的隔离宿主。
 
 ```powershell
 ./native/build-save-fault-probe.ps1
 ./native/test-save-recovery.ps1 -Exe '<isolated .tools host>/GuitarPro.exe'
 ```
+
+完整 P2 回归入口为 `native/test-p2.ps1 -HostDirectory '<isolated .tools host>'`，依次构建核心及测试探针，在 PowerShell 7 和 Windows PowerShell 5.1 下执行完整功能回归、保存恢复、晚到的新建/打开结果、标签恢复及文档集合变化、连接身份和 DDE 流程。标准客户端检查使用官方 MCP Inspector 2.5.0 和 Node 22，可用 `-NodeExe C:/path/to/node.exe` 指定测试运行时；测试前可运行 `npm install --prefix .tools/mcp-client --ignore-scripts --no-audit --no-fund @modelcontextprotocol/inspector@2.5.0`。Inspector 只属于开发测试环境，不进入插件或安装包。测试宿主需要正常写入 Guitar Pro 自己的自动备份目录，运行时不能用文件沙箱拒绝该目录的写入。
+
+新建/打开超时表示结果尚未确认；插件继续观察，不自动重放。晚到的原生文档被识别后更新原请求并解除阻塞。`recovery_available=false` 时不能用 `gp_recover` 强制清除未知结果。取消只适用于尚未执行的请求或当前可取消的原生对话框；同步原生调用未处理事件时无法被抢占，实际保存完成优先于取消请求。原生保存进度流程仍需独立证据，不能用取消错误提示框的测试代替。
 
 `gp_score.tracks` 包含名称、简称、乐器类型、播放状态、音量、声像、移调偏移和颜色。`gp_edit_track` 的名称、简称、颜色及播放状态要求字符串；颜色格式为 `#RRGGBB`，播放状态为 `Default` / `Solo` / `Mute`。音量和声像要求数值 `0..1`，声像 `0.5` 居中；这些值不是分贝或百分数。混音设置调用原生 `setTrackChannelStripParameter`，声像参数为 11、音量参数为 12。除播放状态外均支持原生撤销；播放状态返回 `undoable=false`，不会伪造撤销历史。
 
@@ -334,11 +338,11 @@ Invoke-McpTool $connection gp_undo_redo @{operation='undo';document=$target}
 
 `gp_new` 通过 `:/GPBase/MainWindow/Templates/` 中列出的模板创建独立文档，随后调用宿主方法清空打开和保存路径。返回 `scheduled` 不代表成功，必须轮询并匹配 `gp_documents.creation.request`；成功为 `created`。`requested` 和 `cancelling` 是中间状态，必须继续观察。原生调用返回后，未观察到文档且已超过 10 秒时报告 `error`、`outcome_unknown=true`，继续观察迟到结果并阻止新的写入；这不是原生调用的强制截止时间，也不代表已经取消。同一时刻只允许一个待完成请求。模板的文件名保持宿主原始名称。
 
-`gp_open` 返回 `scheduled` 和独立 `request`。通过 `gp_operation` 返回的 `operation` 或 `gp_documents.opening` 核对同一请求的 `opened` 及文档 ID。ZIP/GPIF 校验错误返回 `status=error` 和 `failure_stage=validation`，不会进入原生打开。未观察到结果且超过 10 秒时返回 `error`、`outcome_unknown=true`，继续观察迟到的文档并阻止新的写入；该状态不代表确认失败或取消。未知原生结果的完整恢复仍待完成。重复打开已识别路径返回 `already_open`。
+`gp_open` 返回 `scheduled` 和独立 `request`。通过 `gp_operation` 返回的 `operation` 或 `gp_documents.opening` 核对同一请求的 `opened` 及文档 ID。ZIP/GPIF 校验错误返回 `status=error` 和 `failure_stage=validation`，不会进入原生打开。未观察到结果且超过 10 秒时返回 `error`、`outcome_unknown=true`，继续观察迟到的文档并阻止新的写入；该状态不代表确认失败或取消。迟到的新建/打开结果及新建/打开/关闭后的原生异常已有专项验证；确认完成时报告实际终态，并保留 `native_error`。未观察到结果时不能强制解除阻塞。重复打开已识别路径返回 `already_open`。
 
 `gp_close` 通过 `TabWidgetProxy::tabCloseRequested(int)` 进入宿主关闭流程。执行前激活目标，校验页面与索引，异步回调再次确认对象身份。`unsaved=save` 先通过原生保存更新状态，未命名文档需要 `path`；保存失败保留文档。`discard` 只在本次关闭栈内、目标主窗口所属的保存/丢弃/取消对话框中，按标准按钮枚举选择丢弃。`cancel` 不关闭文档；`prompt` 保留原生对话框，可使用 `gp_cancel` 取消。它不伪造已保存状态，不调用曲谱视图的 `QWidget::close()`，不模拟输入。
 
-新建、打开、保存、关闭一次只允许一个待完成操作，期间允许读回和对话框内操作。当前记录也出现在 `gp_documents` 的 `creation/opening/saving/closing` 中。请求 ID 可通过 `gp_operation` 读取，64 条被替换记录之外的旧 ID 明确报错。取消只针对原请求和观察到的对话框；已完成操作不能取消。`cancelling` 必须继续轮询，若原生操作已经成功，结果仍报告真实成功。原生标签拖动、所有模态上下文、未知原生结果和保存进度取消仍需进一步处理。
+新建、打开、保存、关闭一次只允许一个待完成操作，期间允许读回和对话框内操作。当前记录也出现在 `gp_documents` 的 `creation/opening/saving/closing` 中。请求 ID 可通过 `gp_operation` 读取，64 条被替换记录之外的旧 ID 明确报错。取消只针对原请求和观察到的对话框；已完成操作不能取消。`cancelling` 必须继续轮询，若原生操作已经成功，结果仍报告真实成功。新建/打开过程中，只有“确定”按钮的加载错误提示被 `gp_cancel` 关闭后，`cancel_decision_available=false`，最终仍为 `error`，不会误报 `cancelled`。原生标签拖动和保存进度取消列为宿主限制；未穷举的模态及异常组合继续纳入 P7 验证，无可信终态时保持阻塞。
 
 ### 文档标签重排
 
@@ -352,9 +356,9 @@ Invoke-McpTool $connection gp_undo_redo @{operation='undo';document=$target}
 
 有保留快照时，失败响应及 `gp_operation` 的 `recovery_available=true`。使用 `gp_recover request=...` 重试恢复；它拒绝原生操作尚在执行、存在模态对话框、过期请求及已完成恢复。再次恢复失败保留阻塞和上下文，可在排除故障后继续恢复。成功返回 `status=recovered`，清除当前请求的 `outcome_unknown` 并释放快照，但原请求 `status=error` 和原始 `result` 保持不变；后续结果在 `operation.recovery`，另有 `recovery_attempts` 和 `recovered=true`，归档后仍可查询。
 
-`resolution=rolled_back` 表示完整原顺序和活动文档已恢复。宿主关闭主窗口时会先关闭干净文档，再询问未保存文档，因此取消确认框后可能只剩部分文档。原对象已销毁且剩余标签、页面、相对顺序、文档数量和原生活动文档均可验证时，恢复返回 `resolution=documents_closed`、`closed_documents` 和 `rolled_back=false`；这表示已确认后续原生关闭，不是恢复原排列，不会重新打开文件。剩余状态无法核验时继续阻塞，不强制清除未知结果。保存等其他操作尚未接入该恢复入口。
+`resolution=rolled_back` 表示完整原顺序和活动文档已恢复。宿主关闭主窗口时会先关闭干净文档，再询问未保存文档，因此取消确认框后可能只剩部分文档。原对象已销毁且剩余标签、页面、相对顺序、文档数量和原生活动文档均可验证时，恢复返回 `resolution=documents_closed`、`closed_documents` 和 `rolled_back=false`；全部原文档关闭也可核验。存在新增文档时返回 `resolution=documents_changed` 和 `added_documents`，不重新打开已关闭的文件。剩余状态无法核验时继续阻塞。保存失败保留的恢复步骤也通过 `gp_recover` 重试，见保存章节。
 
-独立 `test-tab-recovery.ps1` 的标准分支在四份隔离文档上执行 330 项检查，`-CloseCleanDocuments` 分支执行 327 项：额外重排、活动文档切换、活动/非活动标签通知异常、回滚再次异常、显式恢复失败与成功、模态拒绝、过期/重复请求、恢复后编辑与保存重开，以及部分文档被宿主关闭后的核验。保留原有身份、内容、撤销、保存副本、再次移动和历史记录检查。探针只允许绑定标记目录中的四份测试文档，不进入生产包。
+独立 `test-tab-recovery.ps1` 的标准分支执行 391 项检查，覆盖迟到的新建/打开结果、原生新建/打开/关闭完成后的异常、标签回滚及显式恢复、模态拒绝、普通原生动作和属性写入阻塞、过期/重复请求、全部原文档关闭及随后重开。`-CloseCleanDocuments -AddDocumentDuringRecovery` 另覆盖部分原文档关闭后新增文档的核验。保留原有身份、内容、撤销、保存副本、再次移动和历史记录检查。探针只绑定标记测试目录中的文档，不进入生产包。
 
 ```powershell
 ./native/build-tab-fault-probe.ps1
@@ -366,7 +370,7 @@ Invoke-McpTool $connection gp_undo_redo @{operation='undo';document=$target}
 
 用户确认直接拖动标签后顺序不变。插件重排不视为原生拖动验收；未命名文档另存后的标签和提示由保存路径通知更新，其验证见保存专项。
 
-GPIF 预检使用宿主 `Qt5Gui.dll` 的 `QZipReader` 和 Qt XML 流解析器，新增精确 DLL 哈希验证。要求唯一、普通的 `Content/score.gpif`，解压大小最多 64 MiB、根元素为 `GPIF`，拒绝 DTD 和 XML 语法错误；不做文件解压落盘，也不声称完成 GPIF 模型语义验证。保存后的文件也通过同一检查，不合格时进入已有恢复流程。
+GPIF 预检使用宿主 `Qt5Gui.dll` 的 `QZipReader` 和 Qt XML 流解析器，并校验精确 DLL 哈希。要求唯一、普通的 `Content/score.gpif`，解压大小最多 64 MiB、根元素为 `GPIF`，拒绝 DTD 和 XML 语法错误。顶层 `GPRevision.required` 必须是非负整数且不超过当前已验证宿主的 13007；`recommended` 不作为拒绝依据。不兼容版本曾使原生打开静默结束并留下未知结果，预检现在明确拒绝。此检查不做文件解压落盘，也不声称完成 GPIF 模型语义验证。保存后的文件通过同一检查，不合格时进入已有恢复流程。
 
 存在多个文档时先 `gp_activate`，然后调用 `gp_playback`。控制器通过 `Conductor::score()` 与目标文档的 `Score` 对象匹配，避免把播放指令发往其他曲谱。
 
@@ -392,7 +396,7 @@ GPIF 预检使用宿主 `Qt5Gui.dll` 的 `QZipReader` 和 Qt XML 流解析器，
 
 `gp_trigger`、`gp_set_property` 和 `gp_close_window` 必须携带刚观察到的 `snapshot` 与 `id`。动作会在 Qt 事件循环中调度；返回 `scheduled` 仅表示已安排，需要再次读回结果。允许写入的属性会在对象查询中列出。
 
-这些工具没有使用鼠标事件或键盘快捷键，但 Qt 动作是否启用仍由宿主上下文决定。控件属性修改也不等于模型修改；曲谱业务操作应优先使用前述 GPCore 工具。
+这些工具没有使用鼠标事件或键盘快捷键，但 Qt 动作是否启用仍由宿主上下文决定。存在待完成操作或未知结果时，`gp_trigger` 和 `gp_set_property` 只允许操作当前模态对话框内的控件，不能绕过文档写入阻塞。窗口显示与正常关闭保留原生确认流程。控件属性修改不等于模型修改；曲谱业务操作应优先使用前述 GPCore 工具。
 
 `gp_window` 的 `state` 为 `hide`、`minimize` 或 `restore`。显式 `GPMCP_BACKGROUND=1` 时隐藏主窗口，并对 `QWidget` 及已有 `QWindow` 同步设置 `WindowDoesNotAcceptFocus`；底层窗口不能只等下一次显示才更新。`restore` 解除插件设置的标志，调用 `showNormal()` 和 `activateWindow()` 显示并请求激活主窗口；它可将窗口带到前台。`hide` 重新进入不抢焦点的后台模式。开发启动脚本默认设置该变量，正常安装启动不设置。
 
@@ -436,7 +440,7 @@ IDocumentsManager + 0x10 → 管理器实现对象
 
 ## 验证
 
-当前显式标签恢复检查点的核心在 Windows PowerShell 5.1 和 PowerShell 7 下分别通过十六组、2574 项完整回归，其中包含 281 项标签与原生菜单检查；两个版本另各通过显式标签恢复 330 项、部分文档关闭后核验 327 项，并在 Windows PowerShell 5.1 通过保存故障恢复 265 项。此前标签回滚、保存异常恢复、窗口恢复、另存修复、标签重排以及后台 DDE/连接 61 项、可见 DDE/连接 60 项属于旧构建证据。准确证据和运行条件见 [当前验证证据](../COVERAGE.md#当前验证证据)，完整任务见 [开发计划](../DEVELOPMENT_PLAN.md)。下方保留的旧轮次不代表当前完整验收结果。
+P2 已按用户确认的单实例、多文档必要范围完成，独立 GUI 多开、原生标签拖动和原生保存进度取消列为宿主限制。当前构建在 Windows PowerShell 5.1 和 PowerShell 7 下各通过功能回归 2588 项、保存恢复 380 项、标签/原生异常恢复 405 项、文档集合变化 397 项、连接/Inspector/DDE 72 项，合计执行 7684 项；另通过隔离安装 46 项及协议 27 项。准确构建哈希、证据和边界见 [当前验证证据](../COVERAGE.md#当前验证证据) 及 [开发计划](../DEVELOPMENT_PLAN.md)。下方旧轮次保留为历史，不代表 P1 或整个项目已完成。
 
 按根目录 [README](../README.md) 使用完整回归入口；可用 `-Exe` 指定隔离宿主：
 
