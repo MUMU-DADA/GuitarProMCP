@@ -10,7 +10,7 @@
 | --- | --- | --- |
 | 插件与 MCP | C++ DLL 在 GuitarPro.exe 内提供 HTTP MCP；会话、令牌、Host/Origin 和参数检查；实例 UUID/PID/启动时间绑定、默认端口回退、两个客户端并发编辑、重连及重启失效；隔离宿主的 Windows DDE 文件关联打开；Windows PowerShell 5.1 中文路径与 UTF-8 描述读取 | 各类真实 MCP 客户端、独立 GUI 多进程、真实安装目录的资源管理器入口和长时间运行尚未完成验证；单独重复命令行启动不转发文件路径 |
 | 后台执行 | 同步 QWidget / QWindow 焦点策略，显式后台启动保持隐藏，常规安装启动窗口可见；无需预先最小化即可执行模板新建、打开、关闭、切换、编辑、保存和播放；窗口恢复后可再隐藏 | 未验证无桌面环境、所有模态窗口和长时间运行 |
-| 文档状态与切换 | 独立 ID、路径、未保存状态、原生 Score 和活动文档；打开/新建/关闭/重排请求跟踪和 64 条历史；明确保存/丢弃/取消及原生确认；关闭全部文档后重开及旧 ID 失效；损坏 ZIP/GPIF 明确拒绝；按完整标签顺序读取与插件重排，校验或通知异常时回滚，回滚再次异常时保留写入阻塞；同名/未命名及多份未保存曲谱的身份、撤销、保存重开和关闭隔离；另存后的两种路径、标签/提示/窗口/对应菜单名称同步；反复隐藏/恢复后的原生菜单目标保持和关闭确认取消 | 用户确认原生拖动不改变顺序；完整 GPIF 语义错误、回滚再次失败后的状态协调、其他未知原生结果恢复、共同编辑/模态上下文和保存中途取消仍待验收；原生菜单仍需宿主有效的焦点上下文 |
+| 文档状态与切换 | 独立 ID、路径、未保存状态、原生 Score 和活动文档；打开/新建/关闭/重排请求跟踪和 64 条历史；明确保存/丢弃/取消及原生确认；关闭全部文档后重开及旧 ID 失效；损坏 ZIP/GPIF 明确拒绝；按完整标签顺序读取与插件重排，校验或通知异常时回滚，回滚再次异常时保留写入阻塞；按请求显式重试标签恢复，核验部分文档原生关闭后的剩余状态，保留失败及恢复记录；同名/未命名及多份未保存曲谱的身份、撤销、保存重开和关闭隔离；另存后的两种路径、标签/提示/窗口/对应菜单名称同步；反复隐藏/恢复后的原生菜单目标保持和关闭确认取消 | 用户确认原生拖动不改变顺序；完整 GPIF 语义错误、复杂文档集变化、其他未知原生结果恢复、共同编辑/模态上下文和保存中途取消仍待验收；原生菜单仍需宿主有效的焦点上下文 |
 | 曲谱元数据 | 读取 11 项元数据；使用原生命令修改，支持撤销重做和中文保存 | 拒绝宿主不能可靠保存的补充平面 Unicode 字符和 XML 控制字符 |
 | 曲谱读取 | 音轨、小节、谱表数量；分页读取声部、节拍、音符、弦、品位、MIDI 音高、时值、休止和占位拍 | 未暴露全部装饰音、效果、自动化、排版、音色和隐藏模型状态 |
 | 曲谱编辑 | 和弦增音、品位修改、指定弦音符删除、休止及空白占位拍上输入；全音符至 128 分音符、0–2 附点；插入/清空/删除节拍；双声部编辑隔离 | 复杂记谱、效果及跨轨音符编辑未覆盖；目前验证简单曲谱 |
@@ -47,6 +47,14 @@
 
 ## 当前验证证据
 
+显式标签恢复检查点的核心 DLL SHA-256 为 `40213CBD82BDAC3EA454A792982E94C039B81E14824F1C8119B82E02D1E814C7`，自动加载器为 `E409DF16F3201CFA37A670A5BF49A59015E5A45E568A3BBEA4381A79CDBBC4CD`，宿主为 `B233B0F1C87DEB3AECE693D51E8D3C3A841C88FEE78828607B20034737C4C6DF`。PowerShell 7.6.5 与 Windows PowerShell 5.1.19041.6456 各完整通过十六组、2574 项并正常退出：`artifacts/regression-395453faa288485fb67164457b217930/regression.json`、`artifacts/regression-45dd4bebdb514544a7972482058f8a85/regression.json`。两轮源码哈希一致，281 项标签/原生菜单分支均记录 `menu_verified=true`：`artifacts/document-tabs-4e82228ab1a1429a96bfbb686a717687/verification.json`、`artifacts/document-tabs-6fe320c0d61e4d6898964718daf09a3f/verification.json`。
+
+两个版本的标准显式恢复分支各通过 330 项：`artifacts/tab-recovery-8f72e220f904457c801022cbb9fa9643/verification.json`、`artifacts/tab-recovery-aec4e8fe39ca41f185a4746b35969380/verification.json`；部分原文档关闭后的核验分支各通过 327 项：`artifacts/tab-recovery-8d3a10bd36c948d2b282cf7569073bb2/verification.json`、`artifacts/tab-recovery-0455071f91334be096435427efd1952b/verification.json`。标签探针 SHA-256 仍为 `8A835AB1A8DF0D80B4560C9B9EAD614C9150EDBB40DB8FDD5D035FDE3951871C`。同一核心另在 Windows PowerShell 5.1 通过保存故障恢复 265 项：`artifacts/save-recovery-85a38cb13070403a9b98ce81124f4062/verification.json`，保存探针 SHA-256 为 `819A9C1E5A655708053DFE46DEC5EAA0998E01F32CAF5E95C9F1FECE575FAF56`。上述进程均正常退出并清理连接描述，原始夹具未变。
+
+`gp_recover` 验证恢复请求绑定、重复失败时阻塞保持、模态与已完成/过期请求拒绝、恢复后编辑/保存重开，以及原失败和后续恢复历史分别保留。首次原生关闭再取消在 `artifacts/tab-recovery-9dc6e44848ed4907837ecfb54c631807/verification.json` 失败：宿主先关闭三份干净文档，再为唯一未保存文档显示确认框；取消不会重开前三份。恢复现在核验剩余对象、原相对顺序及活动文档，返回 `documents_closed` 与关闭的 UUID，不重开文档或误报完整回滚。该分支验证三份关闭、一份保留，全部原文档关闭尚无专项证据。保存/其他操作没有保留恢复上下文时明确拒绝 `gp_recover`，不会解除未知结果阻塞；这些缺口仍属于 P2。
+
+### 历史检查点
+
 标签故障回滚检查点的核心 DLL SHA-256 为 `950455B31A9B5E78517CDF23A68C24A8A8DB29B55DEFF1FB4F86EA008C1E41FE`，自动加载器为 `54F2A1A468F3DDA2D4A8A6EB9879D3271FA88A69B4F85535A21DB7AC14CF165E`，宿主为 `B233B0F1C87DEB3AECE693D51E8D3C3A841C88FEE78828607B20034737C4C6DF`。PowerShell 7.6.5 与 Windows PowerShell 5.1.19041.6456 分别完整通过十六组、2574 项并正常退出：`artifacts/regression-ece4d5f8e8f64b2e8a0af5e1a8038c57/regression.json`、`artifacts/regression-248282b0d46d4d11a1ff829960c98cd0/regression.json`。两轮源码哈希与本检查点一致，标签/菜单专项各为 281 项且 `menu_verified=true`：`artifacts/document-tabs-7e568d4d883d4b158337aa2289a3f4ee/verification.json`、`artifacts/document-tabs-29988c18193d4673a4b63fb3540baeb7/verification.json`。
 
 同一核心在两个版本各通过 303 项标签故障恢复并正常退出：`artifacts/tab-recovery-a2ae563164d74a8c96f7a2df2d7288fc/verification.json`、`artifacts/tab-recovery-bed9ff2417ca4c19bad20c9c6c497d05/verification.json`。探针 SHA-256 为 `8A835AB1A8DF0D80B4560C9B9EAD614C9150EDBB40DB8FDD5D035FDE3951871C`。验证包括完整顺序、活动/非活动标签异常、额外重排、活动文档切换、撤销重做、保存副本重开和后续重试；恢复通知再次异常时如实保留未知结果及写入阻塞。同一核心另在 Windows PowerShell 5.1 通过保存故障恢复 264 项并正常退出：`artifacts/save-recovery-acbd8c29203e43eeb652ff3ad5b93928/verification.json`。上述进程均清理连接描述。
@@ -71,7 +79,7 @@
 
 标签重排检查点的核心 DLL SHA-256 为 `35F81B75172BD1CBC5CEA17834C8757D3FF870D7BA3984C361315C84F1F7B355`。PowerShell 7.6.5 与 Windows PowerShell 5.1.19041.6456 分别完整通过十六组、2469 项，退出码均为 0 且连接描述已清理：`artifacts/regression-b2dd344767674bf0b1ef7e8f68a1b724/regression.json`、`artifacts/regression-2d306138117b48409e1a9b64dcf92898/regression.json`。其中标签基础专项为 193 项；另在新隔离宿主执行含原生菜单的 221 项，`menu_verified=true`：`artifacts/document-tabs-cfafc40ebb02415c9a7ae8fd9adc3aad/verification.json`。相同核心在 Windows PowerShell 5.1 通过保存故障恢复 167 项并正常退出：`artifacts/save-recovery-f662e3c6b0e34d8d866d5f8540db3a6d/verification.json`。
 
-标签早期验证发现并修正了模板名称、未保存标记前缀及另存后空提示被误当作文件路径的校验问题；后续保存修复补齐路径通知，解决未命名文档另存后的空标签。原生菜单在反复隐藏/恢复的已有测试宿主中曾保持禁用，相关失败不计通过；新宿主的菜单专项不能证明所有窗口上下文已通过。用户确认原生拖动不改变顺序，插件重排不替代该项验收。同步重排校验及通知失败的回滚已有后续专项验证，回滚再次失败后的状态协调仍待处理。
+标签早期验证发现并修正了模板名称、未保存标记前缀及另存后空提示被误当作文件路径的校验问题；后续保存修复补齐路径通知，解决未命名文档另存后的空标签。原生菜单在反复隐藏/恢复的已有测试宿主中曾保持禁用，相关失败不计通过；新宿主的菜单专项不能证明所有窗口上下文已通过。用户确认原生拖动不改变顺序，插件重排不替代该项验收。同步重排故障回滚、显式恢复重试及部分文档关闭后的状态核验已有后续专项验证，其他复杂文档集变化仍待处理。
 
 `09185ab` 历史构建在 Windows PowerShell 5.1 和 PowerShell 7 下均完整通过十五组、2276 项回归，两轮退出码均为 0，连接描述已清理。证据分别为 `artifacts/regression-9e09be6fb7784486bc7423a8a50cd9f5/regression.json` 和 `artifacts/regression-b7fb07a5f6c14bd5abe4811a36c14159/regression.json`。核心 DLL SHA-256 为 `A22ECD07B9C48776CF25CA1E9FA4A8C650CF9E93841F511380FF97FE7F73227F`。新增 HTTP UTF-8 解码对照检查，修复旧版 PowerShell 的中文路径/工具说明乱码，并让完整测试入口兼容该运行时。
 
@@ -110,7 +118,7 @@ P1 候选检查点 DLL 的十三组回归共 2195 项通过，进程退出码为
 - `native/test-selection.ps1`：980 项原生选区和批量时值检查，覆盖方向、端点、全选、模式复位、和弦/第二声部/其他音轨单音、无效输入、实际目标位置、四声部音乐时间映射、跨轨整曲和单小节、钢琴双谱表、128 小节限制、临时占位拍清理及重建、宏命令一次撤销、重做、重复写入和原生保存/重开。
 - `native/test-saving.ps1`：47 项当前路径保存、显式覆盖、目标保护、写入前拒绝后的状态保留、两种路径及标签/提示/窗口/对应菜单名称更新、中文文件名、旧路径独立打开、新路径复用及保存重开检查。
 - `native/test-save-recovery.ps1`：独立隔离宿主中的 264 项原生部分写入失败、损坏输出、保存后校验失败、原生保存/路径通知异常、恢复再次异常时保留备份与写入阻塞、错误提示控制、保存后关闭失败、撤销重做、再次保存重开及正常退出检查。使用单独构建的测试探针，不包含于常规回归或生产安装包。
-- `native/test-tab-recovery.ps1`：独立隔离宿主中的 303 项完整标签顺序校验、原生通知异常/活动文档变化/额外重排后的回滚、身份与内容隔离、撤销重做、保存副本重开、再次移动、请求历史及回滚再次异常后的写入阻塞检查。独立构建探针不进入生产包。
+- `native/test-tab-recovery.ps1`：独立隔离宿主中的 330 项完整顺序、故障回滚、显式恢复重试、过期及重复请求、模态保护、内容/撤销隔离、恢复后编辑保存重开及请求历史检查；`-CloseCleanDocuments` 分支为 327 项，另核验宿主关闭干净文档后取消确认、剩余文档状态及原关闭结果保留。独立构建探针不进入生产包。
 - `native/test-document-operations.ps1`：50 项请求状态、保存/丢弃/取消关闭、原生确认与取消、过期请求隔离、64 条历史淘汰及损坏 ZIP/GPIF 拒绝检查。
 - `native/test-document-tabs.ps1`：基础 196 项插件重排、同名及未命名文档、四份未保存曲谱、稳定身份、活动文档保持、撤销重做、可见标签坐标、模态恢复/拒绝/取消、保存重开与关闭隔离检查。`-VerifyDocumentMenu` 扩展至 281 项，逐项触发三次隐藏/恢复后的原生菜单并核对目标和后台焦点；`test-all.ps1` 默认启用此分支，失败不计通过。
 - `native/test-lifecycle.ps1`：40 项定向关闭、未保存修改保护、旧 ID、无文档时继续服务、重开和窗口恢复/隐藏检查。

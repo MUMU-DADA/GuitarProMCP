@@ -136,6 +136,8 @@ try {
             Assert ($document.Count -eq 1 -and $document[0].id -eq $id -and $document[0].dirty -and [IO.Path]::GetFullPath($document[0].save_path) -eq $source -and [IO.Path]::GetFullPath($document[0].opened_path) -eq $source) 'Incomplete recovery changed the test document identity or paths.'
             Assert ((Invoke-McpTool $connection gp_score @{document=$id}).metadata.Title -eq $title) 'Recovery exception lost unsaved content.'
             Assert ((Invoke-McpTool $connection gp_edit_metadata @{document=$id;property='Artist';value='Must not apply'} -AllowError).error) 'Incomplete recovery permitted another mutation.'
+            $unsupportedRecovery = Invoke-McpTool $connection gp_recover @{request=$scheduled.request} -AllowError
+            Assert ($unsupportedRecovery.error -and (Invoke-McpTool $connection gp_operation @{request=$scheduled.request}).operation.outcome_unknown) 'Unsupported save recovery cleared the unknown outcome.'
             Set-Fault | Out-Null
             break
         } elseif ($case.mode -in @('post_exception','path_exception')) {

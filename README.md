@@ -69,6 +69,7 @@ MCP 客户端
 | `gp_open` / `gp_activate` | 运行中异步打开已有 `.gp` 文件；原生切换活动文档 |
 | `gp_close` | 异步关闭指定文档；明确保存、丢弃、取消或保留原生确认；默认拒绝未保存修改 |
 | `gp_operation` / `gp_cancel` | 按请求 ID 查询或取消文档操作，保留最近 64 条被替换的请求记录 |
+| `gp_recover` | 按请求 ID 重试已保留的标签回滚，或核验部分文档关闭后的剩余状态；确认后解除写入阻塞 |
 | `gp_playback` | 播放/停止、按原谱小节或反复展开后的绝对 tick 定位、循环、节拍器、倒计时及时间线状态 |
 | `gp_score` | 实时元数据、音轨和小节数量、光标、撤销重做状态 |
 | `gp_read_bars` | 读取实时音符、音高、弦、品位、时值、休止、占位拍和已接入的音符技法，每次最多 16 小节 |
@@ -118,6 +119,8 @@ MCP 客户端
 
 `gp_move_document document=... index=...` 将标签移动到从 0 开始的最终位置，仅改变当前会话顺序，不加入曲谱撤销栈。它同步宿主的自定义标签布局和文档页面，并保持原活动文档；同步返回 `moved` 或 `unchanged` 及 `request`，可通过 `gp_operation` 查阅结果。原生通知或完整顺序校验失败时恢复原排列与活动文档；`rolled_back=true` 表示已确认回滚，`outcome_unknown=true` 表示恢复未确认并阻止后续修改，不能自动重试。`gp_documents.tab_order_available=false` 表示无法验证对应关系，此时 `tab_index=null`，不会猜测顺序或执行重排。用户已确认当前宿主中直接拖动标签不改变顺序；插件重排通过不代表原生拖动已通过验收。
 
+重排失败且 `recovery_available=true` 时，处理完原生对话框后可调用 `gp_recover request=...`。它只使用保留的快照恢复，不重放原移动命令。返回 `status=recovered` 后允许继续修改；`resolution=rolled_back` 表示原顺序及活动文档已恢复，`resolution=documents_closed` 表示部分文档已被原生关闭且剩余文档状态已核验，不会重新打开这些文档。`gp_operation` 保留原始失败，在 `recovery`、`recovery_attempts` 和 `recovered` 中记录恢复结果。该入口目前只支持标签重排，保存等其他未知结果仍需继续完善。
+
 音符和节拍编辑默认针对光标所在的单个节拍，使用独立构造的原生范围。基础时值和附点分别编辑，各对应宿主自己的撤销命令；基础时值修改保留已有附点和连音比例，不自动补齐小节。
 
 `gp_edit_beat operation=tuplet` 设置连音，`actual=3, normal=2` 表示三连音。`level` 为 `primary`（默认）或 `secondary`；`enabled=false` 只清除指定层，不带比例参数。支持光标单拍、明确选区、跨小节、全部声部/音轨和钢琴谱表，批量编辑可一次撤销。`gp_read_bars` 的每拍 `tuplets` 返回两层的 `enabled/actual/normal`。具体语义见 [原生连音](native/README.md#原生连音)。
@@ -150,7 +153,7 @@ MCP 客户端
 
 ## 运行检查
 
-当前标签故障回滚检查点的核心在 Windows PowerShell 5.1 和 PowerShell 7 下分别通过十六组、2574 项完整回归，其中包含 281 项标签与原生菜单检查；另分别通过标签故障恢复 303 项，并在 Windows PowerShell 5.1 通过保存故障恢复 264 项。最新证据、启动等待条件和未完成项见 [当前验证证据](COVERAGE.md#当前验证证据)，完整 P0–P7 任务及验收标准见 [开发计划](DEVELOPMENT_PLAN.md)。此前保存异常恢复、窗口恢复、另存修复、标签重排和下方按日期保留的检查结果属于对应历史构建。
+当前显式标签恢复检查点的核心在 Windows PowerShell 5.1 和 PowerShell 7 下分别通过十六组、2574 项完整回归，其中包含 281 项标签与原生菜单检查；两个版本另各通过显式标签恢复 330 项、部分文档关闭后核验 327 项，并在 Windows PowerShell 5.1 通过保存故障恢复 265 项。最新证据、启动等待条件和未完成项见 [当前验证证据](COVERAGE.md#当前验证证据)，完整 P0–P7 任务及验收标准见 [开发计划](DEVELOPMENT_PLAN.md)。此前标签回滚、保存异常恢复、窗口恢复、另存修复、标签重排和下方按日期保留的检查结果属于对应历史构建。
 
 协议检查只需要一个已启用插件的宿主：
 

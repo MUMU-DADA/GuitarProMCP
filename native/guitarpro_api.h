@@ -20,6 +20,7 @@
 #include <QtGui/QColor>
 #include <cmath>
 #include <exception>
+#include <functional>
 
 namespace guitarpro {
 inline QString validateGpFile(const QString &path) {
@@ -189,12 +190,14 @@ inline Document choose(const QJsonObject &args) {
         if (document.id() == id || (id.isEmpty() && available.size() == 1)) return document;
     return {};
 }
-inline QJsonObject moveDocument(const QJsonObject &args, const QList<QPointer<QObject>> &objects) {
+inline QJsonObject moveDocument(const QJsonObject &args, const QList<QPointer<QObject>> &objects, std::function<QJsonObject()> &recoveryAction) {
+    recoveryAction = {};
     const Document target = choose(args);
     if (!target.object || !target.view) return {{"error", "Choose an existing document id"}};
     QPointer<QObject> current = activeDocument(objects);
     if (!current) return {{"error", "Native active-document state is unavailable"}};
-    const auto tabs = documentTabs(documents(), current);
+    const auto available = documents();
+    const auto tabs = documentTabs(available, current);
     if (!tabs.pages || !tabs.layout) return {{"error", tabs.error}};
     const int from = tabs.pages->indexOf(target.view), to = args.value("index").toInt(-1);
     if (to < 0 || to >= tabs.pages->count()) return {{"error", "Tab index is outside the document list"}};
@@ -202,15 +205,17 @@ inline QJsonObject moveDocument(const QJsonObject &args, const QList<QPointer<QO
     QPointer<QWidget> activePage = tabs.pages->currentWidget();
     QPointer<QWidget> activeTab = tabs.layout->itemAt(tabs.pages->currentIndex())->widget();
     QList<QPointer<QWidget>> pagesBefore, tabsBefore;
+    QStringList idsBefore;
     QList<int> original;
     for (int i = 0; i < tabs.pages->count(); ++i) {
         pagesBefore.append(tabs.pages->widget(i));
         tabsBefore.append(tabs.layout->itemAt(i)->widget());
+        for (const auto &document : available) if (document.view == pagesBefore.last()) idsBefore.append(document.id());
         original.append(i);
     }
     auto requested = original;
     requested.move(from, to);
-    const auto arrange = [&](const QList<int> &order) {
+    const auto arrange = [=](const QList<int> &order) {
         if (!tabs.pages || !tabs.layout || !activePage || !activeTab || !current ||
             tabs.pages->count() != original.size() || tabs.layout->count() != original.size()) return false;
         for (int i : original)
@@ -231,7 +236,7 @@ inline QJsonObject moveDocument(const QJsonObject &args, const QList<QPointer<QO
         tabs.pages->setCurrentWidget(visiblePage);
         return true;
     };
-    const auto matches = [&](const QList<int> &order) {
+    const auto matches = [=](const QList<int> &order) {
         const auto observed = documentTabs(documents(), activeDocument(objects));
         if (!current || !activePage || !observed.pages || observed.pages != tabs.pages || observed.layout != tabs.layout ||
             observed.pages->count() != order.size() || observed.pages->currentWidget() != activePage || activeDocument(objects) != current) return false;
@@ -247,23 +252,51 @@ inline QJsonObject moveDocument(const QJsonObject &args, const QList<QPointer<QO
     } catch (const std::exception &exception) { failure = QString::fromUtf8(exception.what()); nativeException = true; }
     catch (...) { failure = "Unknown native tab move exception"; nativeException = true; }
     if (failure.isEmpty()) return {{"status", "moved"}, {"document", target.id()}, {"previous_index", from}, {"tab_index", to}, {"undoable", false}};
-    bool restored = false;
-    QString recoveryError;
-    try {
-        if (arrange(original)) {
-            // Resync the current tab's index before selecting the old active
-            // tab; reordering can leave the host's selected index unchanged.
-            auto selected = tabs.layout->itemAt(tabs.pages->currentIndex())->widget();
-            const bool synced = selected == activeTab || QMetaObject::invokeMethod(selected, "clicked", Qt::DirectConnection);
-            restored = synced && activeTab && QMetaObject::invokeMethod(activeTab, "clicked", Qt::DirectConnection) && matches(original);
+    const auto recover = [=]() {
+        QJsonArray closed;
+        QList<int> surviving;
+        for (int i : original) {
+            if (pagesBefore[i]) surviving.append(i);
+            else closed.append(idsBefore[i]);
         }
-    } catch (const std::exception &exception) { recoveryError = QString::fromUtf8(exception.what()); }
-    catch (...) { recoveryError = "Unknown native tab recovery exception"; }
-    QJsonObject result{{"error", failure}, {"document", args.value("document")}, {"previous_index", from},
-        {"requested_index", to}, {"rolled_back", restored}};
+        if (!closed.isEmpty()) {
+            const auto live = documents();
+            const auto liveActive = activeDocument(objects);
+            const auto observed = documentTabs(live, liveActive);
+            bool consistent = live.isEmpty() && surviving.isEmpty();
+            if (liveActive && !live.isEmpty() && observed.pages == tabs.pages && observed.layout == tabs.layout && observed.pages && observed.pages->count() == surviving.size()) {
+                consistent = true;
+                for (int i = 0; i < surviving.size(); ++i)
+                    if (observed.pages->widget(i) != pagesBefore[surviving[i]] || observed.layout->itemAt(i)->widget() != tabsBefore[surviving[i]]) consistent = false;
+            }
+            if (consistent) return QJsonObject{{"rolled_back", false}, {"resolution", "documents_closed"}, {"closed_documents", closed}};
+            return QJsonObject{{"error", "Document set changed and the remaining tab state cannot be verified"}, {"outcome_unknown", true}, {"rolled_back", false}};
+        }
+        bool restored = false;
+        QString recoveryError;
+        try {
+            if (arrange(original)) {
+                // Resync the current tab's index before selecting the old active
+                // tab; reordering can leave the host's selected index unchanged.
+                auto selected = tabs.layout->itemAt(tabs.pages->currentIndex())->widget();
+                const bool synced = selected == activeTab || QMetaObject::invokeMethod(selected, "clicked", Qt::DirectConnection);
+                restored = synced && activeTab && QMetaObject::invokeMethod(activeTab, "clicked", Qt::DirectConnection) && matches(original);
+            }
+        } catch (const std::exception &exception) { recoveryError = QString::fromUtf8(exception.what()); }
+        catch (...) { recoveryError = "Unknown native tab recovery exception"; }
+        QJsonObject result{{"rolled_back", restored}};
+        if (restored) result["resolution"] = "rolled_back";
+        if (!restored) { result["error"] = "Native tab rollback is incomplete"; result["outcome_unknown"] = true; }
+        if (!recoveryError.isEmpty()) result["recovery_error"] = recoveryError;
+        return result;
+    };
+    auto result = recover();
+    if (result.value("outcome_unknown").toBool()) recoveryAction = recover;
+    result["error"] = failure;
+    result["document"] = args.value("document");
+    result["previous_index"] = from;
+    result["requested_index"] = to;
     if (nativeException) result["native_exception"] = true;
-    if (!restored) result["outcome_unknown"] = true;
-    if (!recoveryError.isEmpty()) result["recovery_error"] = recoveryError;
     return result;
 }
 inline QJsonObject activate(const QJsonObject &args, const QList<QPointer<QObject>> &objects) {

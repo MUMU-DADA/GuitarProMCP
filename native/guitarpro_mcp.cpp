@@ -63,6 +63,9 @@ class Bridge : public QObject {
     QPointer<QDialog> loadModal;
     QJsonObject saving;
     QJsonObject moving;
+    std::function<QJsonObject()> pendingRecovery;
+    QString recoveryRequest;
+    bool recoveryActive = false;
     QJsonObject *savingOperation = nullptr;
     QPointer<QDialog> saveModal;
     QHash<QString, QJsonObject> operationHistory;
@@ -92,6 +95,7 @@ class Bridge : public QObject {
         registry.uninstall();
         server.stop();
         clipboardBuffer = {};
+        pendingRecovery = {};
         nativeObjects.clear(); observed.clear(); creationBefore.clear();
     }
 
@@ -295,6 +299,36 @@ class Bridge : public QObject {
             return {{"error", "Native operation has no cancellable dialog; inspect its outcome before retrying"}, {"operation", *operation}};
         }
         return {{"error", operationHistory.contains(request) ? "Operation already completed" : "Unknown or expired operation request"}};
+    }
+
+    QJsonObject recoverOperation(const QString &request) {
+        if (recoveryActive || loadNativeActive || closingNativeActive || savingOperation || QApplication::activeModalWidget())
+            return {{"error", "A native operation or dialog is still active; inspect gp_operation and gp_dialogs"}};
+        for (auto operation : {&creation, &opening, &closing, &saving, &moving}) {
+            if (operation->value("request") != request) continue;
+            if (operation->value("status") != "error" || !operation->value("outcome_unknown").toBool() || request != recoveryRequest || !pendingRecovery)
+                return {{"error", "This operation has no pending recoverable outcome"}, {"operation", *operation}};
+            QScopedValueRollback<bool> running(recoveryActive, true);
+            const auto retry = pendingRecovery;
+            QJsonObject result;
+            try { result = retry(); }
+            catch (const std::exception &exception) { result = {{"error", QString::fromUtf8(exception.what())}, {"outcome_unknown", true}}; }
+            catch (...) { result = {{"error", "Unknown native recovery exception"}, {"outcome_unknown", true}}; }
+            const bool recovered = !result.contains("error") && !result.value("outcome_unknown").toBool();
+            result["status"] = recovered ? "recovered" : "error";
+            result["request"] = request;
+            (*operation)["recovery"] = result;
+            (*operation)["recovery_attempts"] = operation->value("recovery_attempts").toInt() + 1;
+            if (recovered) {
+                operation->remove("outcome_unknown");
+                (*operation)["recovered"] = true;
+                (*operation)["recovery_available"] = false;
+                pendingRecovery = {};
+                recoveryRequest.clear();
+            }
+            return result;
+        }
+        return {{"error", "Unknown, completed or expired recovery request"}};
     }
 
     QJsonObject info() const {
@@ -546,6 +580,7 @@ class Bridge : public QObject {
         add("gp_documents", "按标签顺序读取实时文档 ID、tab_index、原生打开路径、保存路径和未保存状态；另存成功后两种路径都更新。映射不可用时 tab_order_available=false，不推断顺序。", {});
         add("gp_operation", "Read a new/open/save/close/tab-move operation by request ID, including the last 64 replaced records.", {{"request", str}}, {"request"});
         add("gp_cancel", "Cancel a queued document operation or its observed native dialog; poll gp_operation for the outcome.", {{"request", str}}, {"request"});
+        add("gp_recover", "按 request 重试 recovery_available=true 的失败恢复，目前支持标签重排回滚及部分文档已关闭后的剩余状态核验。只执行保留的恢复步骤，不重放原操作或重新打开文档；核验成功后解除写入阻塞，原始失败和 recovery 结果可通过 gp_operation 查阅。", {{"request", str}}, {"request"});
         add("gp_save_as", "异步原生另存为 .gp；已有目标须 overwrite=true。轮询 gp_operation，saved 后读取 result。", {{"document", str}, {"path", str}, {"overwrite", boolean}}, {"path"});
         add("gp_save", "异步保存 .gp 副本并保留文档状态；已有目标须 overwrite=true。轮询 gp_operation 的 saved/result。", {{"document", str}, {"path", str}, {"overwrite", boolean}}, {"path"});
         add("gp_save_current", "异步保存当前 .gp 路径；轮询 gp_operation 的 saved/result。未命名文档须先 gp_save_as。", {{"document", str}});
@@ -570,6 +605,7 @@ class Bridge : public QObject {
                 return QJsonObject{{"error", "Unknown or expired operation request"}};
             }
             if (tool == "gp_cancel") return cancelOperation(args.value("request").toString());
+            if (tool == "gp_recover") return recoverOperation(args.value("request").toString());
             static const QSet<QString> modalReads{"gp_capabilities", "gp_documents", "gp_score", "gp_read_bars", "gp_read_master_bars", "gp_templates", "gp_objects", "gp_actions", "gp_debug_objects", "gp_debug_resources"};
             static const QSet<QString> dialogActions{"gp_trigger", "gp_set_property", "gp_close_window", "gp_window"};
             if (QApplication::activeModalWidget() && !modalReads.contains(tool) && !dialogActions.contains(tool))
@@ -656,16 +692,20 @@ class Bridge : public QObject {
             if (tool == "gp_activate") return guitarpro::activate(args, services());
             if (tool == "gp_move_document") {
                 archiveOperation(moving);
+                pendingRecovery = {};
                 moving = {{"request", nonce()}, {"kind", "move"}, {"document", args.value("document")}, {"status", "requested"}};
+                recoveryRequest = moving.value("request").toString();
                 QJsonObject result;
-                try { result = guitarpro::moveDocument(args, services()); }
+                try { result = guitarpro::moveDocument(args, services(), pendingRecovery); }
                 catch (const std::exception &exception) { result = {{"error", QString::fromUtf8(exception.what())}, {"outcome_unknown", true}}; }
                 catch (...) { result = {{"error", "Unknown native tab operation exception"}, {"outcome_unknown", true}}; }
                 result["request"] = moving.value("request");
+                result["recovery_available"] = bool(pendingRecovery);
                 moving["result"] = result;
                 moving["status"] = result.contains("error") ? QJsonValue("error") : result.value("status");
                 if (result.contains("error")) moving["error"] = result.value("error");
                 if (result.value("outcome_unknown").toBool()) moving["outcome_unknown"] = true;
+                moving["recovery_available"] = bool(pendingRecovery);
                 return result;
             }
             if (tool == "gp_playback") return guitarpro::playback(args, services());

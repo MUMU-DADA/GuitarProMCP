@@ -1,4 +1,4 @@
-param([Parameter(Mandatory=$true)][string]$Exe)
+param([Parameter(Mandatory=$true)][string]$Exe, [switch]$CloseCleanDocuments)
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
 $Exe = (Resolve-Path -LiteralPath $Exe).Path
@@ -85,6 +85,8 @@ try {
         $before = Check-Order $ids $active
         if ($mode -eq 'throw_recovery') {
             foreach ($id in $ids) { Invoke-McpTool $connection gp_save_current @{document=$id} | Out-Null }
+            $dirtyIds = if ($CloseCleanDocuments) { @($ids[0]) } else { $ids }
+            foreach ($id in $dirtyIds) { Invoke-McpTool $connection gp_edit_metadata @{document=$id;property='Artist';value='Keep through recovery'} | Out-Null }
             Invoke-McpTool $connection gp_activate @{document=$active} | Out-Null
             $before = Check-Order $ids $active
         }
@@ -109,10 +111,68 @@ try {
             Assert ((Invoke-McpTool $connection gp_move_document @{document=$ids[0];index=1} -AllowError).error) 'Unknown tab outcome permitted another move.'
             Assert ((Invoke-McpTool $connection gp_cancel @{request=$result.request} -AllowError).error) 'A completed native move was falsely cancelled.'
             Assert ((Invoke-McpTool $connection gp_operation @{request=$result.request}).operation.outcome_unknown) 'Cancellation cleared an unresolved native outcome.'
+            Assert ($operation.recovery_available -and $result.recovery_available) 'The failed rollback has no retained recovery context.'
+            Assert ((Invoke-McpTool $connection gp_recover @{request=[guid]::NewGuid().ToString()} -AllowError).error) 'An unrelated recovery request was accepted.'
+            Set-Fault 'throw' $ids[0] | Out-Null
+            $failedRecovery = Invoke-McpTool $connection gp_recover @{request=$result.request} -AllowError
+            $stillPending = (Invoke-McpTool $connection gp_operation @{request=$result.request}).operation
+            Assert ($failedRecovery.error -and $failedRecovery.outcome_unknown -and $stillPending.outcome_unknown -and $stillPending.recovery_available -and $stillPending.recovery_attempts -eq 1) 'A repeated recovery exception cleared the guard or lost its context.'
             Set-Fault | Out-Null
+            $window = Invoke-McpTool $connection gp_objects @{query='MainWindow';limit=100}
+            $main = @($window.objects | Where-Object class -EQ 'gp::gui::MainWindow')
+            Invoke-McpTool $connection gp_close_window @{snapshot=$window.snapshot;id=$main[0].id} | Out-Null
+            $deadline = [DateTime]::UtcNow.AddSeconds(8)
+            do {
+                $dialog = Invoke-McpTool $connection gp_dialogs
+                if ($dialog.blocked) { break }
+                Start-Sleep -Milliseconds 50
+            } while ([DateTime]::UtcNow -lt $deadline)
+            $cancel = @($dialog.buttons | Where-Object standard_button -EQ 4194304)
+            Assert ($dialog.blocked -and $cancel.Count -eq 1) 'Expected a native close confirmation during recovery.'
+            Assert ((Invoke-McpTool $connection gp_recover @{request=$result.request} -AllowError).error) 'Recovery entered an active native dialog.'
+            $buttons = Invoke-McpTool $connection gp_objects @{query=$cancel[0].text;limit=100}
+            $button = @($buttons.objects | Where-Object { $_.button -and $_.enabled -and $_.visible -and $_.properties.text -eq $cancel[0].text })
+            Assert ($button.Count -eq 1) 'Could not identify the native Cancel button.'
+            Invoke-McpTool $connection gp_trigger @{snapshot=$buttons.snapshot;id=$button[0].id} | Out-Null
+            $deadline = [DateTime]::UtcNow.AddSeconds(5)
+            do {
+                if (-not (Invoke-McpTool $connection gp_dialogs).blocked) { break }
+                Start-Sleep -Milliseconds 50
+            } while ([DateTime]::UtcNow -lt $deadline)
+            $recovery = Invoke-McpTool $connection gp_recover @{request=$result.request}
+            $recovered = (Invoke-McpTool $connection gp_operation @{request=$result.request}).operation
+            $observations += @{mode='explicit-recovery';failed=$failedRecovery;recovery=$recovery;operation=$recovered}
+            Assert ($recovery.status -eq 'recovered' -and $recovered.recovered -and -not $recovered.outcome_unknown -and -not $recovered.recovery_available -and $recovered.recovery_attempts -eq 2) 'Explicit recovery did not verify and release the original request.'
+            Assert ($recovered.status -eq 'error' -and $recovered.result.error -eq $result.error -and $recovered.result.outcome_unknown -and $recovered.recovery.status -eq 'recovered') 'Recovery rewrote the original failed result.'
+            if ($CloseCleanDocuments) {
+                Assert (-not $recovery.rolled_back -and $recovery.resolution -eq 'documents_closed' -and ($recovery.closed_documents -join ',') -eq ($ids[1..3] -join ',')) 'Closed documents were not reconciled accurately.'
+                $remainingIds = @($ids[0]); $remainingActive = $ids[0]
+            } else {
+                Assert ($recovery.rolled_back -and $recovery.resolution -eq 'rolled_back') 'Recovery did not restore the original tab state.'
+                $remainingIds = $ids; $remainingActive = $active
+            }
+            Check-Order $remainingIds $remainingActive | Out-Null
+            $score = Invoke-McpTool $connection gp_score @{document=$ids[0]}
+            Assert ($score.dirty -and $score.metadata.Artist -eq 'Keep through recovery') 'Recovery lost unsaved edits.'
+            Assert ((Invoke-McpTool $connection gp_recover @{request=$result.request} -AllowError).error) 'Completed recovery was replayed.'
+            Invoke-McpTool $connection gp_edit_metadata @{document=$ids[0];property='Artist';value='Recovered edit'} | Out-Null
+            $copyPath = Join-Path $run 'explicit-recovery.gp'
+            Invoke-McpTool $connection gp_save @{document=$ids[0];path=$copyPath} | Out-Null
+            $open = Invoke-McpTool $connection gp_open @{path=$copyPath}
+            $reopened = (Wait-Operation $open.request 'opened').document
+            Assert ((Invoke-McpTool $connection gp_score @{document=$reopened}).metadata.Artist -eq 'Recovered edit') 'Editing and saving after recovery did not persist.'
+            $close = Invoke-McpTool $connection gp_close @{document=$reopened}
+            Wait-Operation $close.request 'closed' | Out-Null
+            foreach ($id in $remainingIds) { Invoke-McpTool $connection gp_save_current @{document=$id} | Out-Null }
+            Invoke-McpTool $connection gp_move_document @{document=$ids[0];index=($remainingIds.Count - 1)} | Out-Null
+            $archived = (Invoke-McpTool $connection gp_operation @{request=$result.request}).operation
+            Assert ($archived.recovered -and $archived.recovery.status -eq 'recovered') 'A later operation lost recovery history.'
+            Assert ((Invoke-McpTool $connection gp_recover @{request=$result.request} -AllowError).error) 'Archived recovery was replayed.'
+            Invoke-McpTool $connection gp_move_document @{document=$ids[0];index=0} | Out-Null
             break
         }
         Assert ($result.rolled_back -and -not $result.outcome_unknown -and -not $operation.outcome_unknown) 'Native fault did not finish with a verified rollback.'
+        Assert ((Invoke-McpTool $connection gp_recover @{request=$result.request} -AllowError).error) 'A completed rollback was recovered again.'
         Set-Fault | Out-Null
         foreach ($id in $ids) {
             Invoke-McpTool $connection gp_undo_redo @{document=$id;operation='undo'} | Out-Null
@@ -150,7 +210,7 @@ try {
     Set-Fault | Out-Null
     $connection = $connectionForReset
     if ($connection -and $process -and -not $process.HasExited) { Close-McpSession $connection }
-    @{passed=$passed;checks=$checks;observations=$observations;host_pid=$(if($process){$process.Id});session_file=$sessionFile;exit_code=$(if($process -and $process.HasExited){$process.ExitCode});powershell=$PSVersionTable.PSVersion.ToString();plugin_sha256=(Get-FileHash "$root/.tools/native/plugins/generic/guitarpro_mcp.dll").Hash;probe_sha256=(Get-FileHash $probe).Hash;tab_rollback_verified=$passed;recovery_exception_guard_verified=$passed} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $run 'verification.json') -Encoding UTF8
+    @{passed=$passed;checks=$checks;observations=$observations;host_pid=$(if($process){$process.Id});session_file=$sessionFile;exit_code=$(if($process -and $process.HasExited){$process.ExitCode});powershell=$PSVersionTable.PSVersion.ToString();plugin_sha256=(Get-FileHash "$root/.tools/native/plugins/generic/guitarpro_mcp.dll").Hash;probe_sha256=(Get-FileHash $probe).Hash;tab_rollback_verified=$passed;recovery_exception_guard_verified=$passed;explicit_recovery_verified=$passed;closed_document_reconciliation_verified=($passed -and $CloseCleanDocuments.IsPresent)} | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $run 'verification.json') -Encoding UTF8
     if ($process) {
         if (-not $process.HasExited) { Write-Warning "Tab recovery host retained: PID $($process.Id), session $sessionFile" }
         $process.Dispose()

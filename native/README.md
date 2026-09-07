@@ -94,6 +94,7 @@ try {
 | `gp_close` | `document`, `unsaved?`, `path?`, `overwrite?` | 明确保存、丢弃或取消后关闭；默认拒绝未保存修改；返回请求 ID |
 | `gp_operation` | `request` | 返回 `operation` 状态，查询当前新建/打开/保存/关闭及最近 64 条被替换的请求记录 |
 | `gp_cancel` | `request` | 取消未调度的操作或识别到的原生对话框；返回 `cancelling` 时须继续确认结果 |
+| `gp_recover` | `request` | 重试 `recovery_available=true` 的标签回滚，或核验部分文档关闭后的剩余状态；不会重放原操作 |
 | `gp_activate` | `document` | 调用原生 `activateNextDocumentView` 导航至目标，并读回文档管理器确认 |
 | `gp_score` | `document?` | 读取元数据、音轨摘要、光标、未保存和撤销重做状态 |
 | `gp_read_bars` | `document?`, `track?=0`, `staff?=0`, `bar?=0`, `count?=1` | 每次读取 1–16 个完整存在的小节，音符包括 `effects`；单次节拍/音符读取量有上限 |
@@ -136,7 +137,7 @@ PowerShell 的 `Invoke-McpTool` 默认等待三个保存工具的结果，保持
 
 `test-saving.ps1` 的 47 项检查覆盖当前路径保存、显式覆盖、复制和另存为、跨文档保护、锁定目标和缺失目录、GPIF 与原生重开、未命名文档拒绝及临时文件清理，并检查中文文件名、两种路径、标签/提示/窗口/对应菜单名称、旧路径独立打开和新路径复用。菜单名称检查按当前 `Tab_N` 对应的 `OpenedDocumentAction_N` 定位，因为宿主会保留已关闭文档的动作对象；此检查不证明菜单可用性。锁定文件的拒绝发生在原生写入之前，不能代替写入中途失败后的恢复验证。保存后撤销再重做恢复内容，当前宿主仍可能报告未保存；再次保存会恢复其原生已保存状态。
 
-`test-save-recovery.ps1` 另有 264 项故障检查：向独立测试进程加载 `save-fault-probe`，只对随机命名的目标及其宿主备份注入 Windows 部分写入错误、输出损坏、恢复锁定和原生通知 C++ 异常。宿主会先重试备份写入，再尝试直接写目标，因此写入故障持续到当前请求结束。保存后校验测试在观察到原生 `isDirtyChanged(false)` 后破坏输出，验证原文件、路径和未保存标记恢复，以及撤销、重做和再次保存重开。异常测试覆盖当前保存、另存、全新文件、保存后关闭和打开路径通知；恢复通知再次异常时验证备份保留、未保存内容可读和写入阻塞，最后通过原生关闭确认丢弃唯一的测试文档并检查正常退出。探针通过独立构建生成，生产安装包不包含它；测试只接受 `.tools` 下的隔离宿主。
+`test-save-recovery.ps1` 另有 265 项故障检查：向独立测试进程加载 `save-fault-probe`，只对随机命名的目标及其宿主备份注入 Windows 部分写入错误、输出损坏、恢复锁定和原生通知 C++ 异常。宿主会先重试备份写入，再尝试直接写目标，因此写入故障持续到当前请求结束。保存后校验测试在观察到原生 `isDirtyChanged(false)` 后破坏输出，验证原文件、路径和未保存标记恢复，以及撤销、重做和再次保存重开。异常测试覆盖当前保存、另存、全新文件、保存后关闭和打开路径通知；恢复通知再次异常时验证备份保留、未保存内容可读和写入阻塞，未支持的 `gp_recover` 请求不能清除未知结果，最后通过原生关闭确认丢弃唯一的测试文档并检查正常退出。探针通过独立构建生成，生产安装包不包含它；测试只接受 `.tools` 下的隔离宿主。
 
 ```powershell
 ./native/build-save-fault-probe.ps1
@@ -347,13 +348,18 @@ Invoke-McpTool $connection gp_undo_redo @{operation='undo';document=$target}
 
 该版本使用自定义 `am::gui::Tab`、`QBoxLayout` 与 `QStackedWidget`，并非 `QTabBar`。重排前保存全部标签和页面的对象快照，在 Qt 线程内同步排列并屏蔽页面栈的中间信号，再由原生标签通知更新宿主状态。完成校验包含全部标签/页面顺序和活动文档，不能只核对目标索引。
 
-原生通知抛异常或校验失败时，尝试恢复整个原排列；恢复时先同步当前页面对应标签，再选择原活动标签，避免宿主保留的选择索引使激活被跳过。确认恢复后返回 `error`、`rolled_back=true`，允许后续操作；异常另有 `native_exception=true`。回滚再次异常或无法确认时返回 `rolled_back=false`、`outcome_unknown=true`，异常细节在 `recovery_error`，请求保留写入阻塞。`gp_cancel` 不会把已经执行的重排当作可取消操作；需检查文档和原生界面，后续状态协调仍待完成。
+原生通知抛异常或校验失败时，尝试恢复整个原排列；恢复时先同步当前页面对应标签，再选择原活动标签，避免宿主保留的选择索引使激活被跳过。确认恢复后返回 `error`、`rolled_back=true`，允许后续操作；异常另有 `native_exception=true`。回滚再次异常或无法确认时返回 `rolled_back=false`、`outcome_unknown=true`，异常细节在 `recovery_error`，请求保留写入阻塞。`gp_cancel` 不会把已经执行的重排当作可取消操作。
 
-独立 `test-tab-recovery.ps1` 在四份隔离文档上执行 303 项检查：额外标签交换、活动文档切换、活动/非活动标签通知异常、回滚通知再次异常；核对完整原顺序、UUID、路径、未保存内容、撤销重做、保存副本重开、再次移动、历史记录和未知结果写入阻塞。探针只允许绑定标记目录中的四份测试文档，不进入生产包。
+有保留快照时，失败响应及 `gp_operation` 的 `recovery_available=true`。使用 `gp_recover request=...` 重试恢复；它拒绝原生操作尚在执行、存在模态对话框、过期请求及已完成恢复。再次恢复失败保留阻塞和上下文，可在排除故障后继续恢复。成功返回 `status=recovered`，清除当前请求的 `outcome_unknown` 并释放快照，但原请求 `status=error` 和原始 `result` 保持不变；后续结果在 `operation.recovery`，另有 `recovery_attempts` 和 `recovered=true`，归档后仍可查询。
+
+`resolution=rolled_back` 表示完整原顺序和活动文档已恢复。宿主关闭主窗口时会先关闭干净文档，再询问未保存文档，因此取消确认框后可能只剩部分文档。原对象已销毁且剩余标签、页面、相对顺序、文档数量和原生活动文档均可验证时，恢复返回 `resolution=documents_closed`、`closed_documents` 和 `rolled_back=false`；这表示已确认后续原生关闭，不是恢复原排列，不会重新打开文件。剩余状态无法核验时继续阻塞，不强制清除未知结果。保存等其他操作尚未接入该恢复入口。
+
+独立 `test-tab-recovery.ps1` 的标准分支在四份隔离文档上执行 330 项检查，`-CloseCleanDocuments` 分支执行 327 项：额外重排、活动文档切换、活动/非活动标签通知异常、回滚再次异常、显式恢复失败与成功、模态拒绝、过期/重复请求、恢复后编辑与保存重开，以及部分文档被宿主关闭后的核验。保留原有身份、内容、撤销、保存副本、再次移动和历史记录检查。探针只允许绑定标记目录中的四份测试文档，不进入生产包。
 
 ```powershell
 ./native/build-tab-fault-probe.ps1
 ./native/test-tab-recovery.ps1 -Exe '<isolated .tools host>/GuitarPro.exe'
+./native/test-tab-recovery.ps1 -Exe '<isolated .tools host>/GuitarPro.exe' -CloseCleanDocuments
 ```
 
 `native/test-document-tabs.ps1` 的基础 196 项覆盖同名路径、两份同模板未命名文档、四份未保存文档、边界及错误参数、活动文档与 UUID、撤销重做、标签坐标、模态拒绝、保存重开、错位关闭，以及原生关闭确认框存在时恢复窗口后仍可取消。`-VerifyDocumentMenu` 扩展到 281 项，实际触发重排前后及三次隐藏/恢复后的五个文档菜单，逐项核对目标并验证重新隐藏后不占前台。`test-all.ps1` 默认启用这一分支，动作未启用或目标不符均失败。
@@ -430,7 +436,7 @@ IDocumentsManager + 0x10 → 管理器实现对象
 
 ## 验证
 
-当前标签故障回滚检查点的核心在 Windows PowerShell 5.1 和 PowerShell 7 下分别通过十六组、2574 项完整回归，其中包含 281 项标签与原生菜单检查，另分别通过标签故障恢复 303 项，并在 Windows PowerShell 5.1 通过保存故障恢复 264 项。此前保存异常恢复、窗口恢复、另存修复、标签重排以及后台 DDE/连接 61 项、可见 DDE/连接 60 项属于旧构建证据。准确证据和运行条件见 [当前验证证据](../COVERAGE.md#当前验证证据)，完整任务见 [开发计划](../DEVELOPMENT_PLAN.md)。下方保留的旧轮次不代表当前完整验收结果。
+当前显式标签恢复检查点的核心在 Windows PowerShell 5.1 和 PowerShell 7 下分别通过十六组、2574 项完整回归，其中包含 281 项标签与原生菜单检查；两个版本另各通过显式标签恢复 330 项、部分文档关闭后核验 327 项，并在 Windows PowerShell 5.1 通过保存故障恢复 265 项。此前标签回滚、保存异常恢复、窗口恢复、另存修复、标签重排以及后台 DDE/连接 61 项、可见 DDE/连接 60 项属于旧构建证据。准确证据和运行条件见 [当前验证证据](../COVERAGE.md#当前验证证据)，完整任务见 [开发计划](../DEVELOPMENT_PLAN.md)。下方保留的旧轮次不代表当前完整验收结果。
 
 按根目录 [README](../README.md) 使用完整回归入口；可用 `-Exe` 指定隔离宿主：
 
