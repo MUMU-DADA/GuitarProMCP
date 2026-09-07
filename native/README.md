@@ -108,14 +108,14 @@ try {
 | `gp_edit_tracks` | `document?`, `operation`, `track`, `other?` | `duplicate` 复制到源轨之后，`remove` 删除，`swap` 与 `other` 交换 |
 | `gp_insert_track` | `document?`, `source_document?`, `source_track`, `index?`, `copy_content?=false` | 基于现有音轨配置新增，源文档默认目标文档，插入位置默认末尾 |
 | `gp_cursor` | `document?`, `axis`, `index` | `axis` 为 `track`、`staff`、`bar`、`voice` 或 `beat`；每次修改一个索引；声部 0–3 |
-| `gp_selection` | `document?`, `operation?=state`, `base?`, `extent?`, `note_index?`, `all_voices?`, `all_tracks?` | 读取、构造并提交原生选区；参数和范围见下文 |
+| `gp_selection` | `document?`, `operation?=state`, `base?`, `extent?`, `note_index?`, `all_voices?`, `all_tracks?`, `tracks?`, `staves?`, `voices?` | 读取、构造并提交原生选区；三个索引数组只用于 `beats` 筛选 |
 | `gp_set_fret` | `document?`, `string`, `fret` | 修改当前光标节拍中指定弦的已有音符；品位 0–36 |
 | `gp_edit_note` | `document?`, `operation`, `string?`, `fret?`, `midi?` | 弦乐用弦号和品位；键盘和打击乐用 MIDI 0..127，不能混用两套定位参数；`set` 新增、`remove` 删除 |
 | `gp_edit_note_effect` | `document?`, `string?`, `note_index?`, `property`, `value` | 用弦号或 `notes` 数组下标选择已有单音，支持原生撤销；取值见下表 |
 | `gp_edit_beat_effect` | `document?`, `property`, `value` | 修改当前单拍的装饰音、扫拨方向、渐强弱、轮指等技法，支持撤销 |
 | `gp_edit_beat` | `document?`, `operation`, `denominator?`, `dots?`, `scope?=cursor`, `level?`, `actual?`, `normal?`, `enabled?` | `insert` 插入休止拍，`rhythm` 设置基础时值，`dots` 设置附点，`tuplet` 设置连音，`clear` 清空音符，`remove` 删除节拍；`scope=selection` 接受 `rhythm/dots/tuplet` |
 | `gp_edit_connection` | `document?`, `kind`, `enabled`, `scope?=cursor`, `string?` | `legato` 连奏或 `tie` 延音线；指定弦单音仅用于光标延音线；选区支持跨声部、音轨及谱表 |
-| `gp_clipboard` | 按操作提供 `document?`, `id?`, `scope?`, `track?`, `staff?`, `bar?`, `count?` | 原生独立快照的复制、剪切、读取和粘贴；见原生剪贴板章节 |
+| `gp_clipboard` | 按操作提供 `document?`, `id?`, `scope?`, `repeat?`, `include_text?`, `track?`, `staff?`, `bar?`, `count?` | 原生独立快照的复制、剪切、读取和粘贴；见原生剪贴板章节 |
 | `gp_edit_bars` | `document?`, `operation`, `index`, `count?=1` | `insert` / `remove` 同步增删所有音轨的小节，数量 1–128；曲谱最多 100000 小节 |
 | `gp_undo_redo` | `document?`, `operation` | `operation` 为 `undo` 或 `redo`，必须存在相应历史 |
 | `gp_save` | `document?`, `path`, `overwrite?` | 调用 `IDocument::saveToFile` 保存 `.gp` 副本，不改变原文档保存路径和未保存状态 |
@@ -209,6 +209,10 @@ Invoke-McpTool $connection gp_undo_redo @{operation='undo'}
 
 非跨轨选区使用原生 `flatten::beats(range)` 按音乐时间映射声部。四声部夹具验证：一个四分音符的时间范围可同时选中另一声部的两个八分音符，以及同起点的二分和全音符；选区起点之前开始的长音不会因延续到选区内而被纳入。时值修改会改变音乐时间，所以再次编辑之前应重新读取实际目标，不能假设多声部的目标列表保持不变。
 
+`gp_selection operation=beats` 和 `gp_edit_beat scope=selection` 接受可选的 `tracks`、`staves`、`voices` 非空、无重复索引数组，只筛选本次调用的目标，不改变界面选区，也不影响其他工具。跨轨或跨谱表筛选先建立 `all_tracks=true` 选区；只扩展声部时先用 `all_voices=true`。每条选中音轨必须存在指定谱表，缺失索引或越出原选区会在修改前拒绝。扫描上限仍按完整原选区计算。
+
+批量 `clear` 将选中节拍变为休止并保留时值；`remove` 删除节拍但保留全曲小节结构。两者沿用逐声部原生命令及一次撤销。筛选同样适用于 `rhythm/dots/tuplet`；先以完全相同的筛选调用 `gp_selection beats` 核对目标。音轨集合剪贴板仍按单轨或全轨模式使用，不保存另一套插件选区。
+
 宿主的 `flatten::beats` 和时值命令不会自动展开全部音轨。插件先检查各轨、各谱表的节拍，再构造独立单声部范围，逐一与原生遍历结果核对。涉及多个范围时，使用已验证为 24 字节、8 字节对齐的 `MacroCommandRecorder` 排队，在提交后的析构中执行，产生一条原生撤销记录；单范围直接使用宿主命令。逐拍读回后返回实际 `beats` 和 `affected_beats`，相同目标全部已为请求值时不增加历史。整曲和跨轨固定小节范围已验证重复设置、一次撤销、重做和原生保存重开。
 
 ## 原生连音
@@ -267,17 +271,19 @@ Invoke-McpTool $connection gp_edit_connection @{kind='tie';enabled=$false;string
 | `clear` | 无 | 清空插件当前缓冲区，使旧 `id` 失效 |
 | `copy` / `cut` | `document?` | 从明确选区构造快照；剪切随后调用原生删除命令 |
 | `read` | `id`, `track?=0`, `staff?=0`, `bar?=0`, `count?=1` | 分页读取快照，最多 16 小节；索引属于快照，非源文档 |
-| `paste` | `id`, `document?`, `scope?=cursor` | `cursor` 使用独立光标范围插入；`selection` 使用当前明确选区替换 |
+| `paste` | `id`, `document?`, `scope?=cursor`, `repeat?=1`, `include_text?=false` | `cursor` 插入；`selection` 替换；重复 1..100 次，可包含节拍文本 |
 
-每个插件实例仅保留一个当前快照，所有客户端共享；`read/paste` 必须提供匹配的 `id`，拒绝旧快照请求。`copy/read/state` 不激活源文档，`cut/paste` 在参数和兼容性校验之后才激活目标。复制范围沿用上述选区的 128 小节、1024 音轨和 20000 拍扫描上限；纯占位拍选区不能复制。粘贴按插入上界检查总小节数不超过 100000。
+每个插件实例仅保留一个当前快照，所有客户端共享；`read/paste` 必须提供匹配的 `id`，拒绝旧快照请求。`copy/read/state` 不激活源文档，`cut/paste` 在参数和兼容性校验之后才激活目标。复制范围沿用上述选区的 128 小节、1024 音轨和 20000 拍扫描上限；纯占位拍选区不能复制。重复后的片段最多 128 小节、20000 拍（含快照补齐的休止及占位拍），目标总小节数的保守插入上界为 100000；超限在修改前拒绝。
 
-单小节、非多轨片段使用 `Score::pasteBeatRange`。多轨或超过一个小节的片段使用 `Score::pasteBarRange`，重复次数为 1，模式为宿主普通粘贴的不适配模式 0。插入全曲共享小节时，其他音轨的原内容顺移；复制单轨片段时，其他轨的新小节为空。返回 `native_method`、`previous_bar_count` 和 `global_bar_delta`，应再次读取完整目标范围确认结果。
+单小节、非多轨片段使用 `Score::pasteBeatRange`。多轨或超过一个小节的片段使用 `Score::pasteBarRange`，`repeat` 直接传入原生命令，整次粘贴可以一次撤销。默认模式为 0；`include_text=true` 仅启用特别粘贴的文本位 2，保留节拍自由文本。`gp_read_bars` 与快照 `read` 的节拍 `text` 可读回。其他特别粘贴过滤项未开放。
 
-多声部片段要求目标光标处于全部声部模式。可先调用 `gp_selection range`，设置 `all_voices=true`，再以 `scope=cursor` 插入；不要在两次调用之间清除选择模式。原生兼容性检查还会拒绝不匹配的多轨数量或类型，返回宿主的 `native_incompatibility` 编码。已验证单小节选区替换；复杂跨小节替换、不同调弦/移调和打击乐之间的粘贴尚需扩大验证。
+插入全曲共享小节时，其他音轨的原内容顺移；复制单轨片段时，其他轨的新小节为空。返回 `native_method`、`previous_bar_count` 和 `global_bar_delta`，应再次读取目标范围确认结果。跨小节或多轨片段以 `scope=selection` 替换时，必须先明确建立 `all_tracks=true` 整小节选区；宿主的部分小节替换会丢失选区末端以后的拍，因此插件在修改前拒绝这种请求，不自动拼接边界内容。
+
+多声部片段要求目标光标处于全部声部模式。可先调用 `gp_selection range`，设置 `all_voices=true`，再以 `scope=cursor` 插入；不要在两次调用之间清除选择模式。原生兼容性检查拒绝不匹配的多轨数量或模式，返回 `native_incompatibility`。插件另拒绝有音高与无固定音高打击乐之间的粘贴，并预检目标打击乐是否有全部 MIDI 演奏法。键盘片段粘到弦乐需指法分配，本次不支持；弦乐来源必须能在目标原弦的 0..36 品保留音高。已验证不同调弦、变调夹及记谱移调的实音保持，未进行自动指法搜索。
 
 快照可能包含宿主自动补齐的休止，故 `beat_count` 是源选区的实际拍数，不是快照的总拍数。实测两个四分音符的选择范围在较短声部末尾补入一个四分休止。钢琴快照保留双谱表，可用 `tracks[].staves` 和 `source_selection` 确定读取位置；下谱表仍用 `staff=1`。跨小节粘贴后，光标所在的最后一拍还可能是新生成的空占位拍。测试分别核对这些新增内容。
 
-普通单声部剪切使用 `Score::removeBeatRange`，多轨剪切使用 `Score::removeBarRange` 删除全曲共享小节。宿主直接删除多声部范围会在撤销记录之外补齐短声部；插件改用已经核对过的逐声部范围与原生宏命令，保持一次撤销并恢复原始音乐内容。单小节多声部剪切的精确恢复已验证，跨小节剪切和复杂节奏仍需扩大测试。
+普通单声部剪切使用 `Score::removeBeatRange`，多轨剪切使用 `Score::removeBarRange` 删除全曲共享小节。宿主直接删除多声部范围会在撤销记录之外补齐短声部；插件改用已核对的逐声部范围与原生宏命令，保持一次撤销并恢复原始音乐内容。单小节多声部及跨小节剪切已验证边界保留、撤销重做和保存重开。
 
 ```powershell
 $snapshot = Invoke-McpTool $connection gp_clipboard @{operation='copy';document=$source}
@@ -286,7 +292,7 @@ Invoke-McpTool $connection gp_clipboard @{operation='paste';id=$snapshot.id;docu
 Invoke-McpTool $connection gp_undo_redo @{operation='undo';document=$target}
 ```
 
-此缓冲区位于 Guitar Pro 进程内，与 Windows 系统剪贴板独立。宿主剪贴板互通处于以下实验阶段；特别粘贴过滤项、重复粘贴次数和其他自适应模式尚未实现。
+此缓冲区位于 Guitar Pro 进程内，与 Windows 系统剪贴板独立。宿主剪贴板互通处于以下实验阶段；本次按最小必要范围不增加独立 Windows 用户环境、任意音轨集合剪贴板、其余特别粘贴过滤项或自动指法映射。
 
 ### 宿主剪贴板实验
 

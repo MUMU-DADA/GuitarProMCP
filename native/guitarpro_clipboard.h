@@ -87,7 +87,7 @@ inline QJsonObject clipboard(const QJsonObject &args, ScoreClipboard &buffer, co
     if (operation == "copy" || operation == "cut") allowed.insert("document");
     else if (operation == "native_copy") allowed.unite({"document", "sequence"});
     else if (operation == "native_import") allowed.insert("sequence");
-    else if (operation == "paste") allowed.unite({"document", "id", "scope"});
+    else if (operation == "paste") allowed.unite({"document", "id", "scope", "repeat", "include_text"});
     else if (operation == "read") allowed.unite({"id", "track", "staff", "bar", "count"});
     else if (operation != "state" && operation != "clear" && operation != "native_state")
         return {{"error", "operation must be state, copy, cut, paste, read, clear, native_state, native_copy or native_import"}};
@@ -189,23 +189,73 @@ inline QJsonObject clipboard(const QJsonObject &args, ScoreClipboard &buffer, co
     }
     const QString scope = args.value("scope").toString("cursor");
     if (scope != "cursor" && scope != "selection") return {{"error", "scope must be cursor or selection"}};
+    const int repeat = args.value("repeat").toInt(1);
+    if (repeat < 1 || repeat > 100 || (args.contains("repeat") &&
+        (!args.value("repeat").isDouble() || args.value("repeat").toDouble() != repeat)))
+        return {{"error", "repeat must be an integer in 1..100"}};
+    if (args.contains("include_text") && !args.value("include_text").isBool()) return {{"error", "include_text must be boolean"}};
     const auto &tracks = document.score->tracks();
     if (cursor.trackIndex() < 0 || size_t(cursor.trackIndex()) >= tracks.size() || !cursor.staff() || cursor.barIndex() < 0)
         return {{"error", "Paste requires a cursor in an existing track, staff and bar"}};
     const auto master = document.score->masterTrack();
-    if (!master || master->masterBarCount() > 100000 || unsigned(cursor.barIndex()) + buffer.content->barCount() > 100000)
+    const quint64 repeatedBars = quint64(buffer.content->barCount()) * unsigned(repeat);
+    if (repeatedBars > 128) return {{"error", "Repeated clipboard content must not exceed 128 bars"}};
+    quint64 repeatedBeats = 0;
+    for (const auto &track : buffer.content->score().tracks())
+        for (const auto &staff : track->staves()) for (const auto &bar : staff->bars())
+            for (const auto &voice : static_cast<const gp::core::Bar &>(*bar).voices()) if (voice)
+                repeatedBeats += quint64(voice->beats().size()) * unsigned(repeat);
+    if (repeatedBeats > 20000) return {{"error", "Repeated clipboard content must not exceed 20000 beats"}};
+    if (!master || master->masterBarCount() > 100000 || unsigned(cursor.barIndex()) + repeatedBars > 100000)
         return {{"error", "Paste would exceed the supported score size"}};
     const unsigned previousBars = master->masterBarCount();
     const bool bars = buffer.content->isMultiTrack() || buffer.content->barCount() > 1;
-    if (bars && previousBars + buffer.content->barCount() > 100000)
+    if (bars && previousBars + repeatedBars > 100000)
         return {{"error", "Bar insertion would exceed the supported score size"}};
     if (!buffer.content->isCompatibleWith(*document.score))
         return {{"error", "Native clipboard is incompatible with the destination score or cursor mode; multi-voice fragments require an all-voices destination"},
             {"native_incompatibility", QString::number(buffer.content->incompatiblePasteTypeWith(*document.score))}};
+    const auto &sourceTracks = buffer.content->score().tracks();
+    for (size_t t = 0; t < sourceTracks.size(); ++t) {
+        const size_t targetIndex = buffer.content->isMultiTrack() ? t : size_t(cursor.trackIndex());
+        if (targetIndex >= tracks.size() || !tracks[targetIndex] || !sourceTracks[t])
+            return {{"error", "Clipboard track mapping is unavailable"}};
+        const auto &sourceTrack = sourceTracks[t];
+        const auto &targetTrack = tracks[targetIndex];
+        if (sourceTrack->instrumentSet().isUnpitched() != targetTrack->instrumentSet().isUnpitched())
+            return {{"error", "Pitched and unpitched clipboard content cannot be exchanged"}};
+        const bool targetStringed = gp::core::InstrumentSet::isStringed(targetTrack->type());
+        if (targetStringed && !gp::core::InstrumentSet::isStringed(sourceTrack->type()))
+            return {{"error", "Pasting to strings requires a stringed source; automatic fingering is unsupported"}};
+        for (size_t s = 0; s < sourceTrack->staves().size(); ++s) {
+            const auto &staff = sourceTrack->staves()[s];
+            const size_t targetStaffIndex = buffer.content->isMultiTrack() ? s : size_t(cursor.staffIndex());
+            if (targetStaffIndex >= targetTrack->staves().size()) return {{"error", "Clipboard staff mapping is unavailable"}};
+            const auto &targetStaff = targetTrack->staves()[targetStaffIndex];
+            for (const auto &bar : staff->bars())
+            for (const auto &voice : static_cast<const gp::core::Bar &>(*bar).voices()) if (voice)
+                for (const auto &beat : voice->beats()) for (const auto &note : beat->notes()) {
+                    if (!note || (targetTrack->instrumentSet().isUnpitched() &&
+                        targetTrack->instrumentSet().indexOfArticulationWithMidi(note->midi()) < 0))
+                        return {{"error", "Destination percussion instrument cannot represent every copied note"}};
+                    if (targetStringed) {
+                        const auto &pitches = targetStaff->tuning().midiNumbers();
+                        const auto &partial = targetStaff->partialCapoStringFlags();
+                        const unsigned string = note->string();
+                        if (string >= pitches.size()) return {{"error", "Destination lacks a copied string"}};
+                        const int fret = note->midi() - pitches[string] - targetStaff->capoFret() -
+                            (string < partial.size() && partial[string] ? targetStaff->partialCapoFret() : 0);
+                        if (fret < 0 || fret > 36) return {{"error", "Pasted pitches must remain playable on their copied strings within frets 0..36"}};
+                    }
+                }
+        }
+    }
     if (scope == "selection") {
         BeatSelection destination;
         const auto error = collectBeatSelection(document.score, destination);
         if (!error.isEmpty()) return {{"error", error}};
+        if (bars && !cursor.selectionRange().isMultiTrack())
+            return {{"error", "Cross-bar replacement requires an all_tracks whole-bar selection; the host can discard unselected boundary beats otherwise"}};
     }
     const auto &selection = cursor.selectionRange();
     const auto &base = scope == "selection" ? selection.lowerModelIndex() : cursor.modelIndex();
@@ -215,12 +265,14 @@ inline QJsonObject clipboard(const QJsonObject &args, ScoreClipboard &buffer, co
     const auto active = activate(QJsonObject{{"document", document.id()}}, objects);
     if (active.contains("error")) return active;
     // Verified normal-paste dispatch in GuitarPro.exe (RVA 0x10A574).
-    // Mode 0 follows its non-adapting normal paste; special-paste flags are separate.
-    const auto mode = static_cast<gp::core::SerializedScore::OverridingMode>(0);
-    if (bars) document.score->pasteBarRange(buffer.content, destination, 1, mode);
-    else document.score->pasteBeatRange(buffer.content, destination, 1, mode);
+    // Native special-paste bit 1 retains Beat::freeText; normal paste clears it.
+    const auto mode = static_cast<gp::core::SerializedScore::OverridingMode>(args.value("include_text").toBool() ? 2 : 0);
+    if (bars) document.score->pasteBarRange(buffer.content, destination, unsigned(repeat), mode);
+    else document.score->pasteBeatRange(buffer.content, destination, unsigned(repeat), mode);
     auto result = scoreState(QJsonObject{{"document", document.id()}});
     result["clipboard_id"] = buffer.metadata.value("id");
+    result["repeat"] = repeat;
+    result["include_text"] = args.value("include_text").toBool();
     result["native_method"] = bars ? "Score::pasteBarRange" : "Score::pasteBeatRange";
     result["previous_bar_count"] = int(previousBars);
     result["global_bar_delta"] = int(master->masterBarCount()) - int(previousBars);

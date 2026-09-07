@@ -767,7 +767,7 @@ struct BeatSelection {
     std::vector<std::unique_ptr<gp::core::ScoreModelRange>> ranges;
     int placeholders = 0;
 };
-inline QString collectBeatSelection(gp::core::Score *score, BeatSelection &output) {
+inline QString collectBeatSelection(gp::core::Score *score, BeatSelection &output, const QJsonObject &filters = {}) {
     const auto &range = score->cursor().selectionRange();
     const auto &lower = range.lowerModelIndex(), &upper = range.upperModelIndex();
     const int first = lower.barIndex(), last = upper.barIndex();
@@ -778,6 +778,33 @@ inline QString collectBeatSelection(gp::core::Score *score, BeatSelection &outpu
         return "Selection endpoints must share a track, staff and voice";
     if (lower.trackIndex() < 0 || size_t(lower.trackIndex()) >= tracks.size() || lower.voiceIndex() >= 4)
         return "Selection track or voice is unavailable";
+    QHash<QString, QSet<int>> subsets;
+    for (const char *axis : {"tracks", "staves", "voices"}) {
+        if (!filters.contains(axis)) continue;
+        const auto values = filters.value(axis);
+        if (!values.isArray() || values.toArray().isEmpty()) return "Selection filters must be nonempty integer arrays";
+        auto &subset = subsets[axis];
+        for (const auto &value : values.toArray()) {
+            const int index = value.toInt(-1);
+            const int limit = QString(axis) == "tracks" ? int(tracks.size()) : QString(axis) == "voices" ? 4 : 32;
+            if (!value.isDouble() || value.toDouble() != index || index < 0 || index >= limit || subset.contains(index))
+                return "Selection filters contain duplicate or unavailable indices";
+            subset.insert(index);
+        }
+    }
+    if (subsets.contains("tracks") && !range.isMultiTrack() && subsets["tracks"] != QSet<int>{lower.trackIndex()})
+        return "Selecting other tracks requires an all_tracks range";
+    if (subsets.contains("staves")) {
+        if (!range.isMultiTrack() && subsets["staves"] != QSet<int>{int(lower.staffIndex())})
+            return "Selecting other staves requires an all_tracks range";
+        for (size_t t = 0; t < tracks.size(); ++t) {
+            if (subsets.contains("tracks") ? !subsets["tracks"].contains(int(t)) : !range.isMultiTrack() && int(t) != lower.trackIndex()) continue;
+            for (int staff : subsets["staves"])
+                if (!tracks[t] || unsigned(staff) >= tracks[t]->staffCount()) return "A selected track lacks a requested staff";
+        }
+    }
+    if (subsets.contains("voices") && !range.isMultiVoice() && !range.isMultiTrack() && subsets["voices"] != QSet<int>{int(lower.voiceIndex())})
+        return "Selecting other voices requires an all_voices range";
     struct Candidate { std::shared_ptr<gp::core::Beat> beat; int track, staff, bar, voice, index; };
     std::vector<Candidate> candidates;
     const bool allTracks = range.isMultiTrack(), allVoices = allTracks || range.isMultiVoice();
@@ -817,6 +844,9 @@ inline QString collectBeatSelection(gp::core::Score *score, BeatSelection &outpu
     std::vector<Candidate> targets;
     for (const auto &candidate : candidates) {
         if (!allTracks && !selected.remove(candidate.beat.get())) continue;
+        if ((subsets.contains("tracks") && !subsets["tracks"].contains(candidate.track)) ||
+            (subsets.contains("staves") && !subsets["staves"].contains(candidate.staff)) ||
+            (subsets.contains("voices") && !subsets["voices"].contains(candidate.voice))) continue;
         if (candidate.beat->isPlaceholder()) {
             if (!candidate.beat->isRest() || !candidate.beat->notes().empty()) return "Unexpected musical content in a placeholder";
             ++output.placeholders;
@@ -852,6 +882,7 @@ inline QJsonObject selection(const QJsonObject &args, const QList<QPointer<QObje
     if (operation == "range") allowed.unite({"base", "extent", "all_voices", "all_tracks"});
     else if (operation == "note") allowed.unite({"base", "note_index"});
     else if (operation == "all") allowed.unite({"all_voices", "all_tracks"});
+    else if (operation == "beats") allowed.unite({"tracks", "staves", "voices"});
     else if (operation != "state" && operation != "beats" && operation != "clear") return {{"error", "operation must be state, beats, range, note, all or clear"}};
     for (auto it = args.begin(); it != args.end(); ++it)
         if (!allowed.contains(it.key())) return {{"error", "Argument does not apply to this selection operation: " + it.key()}};
@@ -859,7 +890,7 @@ inline QJsonObject selection(const QJsonObject &args, const QList<QPointer<QObje
     if (operation == "state") return {{"document", document.id()}, {"cursor", cursorState(document.score)}};
     if (operation == "beats") {
         BeatSelection targets;
-        const auto error = collectBeatSelection(document.score, targets);
+        const auto error = collectBeatSelection(document.score, targets, args);
         if (!error.isEmpty()) return {{"error", error}};
         return {{"document", document.id()}, {"beats", targets.positions}, {"count", int(targets.beats.size())},
             {"skipped_placeholders", targets.placeholders}, {"cursor", cursorState(document.score)}};
@@ -1026,7 +1057,7 @@ inline QJsonObject readBarsForScore(const gp::core::Score *score, const QJsonObj
                 }
                 beats.append(QJsonObject{{"index", int(k)}, {"rest", beat.isRest()}, {"placeholder", beat.isPlaceholder()}, {"rhythm", beat.rhythm().toQString()},
                     {"native_note_value", int(beat.rhythm().getNoteValue())}, {"dots", int(beat.rhythm().getAugmentationDot())},
-                    {"tuplets", tupletState(beat.rhythm())}, {"effects", beatEffects(beat)},
+                    {"tuplets", tupletState(beat.rhythm())}, {"effects", beatEffects(beat)}, {"text", QString::fromStdString(beat.freeText())},
                     {"legato", QJsonObject{{"origin", beat.isLegatoOrigin()}, {"destination", beat.isLegatoDestination()}}}, {"notes", notes}});
             }
             voices.append(QJsonObject{{"index", int(v)}, {"beats", beats}});
@@ -1689,8 +1720,10 @@ inline QJsonObject editBeat(const QJsonObject &args) {
     const QString operation = args.value("operation").toString();
     const QString scope = args.value("scope").toString("cursor");
     if (scope != "cursor" && scope != "selection") return {{"error", "scope must be cursor or selection"}};
-    if (scope == "selection" && operation != "rhythm" && operation != "dots" && operation != "tuplet")
-        return {{"error", "Selection editing supports rhythm, dots and tuplet"}};
+    for (const char *axis : {"tracks", "staves", "voices"})
+        if (scope != "selection" && args.contains(axis)) return {{"error", "Selection filters require scope selection"}};
+    if (scope == "selection" && operation == "insert")
+        return {{"error", "Beat insertion requires scope cursor"}};
     for (const char *key : {"level", "actual", "normal", "enabled"})
         if (operation != "tuplet" && args.contains(key)) return {{"error", "Tuplet parameters require operation tuplet"}};
     auto &cursor = document.score->cursor();
@@ -1701,7 +1734,7 @@ inline QJsonObject editBeat(const QJsonObject &args) {
     std::vector<std::shared_ptr<gp::core::Beat>> targets;
     BeatSelection batch;
     if (scope == "selection") {
-        const auto error = collectBeatSelection(document.score, batch);
+        const auto error = collectBeatSelection(document.score, batch, args);
         if (!error.isEmpty()) return {{"error", error}};
         if (batch.beats.empty()) return {{"error", "Selection contains no real beats"}};
         targets = batch.beats;
@@ -1771,9 +1804,16 @@ inline QJsonObject editBeat(const QJsonObject &args) {
     } else {
         if (args.contains("denominator") || args.contains("dots")) return {{"error", "Rhythm parameters require operation rhythm"}};
         if (operation == "clear") {
-            document.score->clearBeat(cursor.modelIndex());
-            if (!beat->notes().empty() || !beat->isRest()) return {{"error", "Native clear readback differs"}};
-        } else if (operation == "remove") document.score->removeBeat(cursor.modelIndex());
+            if (scope == "selection") applyToRanges([](const gp::core::Beat *target) { return !target->isRest() || !target->notes().empty(); },
+                [&](const gp::core::ScoreModelRange &part) { document.score->clearBeatRange(part); });
+            else document.score->clearBeat(cursor.modelIndex());
+            for (const auto &target : targets)
+                if (!target->notes().empty() || !target->isRest()) return {{"error", "Native clear readback differs"}};
+        } else if (operation == "remove") {
+            if (scope == "selection") applyToRanges([](const gp::core::Beat *) { return true; },
+                [&](const gp::core::ScoreModelRange &part) { document.score->removeBeatRange(part); });
+            else document.score->removeBeat(cursor.modelIndex());
+        }
         else return {{"error", "operation must be insert, rhythm, dots, tuplet, clear or remove"}};
     }
     if (scope == "selection") return {{"document", document.id()}, {"affected_beats", int(targets.size())},

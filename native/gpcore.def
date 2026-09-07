@@ -1,5 +1,7 @@
 LIBRARY GPCore
 EXPORTS
+    ?freeText@Beat@core@gp@@QEBAAEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@XZ
+    ?clearBeatRange@Score@core@gp@@QEAAXAEBVScoreModelRange@23@@Z
 ?arpeggio@Beat@core@gp@@QEBA?AW4Direction@23@XZ
 ?brush@Beat@core@gp@@QEBA?AW4Direction@23@XZ
 ?canSetArpeggio@Beat@core@gp@@QEBA_NXZ

@@ -209,6 +209,7 @@ class __declspec(dllimport) Beat {
 public:
     const std::vector<std::shared_ptr<Note>> &notes() const;
     bool isRest() const; bool isPlaceholder() const; const RhythmValue &rhythm() const;
+    const std::string &freeText() const;
     bool isLegatoOrigin() const; bool isLegatoDestination() const;
     GraceType graceType() const; Direction pickStroke() const;
     Fadding fadding() const; Hairpin hairpin() const; Golpe golpe() const; Ottavia ottavia() const;
@@ -312,6 +313,7 @@ public:
     void removeNonPitchedNoteFromMidiAndString(const ScoreModelIndex &, unsigned, unsigned);
     void setStringedNote(const ScoreModelRange &, bool, int, int, am::music::Accidental, const RhythmValue &);
     void clearBeat(const ScoreModelIndex &); void removeBeat(const ScoreModelIndex &);
+    void clearBeatRange(const ScoreModelRange &);
     void removeBeatRange(const ScoreModelRange &);
     void pasteBeatRange(const std::shared_ptr<SerializedScore> &, const ScoreModelRange &, unsigned, SerializedScore::OverridingMode);
     void pasteBarRange(const std::shared_ptr<SerializedScore> &, const ScoreModelRange &, unsigned, SerializedScore::OverridingMode);
