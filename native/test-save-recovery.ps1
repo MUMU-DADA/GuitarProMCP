@@ -123,9 +123,9 @@ try {
         } else {
             Assert (@($events | Where-Object { $_.event -eq 'write_failed' -and $_.writer -eq $case.writer -and $_.bytes_written -gt 0 }).Count -eq 1) 'No partial native write was observed before failure.'
         }
-        Assert ($failed.save_path_restored -and $failed.dirty_state_restored -and $failed.dirty) 'Failed save did not restore path and unsaved state.'
+        Assert ($failed.save_path_restored -and $failed.opened_path_restored -and $failed.dirty_state_restored -and $failed.dirty) 'Failed save did not restore paths and unsaved state.'
         $document = (Invoke-McpTool $connection gp_documents).documents | Where-Object id -EQ $id
-        Assert ([IO.Path]::GetFullPath($document.save_path) -eq $source -and $document.dirty) 'Document readback differs from recovery result.'
+        Assert ([IO.Path]::GetFullPath($document.save_path) -eq $source -and [IO.Path]::GetFullPath($document.opened_path) -eq $source -and $document.dirty) 'Document readback differs from recovery result.'
         Assert ((Invoke-McpTool $connection gp_score @{document=$id}).metadata.Title -eq $title) 'Failure changed unsaved score content.'
         if ($case.mode -eq 'recovery') {
             Assert (-not $failed.file_restored -and [bool]$failed.recovery_path) 'Locked recovery falsely reported restoration or lost backup location.'

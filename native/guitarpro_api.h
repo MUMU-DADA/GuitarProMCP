@@ -145,8 +145,8 @@ inline DocumentTabs documentTabs(const QList<Document> &available, QObject *curr
         const QString path = QDir::fromNativeSeparators(tab->toolTip());
         const QString opened = QDir::fromNativeSeparators(document->object->property("openedFilePath").toString());
         const QString saved = QDir::fromNativeSeparators(document->object->property("saveFilePath").toString());
-        // Unnamed tabs can retain an empty tooltip after Save As; dirty tabs
-        // prepend a localized label to the original opened path.
+        // Unnamed tabs show a template name or empty tooltip; dirty tabs
+        // prepend a localized label to the opened path.
         const auto matchesPath = [&](const QString &expected) {
             return !expected.isEmpty() && (path == expected || (tab->property("dirty").toBool() && path.endsWith(" " + expected)));
         };
@@ -1345,6 +1345,7 @@ inline QJsonObject save(const QJsonObject &args, bool adopt = false, bool curren
     const Document chosen = choose(args);
     if (!chosen.object || !chosen.view) return {{"error", "Choose an existing document id from gp_documents"}};
     const QString oldPath = chosen.object->property("saveFilePath").toString();
+    const QString oldOpenedPath = chosen.object->property("openedFilePath").toString();
     const bool dirtyBefore = chosen.object->property("isDirty").toBool();
     const QString path = current ? oldPath : args.value("path").toString();
     const QFileInfo destination(path);
@@ -1369,6 +1370,19 @@ inline QJsonObject save(const QJsonObject &args, bool adopt = false, bool curren
     const int copyMethod = chosen.object->metaObject()->indexOfMethod("saveToFile(QString)");
     if (copyMethod < 0 || (adopt && (chosen.object->metaObject()->indexOfMethod("save()") < 0 || chosen.object->metaObject()->indexOfMethod("setSaveFilePath(QString)") < 0)))
         return {{"error", "Native document save methods are unavailable"}};
+    if (adopt) for (const char *method : {"setOpenedFilePath(QString)", "openedFilePathChanged(QString)", "filePathChanged(QString,QString)"})
+        if (chosen.object->metaObject()->indexOfMethod(method) < 0) return {{"error", "Native document path notifications are unavailable"}};
+    const auto updateOpenedPath = [&](const QString &nextPath) {
+        if (!chosen.object) return false;
+        const QString previous = chosen.object->property("openedFilePath").toString();
+        if (previous == nextPath) return true;
+        // Native saveAs updates this path, then notifies document and window
+        // observers. The setters alone do not emit either notification.
+        return QMetaObject::invokeMethod(chosen.object, "setOpenedFilePath", Qt::DirectConnection, Q_ARG(QString, nextPath)) &&
+            chosen.object && chosen.object->property("openedFilePath").toString() == nextPath &&
+            QMetaObject::invokeMethod(chosen.object, "openedFilePathChanged", Qt::DirectConnection, Q_ARG(QString, nextPath)) &&
+            chosen.object && QMetaObject::invokeMethod(chosen.object, "filePathChanged", Qt::DirectConnection, Q_ARG(QString, previous), Q_ARG(QString, nextPath));
+    };
     // Preserve existing bytes before the host writes, and retain the backup if
     // recovery cannot finish. All files stay on the destination volume.
     QTemporaryDir recovery(destination.absolutePath() + "/.gpmcp-save-XXXXXX");
@@ -1397,9 +1411,11 @@ inline QJsonObject save(const QJsonObject &args, bool adopt = false, bool curren
         const bool pathRestored = chosen.object &&
             (chosen.object->property("saveFilePath").toString() == oldPath ||
              (QMetaObject::invokeMethod(chosen.object, "setSaveFilePath", Qt::DirectConnection, Q_ARG(QString, oldPath)) && chosen.object->property("saveFilePath").toString() == oldPath));
+        const bool openedPathRestored = updateOpenedPath(oldOpenedPath);
         if (dirtyBefore && chosen.object && !chosen.object->property("isDirty").toBool())
             QMetaObject::invokeMethod(chosen.object, "setIsDirty", Qt::DirectConnection, Q_ARG(bool, true));
         QJsonObject result{{"error", message}, {"file_restored", restored}, {"save_path_restored", pathRestored}, {"dirty_before", dirtyBefore},
+            {"opened_path_restored", openedPathRestored},
             {"dirty_state_restored", chosen.object && chosen.object->property("isDirty").toBool() == dirtyBefore},
             {"dirty", chosen.object ? QJsonValue(chosen.object->property("isDirty").toBool()) : QJsonValue()}};
         if (!restored && existed) { recovery.setAutoRemove(false); result["recovery_path"] = backup; }
@@ -1419,9 +1435,10 @@ inline QJsonObject save(const QJsonObject &args, bool adopt = false, bool curren
     if (!output.isFile() || !output.size()) return recover("Native save returned without a completed file");
     const QString validation = validateGpFile(absolute);
     if (!validation.isEmpty()) return recover("Native output validation failed: " + validation);
+    if (adopt && !updateOpenedPath(absolute)) return recover("Native saved path notifications did not complete; inspect recovery and document state before retrying");
     return {{"path", absolute}, {"bytes", double(output.size())}, {"document", chosen.id()},
         {"copy_only", !adopt}, {"overwrote", existed}, {"dirty", chosen.object->property("isDirty").toBool()},
-        {"native_method", adopt ? "IDocument::saveToFile, setSaveFilePath, save" : "IDocument::saveToFile(QString)"}};
+        {"native_method", adopt ? "IDocument::saveToFile, setSaveFilePath, save, setOpenedFilePath and native path notifications" : "IDocument::saveToFile(QString)"}};
 }
 }
 

@@ -538,7 +538,7 @@ class Bridge : public QObject {
         add("gp_playback", "调用原生播放控制器。seek 使用原曲谱 bar 与小节内 tick；seek_tick 使用展开反复后的时间线绝对 tick。另支持 state/play/stop/set_loop/set_metronome/set_countdown。", {{"document", str}, {"operation", str}, {"bar", integer}, {"tick", integer}, {"enabled", boolean}});
         add("gp_open", "通过宿主原生文件打开事件异步打开已有 .gp 文件；用 gp_documents 的路径读回确认完成。", {{"path", str}}, {"path"});
         add("gp_close", "异步关闭文档；unsaved: reject（默认）、save、discard、cancel、prompt。save 可指定 path 和 overwrite；轮询 gp_documents.closing 确认结果。", {{"document", str}, {"unsaved", str}, {"path", str}, {"overwrite", boolean}}, {"document"});
-        add("gp_documents", "按标签顺序读取实时文档 ID、tab_index、原始路径、保存路径和未保存状态；映射不可用时 tab_order_available=false，不推断顺序。", {});
+        add("gp_documents", "按标签顺序读取实时文档 ID、tab_index、原生打开路径、保存路径和未保存状态；另存成功后两种路径都更新。映射不可用时 tab_order_available=false，不推断顺序。", {});
         add("gp_operation", "Read a new/open/save/close operation by request ID, including the last 64 replaced records.", {{"request", str}}, {"request"});
         add("gp_cancel", "Cancel a queued document operation or its observed native dialog; poll gp_operation for the outcome.", {{"request", str}}, {"request"});
         add("gp_save_as", "异步原生另存为 .gp；已有目标须 overwrite=true。轮询 gp_operation，saved 后读取 result。", {{"document", str}, {"path", str}, {"overwrite", boolean}}, {"path"});

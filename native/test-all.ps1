@@ -20,14 +20,52 @@ $descriptor = Get-Content -LiteralPath $sessionFile -Raw | ConvertFrom-Json
 Write-Output "Regression host PID $($process.Id). Session: $sessionFile"
 $suites = @('mcp','native','editing','tracks','measures','effects','selection','saving','document-operations','document-tabs','lifecycle','session','structure','clipboard','tuplets','connections')
 $results = @()
+$fixtureRestorations = @()
 $complete = $false
+function Wait-FixtureOperation($connection, $request, [string]$expected) {
+    $deadline = [DateTime]::UtcNow.AddSeconds(12)
+    do {
+        $state = (Invoke-McpTool $connection gp_operation @{request=$request}).operation
+        if ($state.status -in @($expected,'error','cancelled')) { break }
+        Start-Sleep -Milliseconds 50
+    } while ([DateTime]::UtcNow -lt $deadline)
+    if ($state.status -ne $expected) { throw "Fixture restore failed: $($state | ConvertTo-Json -Depth 5 -Compress)" }
+    return $state
+}
 try {
     foreach ($suite in $suites) {
+        $connection = New-McpSession -SessionFile $sessionFile
+        try {
+            $fixtureBefore = @((Invoke-McpTool $connection gp_documents).documents | Where-Object opened_path -EQ $fixture.Replace('\','/'))
+            if ($fixtureBefore.Count -ne 1 -or $fixtureBefore[0].dirty) { throw 'Regression fixture is missing or dirty.' }
+        } finally { Close-McpSession $connection }
         $output = @(& "$PSScriptRoot/test-$suite.ps1" -SessionFile $sessionFile | Tee-Object -FilePath (Join-Path $run "$suite.log"))
         $pass = @($output | Where-Object { $_ -match '^PASS:\s*(\d+)' })
         if ($pass.Count -ne 1 -or $pass[0] -notmatch '^PASS:\s*(\d+)') { throw "No unambiguous passing result from $suite." }
         $results += [pscustomobject]@{suite=$suite;checks=[int]$Matches[1];result=$pass[0]}
         Write-Output $pass[0]
+        $connection = New-McpSession -SessionFile $sessionFile
+        try {
+            $documents = Invoke-McpTool $connection gp_documents
+            if (@($documents.documents | Where-Object dirty).Count) { throw 'Suite left unsaved documents; host retained.' }
+            if ((Get-FileHash -LiteralPath $fixture).Hash -ne $fixtureHash) { throw 'Suite changed fixture file bytes.' }
+            if (-not @($documents.documents | Where-Object opened_path -EQ $fixture.Replace('\','/')).Count) {
+                $adopted = @($documents.documents | Where-Object id -EQ $fixtureBefore[0].id)
+                $artifactRoot = [IO.Path]::GetFullPath((Join-Path $root 'artifacts')) + '\'
+                if ($adopted.Count -ne 1 -or -not $adopted[0].save_path -or -not [IO.Path]::GetFullPath($adopted[0].save_path).StartsWith($artifactRoot, [StringComparison]::OrdinalIgnoreCase)) { throw 'Cannot identify the saved regression fixture.' }
+                $others = @($documents.documents | Where-Object id -NE $adopted[0].id | Sort-Object id | Select-Object id,opened_path,save_path,dirty)
+                $close = Invoke-McpTool $connection gp_close @{document=$adopted[0].id}
+                Wait-FixtureOperation $connection $close.request 'closed' | Out-Null
+                $open = Invoke-McpTool $connection gp_open @{path=$fixture}
+                $opened = Wait-FixtureOperation $connection $open.request 'opened'
+                $after = (Invoke-McpTool $connection gp_documents).documents
+                $restored = @($after | Where-Object id -EQ $opened.document)
+                if ($restored.Count -ne 1 -or $restored[0].dirty -or $restored[0].opened_path -ne $fixture.Replace('\','/')) { throw 'Fixture reopen did not restore the expected document.' }
+                $othersAfter = @($after | Where-Object id -NE $opened.document | Sort-Object id | Select-Object id,opened_path,save_path,dirty)
+                if ((ConvertTo-Json -InputObject $others -Compress) -ne (ConvertTo-Json -InputObject $othersAfter -Compress)) { throw 'Fixture restore changed another document.' }
+                $fixtureRestorations += @{suite=$suite;closed=$adopted[0].id;saved_path=$adopted[0].save_path;reopened=$opened.document}
+            }
+        } finally { Close-McpSession $connection }
     }
     $connection = New-McpSession -SessionFile $sessionFile
     try {
@@ -44,7 +82,7 @@ try {
 } finally {
     $sourceFiles = @('guitarpro_mcp.cpp','guitarpro_api.h','guitarpro_abi.h','guitarpro_clipboard.h','mcp_server.cpp','object_registry.h','host_build.h','plugin_config.h','autoload.cpp','plugin_status.h')
     $hashes = @($sourceFiles | ForEach-Object { Get-FileHash -LiteralPath (Join-Path $PSScriptRoot $_) | Select-Object Path,Hash })
-    @{complete=$complete;host_pid=$descriptor.pid;exit_code=$(if($process.HasExited){$process.ExitCode}else{$null});checks=($results | Measure-Object -Property checks -Sum).Sum;suites=$results;sources=$hashes;powershell=$PSVersionTable.PSVersion.ToString();plugin_sha256=(Get-FileHash -LiteralPath "$root/.tools/native/plugins/generic/guitarpro_mcp.dll").Hash;autoload_sha256=(Get-FileHash -LiteralPath "$root/.tools/native/plugins/imageformats/guitarpro_mcp_autoload.dll").Hash;host_exe=$Exe;host_sha256=(Get-FileHash -LiteralPath $Exe).Hash} |
+    @{complete=$complete;host_pid=$descriptor.pid;exit_code=$(if($process.HasExited){$process.ExitCode}else{$null});checks=($results | Measure-Object -Property checks -Sum).Sum;suites=$results;fixture_restorations=$fixtureRestorations;sources=$hashes;powershell=$PSVersionTable.PSVersion.ToString();plugin_sha256=(Get-FileHash -LiteralPath "$root/.tools/native/plugins/generic/guitarpro_mcp.dll").Hash;autoload_sha256=(Get-FileHash -LiteralPath "$root/.tools/native/plugins/imageformats/guitarpro_mcp_autoload.dll").Hash;host_exe=$Exe;host_sha256=(Get-FileHash -LiteralPath $Exe).Hash} |
         ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $run 'regression.json') -Encoding UTF8
     if (-not $process.HasExited) { Write-Warning "Regression host retained for inspection: PID $($process.Id), session $sessionFile" }
     $process.Dispose()

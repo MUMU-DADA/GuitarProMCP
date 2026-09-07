@@ -90,7 +90,7 @@ MCP 客户端
 | `gp_clipboard` | 原生曲谱快照的复制、剪切、读取、粘贴和清空；支持单声部、多声部、多轨及钢琴谱表，使用插件独立缓冲区 |
 | `gp_undo_redo` | 调用曲谱模型的撤销或重做 |
 | `gp_save` | 保存 `.gp` 副本，保留保存路径和未保存状态；覆盖已有文件须指定 `overwrite=true` |
-| `gp_save_as` | 另存为 `.gp` 文件，更新保存路径和宿主保存状态；覆盖已有文件须明确指定 |
+| `gp_save_as` | 另存为 `.gp` 文件，更新打开/保存路径、标签及宿主保存状态；覆盖已有文件须明确指定 |
 | `gp_save_current` | 保存到文档当前 `.gp` 路径；未命名文档须先另存为 |
 | `gp_objects` / `gp_actions` | 检查 Qt 对象、属性、方法和 QAction |
 | `gp_trigger` / `gp_set_property` | 调用观察到的原生 Qt 动作或设置允许的属性 |
@@ -109,6 +109,8 @@ MCP 客户端
 `gp_close` 接受文档 ID，返回 `scheduled` 后轮询 `gp_operation` 或 `gp_documents.closing`，匹配请求 ID 并确认 `closed`。`unsaved` 默认为 `reject`；`save` 保存后关闭，可传 `path` 和 `overwrite` 完成另存为；`discard` 通过宿主明确的丢弃按钮关闭；`cancel` 保留文档；`prompt` 保留原生确认流程。`gp_cancel request=...` 可取消尚未调度的操作或当前识别到的原生对话框，应继续读回最终状态。后台关闭最后一份文档后，MCP 服务仍保持运行。
 
 文档 ID 是独立 UUID，在同一文档生命周期内稳定，关闭重开或宿主重启后失效。保存拒绝覆盖其他已打开文档；覆盖前备份原文件，写入失败时尝试恢复并返回恢复状态。故障专项已验证原生部分写入、损坏输出、校验失败后的未保存状态恢复，以及恢复失败时保留备份。关闭“保存错误”提示后仍报告 `error`，不会把已发生的保存失败当成取消成功；完整的保存进度取消仍待验证。
+
+另存成功后，`gp_documents.opened_path` 和 `save_path` 都指向新文件，标签、提示和窗口标题同步更新；`opened_path` 不是不可变的来源记录。再次打开旧路径会产生独立文档，打开新路径会识别已有文档。保存副本保留原有两种路径；失败恢复通过 `opened_path_restored` 和 `save_path_restored` 分别报告。
 
 打开前与保存后使用宿主 Qt 的 ZIP 读取器及 XML 解析器检查 `Content/score.gpif`，该入口限 64 MiB，拒绝重复入口、符号链接、错误 XML 根节点和 DTD。这些检查不等于完整 GPIF 语义验证；未知原生结果、所有模态窗口和长时间运行仍在开发计划中。
 
@@ -148,7 +150,7 @@ MCP 客户端
 
 ## 运行检查
 
-当前标签重排检查点的核心在 Windows PowerShell 5.1 和 PowerShell 7 下分别通过十六组、2469 项完整回归；另通过含原生菜单的标签专项 221 项和保存故障恢复 167 项。最新证据、启动等待条件和未完成项见 [当前验证证据](COVERAGE.md#当前验证证据)，完整 P0–P7 任务及验收标准见 [开发计划](DEVELOPMENT_PLAN.md)。此前 `09185ab` 的十五组、2276 项及下方按日期保留的检查结果属于对应历史构建。
+当前另存路径与标签修复检查点的核心在 Windows PowerShell 5.1 和 PowerShell 7 下分别通过十六组、2486 项完整回归；另通过含原生菜单的标签专项 221 项和保存故障恢复 167 项。最新证据、启动等待条件和未完成项见 [当前验证证据](COVERAGE.md#当前验证证据)，完整 P0–P7 任务及验收标准见 [开发计划](DEVELOPMENT_PLAN.md)。此前标签重排的 2469 项、`09185ab` 的十五组 2276 项及下方按日期保留的检查结果属于对应历史构建。
 
 协议检查只需要一个已启用插件的宿主：
 
@@ -156,25 +158,13 @@ MCP 客户端
 ./native/test-mcp.ps1
 ```
 
-后台曲谱检查使用仓库提供的简单测试曲谱，并拒绝修改其他文档。先关闭已有插件实例，再运行：
+后台曲谱检查使用仓库提供的简单测试曲谱。先关闭用于测试的插件实例，再运行完整入口；`-Exe` 可指定隔离安装副本：
 
 ```powershell
-New-Item -ItemType Directory -Force artifacts
-Copy-Item ./native/testdata/minimal.gp ./artifacts/native-test.gp
-./start-plugin.ps1 -ScorePath ./artifacts/native-test.gp
-./native/test-native.ps1
-./native/test-editing.ps1
-./native/test-tracks.ps1
-./native/test-measures.ps1
-./native/test-effects.ps1
-./native/test-selection.ps1
-./native/test-lifecycle.ps1
-./native/test-session.ps1
-./native/test-structure.ps1
-./native/test-clipboard.ps1
-./native/test-tuplets.ps1
-./native/test-connections.ps1
+./native/test-all.ps1
 ```
+
+完整入口核对夹具哈希，逐组执行并记录源码和二进制哈希。某组另存并采用新路径后，入口只关闭已确认属于该组的干净测试文档，再打开原始夹具，同时核对其他文档未变，记录 `fixture_restorations`。单独执行某组时必须满足该脚本的夹具前提，不能直接沿用上一组已另存的文档。失败时保留宿主供检查；全部通过后正常关闭并核对连接描述已清理。
 
 检查覆盖实时音符读取、品位与音高变化、中文元数据、光标、撤销重做、保存后的实际 GPIF 内容，以及窗口保持隐藏和宿主不在前台的状态。输出与验证记录保存在 `artifacts/native-verification-*/`。测试最后恢复曲谱内容，并将恢复后的文档另存为测试文件；原始测试副本保持不变。
 
