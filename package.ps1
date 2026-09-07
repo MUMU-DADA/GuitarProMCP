@@ -20,7 +20,7 @@ if ($ManualInstall) {
     return
 }
 Copy-Item -LiteralPath (Join-Path $PSScriptRoot '.tools/native/plugins') -Destination $output -Recurse
-Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'install-plugin.ps1'),(Join-Path $PSScriptRoot 'Install.cmd'),(Join-Path $PSScriptRoot 'start-installed.ps1'),(Join-Path $PSScriptRoot 'INSTALL.md'),(Join-Path $PSScriptRoot 'native/supported-host.json'),(Join-Path $PSScriptRoot 'native/mcp-client.ps1') -Destination $output
+Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'install-plugin.ps1'),(Join-Path $PSScriptRoot 'Install.cmd'),(Join-Path $PSScriptRoot 'start-installed.ps1'),(Join-Path $PSScriptRoot 'INSTALL.md'),(Join-Path $PSScriptRoot 'README.md'),(Join-Path $PSScriptRoot 'LICENSE'),(Join-Path $PSScriptRoot 'native/supported-host.json'),(Join-Path $PSScriptRoot 'native/mcp-client.ps1') -Destination $output
 $files = @(Get-ChildItem -LiteralPath (Join-Path $output 'plugins') -File -Recurse | ForEach-Object {
     [pscustomobject]@{path=$_.FullName.Substring($output.Length + 1).Replace('\','/');sha256=(Get-FileHash -LiteralPath $_.FullName).Hash}
 })
