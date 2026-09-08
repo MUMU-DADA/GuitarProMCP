@@ -109,8 +109,8 @@ inline QJsonArray tempoPoints(const std::vector<std::shared_ptr<gp::core::Automa
     }
     return result;
 }
-inline QJsonObject tempoAutomation(const QJsonObject &args) {
-    const auto document = choose(args);
+inline QJsonObject tempoAutomation(const QJsonObject &args, const Document &bound = {}) {
+    const auto document = bound.score ? bound : choose(args);
     if (!document.score || !document.score->masterTrack()) return {{"error", "Native master track required"}};
     const auto master = document.score->masterTrack();
     const auto type = static_cast<gp::core::Automation::Type>(0x200);

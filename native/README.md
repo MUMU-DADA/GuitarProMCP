@@ -13,6 +13,10 @@
 | `guitarpro_api.h` | 文档定位/切换、实时曲谱编辑、光标、撤销重做、保存和播放 |
 | `guitarpro_clipboard.h` | 原生曲谱快照、复制/剪切/粘贴及兼容性检查 |
 | `guitarpro_audio.h` | 速度自动化、音色效果、设备及开发音频验收 |
+| `guitarpro_semantics.h` / `guitarpro_spec.h` | 语义读回、JSON schema、批量原生构建、一次提交与观察恢复 |
+| `guitarpro_chords.h` / `guitarpro_page.h` | 和弦集合与指法、文档页面元数据 |
+| `guitarpro_chord_abi.h` / `ampainting.def` | 和弦及页面文本的已核验 ABI |
+| `guitarpro_io.h` | 文件交换、PDF/PNG/WAV 输出及工作区设置 |
 | `guitarpro_abi.h` / `gpcore.def` / `gprse.def` / `amaudio.def` | 已确认的原生导出声明及导入库定义 |
 | `object_registry.h` | Qt 对象生命周期观察和失效指针保护 |
 | `discovery.h` | 只读指针与 RTTI 校验；开发模式下的对象关系探索 |
@@ -20,7 +24,7 @@
 | `mcp-client.ps1` | 供开发验证使用的 PowerShell HTTP MCP 客户端 |
 | `test-*.ps1` | 协议、后台曲谱及音轨编辑、音符技法、小节记谱与反复定位、文档生命周期、多文档播放、结构和模板检查 |
 
-`guitarpro_abi.h` 只声明已使用的导出接口，模型对象由 Guitar Pro 持有。插件本地构造已验证布局的值对象：8 字节的 `ScoreModelRange`、56 字节且 8 字节对齐的 `RhythmValue`，以及 3 字节 RGB `Color`。前两者的构造、析构和内部资源管理都调用宿主导出函数；颜色为三个无符号字节，不含透明度。小节记谱还使用 8 字节且 4 字节对齐的 `TimeSignature`，以及 16 字节且 8 字节对齐、具有虚析构函数的 `KeySignature`；两者调用宿主构造函数，后者调用宿主析构函数。大小由对应构造/析构实现、容器步长或复制指令核实，并有静态断言；RGB 顺序另以保存后的 GPIF 检查。MSVC 负责成员调用及返回值的 ABI，不手写 `std::string` 或 `std::shared_ptr` 的返回约定。
+`guitarpro_abi.h` 只声明已使用的导出接口，实时模型对象由 Guitar Pro 持有；P8 另通过原生构造函数创建独立 Score 副本。插件本地构造已验证布局的值对象：8 字节的 `ScoreModelRange`、56 字节且 8 字节对齐的 `RhythmValue`，以及 3 字节 RGB `Color`。前两者的构造、析构和内部资源管理都调用宿主导出函数；颜色为三个无符号字节，不含透明度。小节记谱还使用 8 字节且 4 字节对齐的 `TimeSignature`，以及 16 字节且 8 字节对齐、具有虚析构函数的 `KeySignature`；两者调用宿主构造函数，后者调用宿主析构函数。大小由对应构造/析构实现、容器步长或复制指令核实，并有静态断言；RGB 顺序另以保存后的 GPIF 检查。MSVC 负责成员调用及返回值的 ABI，不手写 `std::string` 或 `std::shared_ptr` 的返回约定。新增 Score、和弦、歌词和页面对象见 [P8 实现说明](P8.md)。
 
 ## 构建和加载
 
@@ -95,9 +99,9 @@ try {
 | `gp_templates` / `gp_new` | 无 / `template` | 枚举内置模板；新建返回请求 ID，通过 `gp_documents.creation` 读回完成状态 |
 | `gp_open` | `path` | 绝对路径的已有 `.gp` 文件；通过 `QFileOpenEvent` 异步打开，已有文档返回 `already_open` |
 | `gp_close` | `document`, `unsaved?`, `path?`, `overwrite?` | 明确保存、丢弃或取消后关闭；默认拒绝未保存修改；返回请求 ID |
-| `gp_operation` | `request` | 返回 `operation` 状态，查询当前新建/打开/保存/关闭及最近 64 条被替换的请求记录 |
+| `gp_operation` | `request` | 返回 `operation` 状态，查询当前文档操作、P8 编辑及最近 64 条被替换的请求记录 |
 | `gp_cancel` | `request` | 取消未调度的操作或识别到的原生对话框；返回 `cancelling` 时须继续确认结果 |
-| `gp_recover` | `request` | 重试 `recovery_available=true` 的标签回滚、保存状态恢复或新建模板路径复原；文档集合变化时只核验当前映射，不重新打开文档或覆盖文件 |
+| `gp_recover` | `request` | 重试 `recovery_available=true` 的标签回滚、保存状态恢复或新建模板路径复原；P8 未知提交只观察模型，不重放编辑；文档集合变化时只核验当前映射 |
 | `gp_activate` | `document` | 调用原生 `activateNextDocumentView` 导航至目标，并读回文档管理器确认 |
 | `gp_score` | `document?` | 读取元数据、音轨摘要、光标、未保存和撤销重做状态 |
 | `gp_read_bars` | `document?`, `track?=0`, `staff?=0`, `bar?=0`, `count?=1` | 每次读取 1–16 个完整存在的小节，音符包括 `effects`；单次节拍/音符读取量有上限 |
@@ -117,13 +121,24 @@ try {
 | `gp_edit_note_effect` | `document?`, `string?`, `note_index?`, `property`, `value` | 用弦号或 `notes` 数组下标选择已有单音，支持原生撤销；取值见下表 |
 | `gp_edit_beat_effect` | `document?`, `property`, `value` | 修改当前单拍的装饰音、扫拨方向、渐强弱、轮指等技法，支持撤销 |
 | `gp_edit_beat` | `document?`, `operation`, `denominator?`, `dots?`, `scope?=cursor`, `level?`, `actual?`, `normal?`, `enabled?` | `insert` 插入休止拍，`rhythm` 设置基础时值，`dots` 设置附点，`tuplet` 设置连音，`clear` 清空音符，`remove` 删除节拍；`scope=selection` 接受 `rhythm/dots/tuplet` |
-| `gp_edit_connection` | `document?`, `kind`, `enabled`, `scope?=cursor`, `string?` | `legato` 连奏或 `tie` 延音线；指定弦单音仅用于光标延音线；选区支持跨声部、音轨及谱表 |
+| `gp_edit_connection` | `document?`, `kind`, `enabled`, `scope?=cursor`, `string?`, `note_index?` | `legato` 连奏或 `tie` 延音线；光标延音线可用弦号或音符数组索引指定单音；选区支持跨声部、音轨及谱表 |
 | `gp_clipboard` | 按操作提供 `document?`, `id?`, `scope?`, `repeat?`, `include_text?`, `track?`, `staff?`, `bar?`, `count?` | 原生独立快照的复制、剪切、读取和粘贴；见原生剪贴板章节 |
 | `gp_edit_bars` | `document?`, `operation`, `index`, `count?=1` | `insert` / `remove` 同步增删所有音轨的小节，数量 1–128；曲谱最多 100000 小节 |
 | `gp_undo_redo` | `document?`, `operation` | `operation` 为 `undo` 或 `redo`，必须存在相应历史 |
 | `gp_save` | `document?`, `path`, `overwrite?` | 调用 `IDocument::saveToFile` 保存 `.gp` 副本，不改变原文档保存路径和未保存状态 |
 | `gp_save_as` | `document?`, `path`, `overwrite?` | 保存并校验后更新原生打开/保存路径与通知，采用新文件并同步标签和窗口标题 |
 | `gp_save_current` | `document?` | 保存到当前 `.gp` 路径；未命名文档需要先另存为 |
+| `gp_create_from_spec` | `template`, `spec` | 从宿主模板批量建谱，返回请求 ID，终态为 `created` |
+| `gp_apply_spec` / `gp_import_json` | `document?`, `spec`, `mode?=replace`, `bar?` | 批量应用或导入 `guitarpromcp.p8` v1；支持 `replace/append/insert`，一次原生撤销 |
+| `gp_insert_tab` | `document?`, `text`, `track?`, `staff?`, `voice?`, `string?`, `denominator?`, `mode?`, `bar?` | 单弦 riff 如 `0-2-2-r|3-5`；替换指定声部或新增全局小节 |
+| `gp_export_json` / `gp_structure` | `document?` | 导出语义规格或统一歌曲结构摘要 |
+| `gp_export_tab` | `document?`, `track?`, `staff?`, `bar?`, `count?`, `voice?` | ASCII 六线谱、调弦、声部、时值及不可表示清单 |
+| `gp_read_chords` / `gp_read_lyrics` | `document?`, `track?`, `staff?`, `bar?`, `count?`, `voice?` | 读取实际节拍关联的和弦对象或歌词行 |
+| `gp_edit_chord` / `gp_edit_lyrics` | `document?`, `track`, `staff`, `bar`, `voice`, `beat`，以及 `chord/operation` 或 `line/text` | 精确定位的符号/和弦图或歌词片段编辑，返回请求 ID |
+| `gp_read_sections` / `gp_edit_section` | `document?`，写入另需 `bar`, `name?`, `text?`, `operation?` | 读段落起止；异步设置或移除原生段落起点 |
+| `gp_presentation` 的页面元数据 | `document?`, `operation=set`, `page_metadata` | 标题、作者、作曲者、版权、页眉页脚和页码，异步整组提交及一次撤销 |
+
+P8 编辑请求通过 `gp_operation` 查询 `applied/unchanged/error`，新建为 `created`；`gp_documents.editing` 提供最近编辑状态。格式、默认值、上限、模板复用及恢复语义见 [P8 编曲与语义 JSON](P8.md)。PowerShell 客户端仅自动等待保存工具，P8 请求需要显式查询终态。
 
 所有索引从 0 开始。弦索引沿用宿主内部顺序，并不直接等于日常所说的“第一弦”。光标尚未选中音符时，`note_string` 和 `note_midi` 可能为 `-1`。
 
@@ -475,13 +490,13 @@ PDF 复用宿主原生排版和 QPrinter 打印流程，受控打印目标就是
 
 `gp_open` 异步导入 GP5、GPX、MusicXML 和 MIDI。MIDI 请求停在原生参数对话框时，用 `gp_midi_import request=<id>` 读回选项，`operation=set` 设置 `dot/is2ChannelsPerTrack/live/multivoice/staccato/triplet` 布尔值或 `quantization` 2..8（全音符至六十四分音符），`operation=accept` 导入为新曲谱；继续轮询原打开请求，取消使用 `gp_cancel`。不向当前曲谱合并。GP3/GP4、MXL 等宿主可打开的扩展仍需各自样本验收。GP5/GPX 可能丢失新版本记谱及音色信息；MusicXML 保留记谱而非完整 RSE，五线谱和六线谱可分别成为输出谱表；MIDI 保留演奏事件，不保留原始排版和完整技法语义。
 
-`gp_preferences` 只操作整个软件，`scope=application`，`model=general/gui/score`；允许属性由 `values` 列出，设置失败会尝试恢复旧值。`gp_presentation` 只操作返回 ID 对应的文档，一次修改页面、视图或谱表一组。页面边长 50..1000 毫米，边距须留下至少 20 毫米内容区域；尺寸、边距、方向和谱表显示可保存重开。缩放 0.25..4 及编辑视图属于会话状态，返回 `requested` 时应再次读取 `state` 确认。页面及显示设置不进入宿主撤销栈，同值页面设置不制造脏状态。声音和设备参数复用 P5 的 `gp_audio_track`/`gp_audio_device`。
+`gp_preferences` 只操作整个软件，`scope=application`，`model=general/gui/score`；允许属性由 `values` 列出，设置失败会尝试恢复旧值。`gp_presentation` 只操作返回 ID 对应的文档，一次修改页面尺寸、页面元数据、视图或谱表一组。页面边长 50..1000 毫米，边距须留下至少 20 毫米内容区域；尺寸、边距、方向和谱表显示可保存重开。缩放 0.25..4 及编辑视图属于会话状态，返回 `requested` 时应再次读取 `state` 确认。P6 的页面尺寸及显示设置不进入宿主撤销栈，同值页面设置不制造脏状态；P8 的 `page_metadata` 使用异步原生提交，整组可以一次撤销，见 [页面元数据](P8.md#页面元数据)。声音和设备参数复用 P5 的 `gp_audio_track`/`gp_audio_device`。
 
 专项：`./native/test-p6.ps1 -SessionFile <session.json>`，使用 Windows 自带的 PowerShell/.NET 核验交换格式、PNG、PCM、设置恢复和临时文档隔离。`test-exchange.ps1` 仅解析本项目简单验收夹具，不是通用转换器。开发者可显式加 `-RenderPdf` 使用已准备的 Poppler 独立复核 PDF；该选项不是普通测试、插件安装或运行的前提，测试脚本不进入安装包。当前证据见 [P6 验收](../docs/COVERAGE.md#p6-验收)。
 
 ## 私有接口的版本约束
 
-生产文档定位只在 `GuitarPro.exe` 和 `GPCore.dll` 的 SHA-256 与已验证构建完全一致时启用。播放接口另校验 `GPRSE.dll`，生命周期钩子另校验 `Qt5Core.dll`。对应的宿主文件哈希为：
+生产文档定位只在 `GuitarPro.exe` 和 `GPCore.dll` 的 SHA-256 与已验证构建完全一致时启用。播放接口另校验 `GPRSE.dll`，生命周期钩子另校验 `Qt5Core.dll`，页面文本另校验 `AMPainting.dll`。对应的宿主文件哈希为：
 
 ```text
 GuitarPro.exe B233B0F1C87DEB3AECE693D51E8D3C3A841C88FEE78828607B20034737C4C6DF
@@ -489,6 +504,7 @@ GPCore.dll    9425F3E8EB627D328E0CB01146D43045D86D1BA639F73718BBE7FCCF733BD250
 GPRSE.dll     E983122951B94C2513A1F05828DD03DCB11620DDC50F6B497723CAE0EB32BA6A
 Qt5Core.dll   C2F85BD55C31E5380DD99F0D517EE183A54C3852480BC497DC30A5483FD70FF2
 Qt5Gui.dll    BD853BB77296301EA0DBD0C432B5A4268389D4054C15F39DD44F245AF24EB407
+AMPainting.dll 29EEC1AFE7BF7B02B7468B0AAA14BB4C0A85780E80D7BEBC6017472312C1ADBF
 ```
 
 当前已验证关联为：
@@ -534,6 +550,9 @@ IDocumentsManager + 0x10 → 管理器实现对象
 
 # 文件交换和工作区
 ./native/test-p6.ps1 -SessionFile <session.json>
+
+# P8 批量编曲、语义对象、异常恢复；PDF 复核依赖见 P8.md
+./native/test-p8.ps1 -SessionFile <session.json> -RenderPdf
 ```
 
 失败时保留宿主和 `artifacts/` 证据；不要把 `scheduled`、菜单枚举或 DLL 加载成功当作原生能力已验证。真实宿主回归需要 Guitar Pro 8.1.1.17 及匹配的宿主文件哈希。

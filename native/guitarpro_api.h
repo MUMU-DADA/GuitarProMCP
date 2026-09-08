@@ -466,8 +466,8 @@ inline QJsonObject editTempo(const QJsonObject &args) {
     return {{"document", document.id()}, {"tempo", tempoState(document.score)},
         {"dirty", document.object->property("isDirty").toBool()}, {"undo_available", document.score->undoAvailable()}};
 }
-inline QJsonObject scoreState(const QJsonObject &args) {
-    const Document document = choose(args);
+inline QJsonObject scoreState(const QJsonObject &args, const Document &bound = {}) {
+    const Document document = bound.score ? bound : choose(args);
     if (!document.score) return {{"error", "Native score unavailable; choose a document from gp_documents on the verified build"}};
     QJsonArray tracks;
     const auto &nativeTracks = document.score->tracks();
@@ -581,8 +581,8 @@ inline QJsonObject editTrack(const QJsonObject &args) {
     result["undoable"] = property != "playback_state";
     return result;
 }
-inline QJsonObject editTuning(const QJsonObject &args) {
-    const Document document = choose(args);
+inline QJsonObject editTuning(const QJsonObject &args, const Document &bound = {}) {
+    const Document document = bound.score ? bound : choose(args);
     if (!document.score) return {{"error", "Native score unavailable"}};
     const int index = args.value("track").toInt(-1), staffIndex = args.value("staff").toInt(0);
     const auto &tracks = document.score->tracks();
@@ -639,7 +639,7 @@ inline QJsonObject editTuning(const QJsonObject &args) {
     if (changed) document.score->setGuitarFullTuning(*staff, tuning, capo, partialCapo, partial, args.value("preserve_pitch").toBool(true));
     if (staff->tuning().midiNumbers() != tuning.midiNumbers() || staff->capoFret() != capo || staff->partialCapoFret() != partialCapo || staff->partialCapoStringFlags() != partial)
         return {{"error", "Native tuning readback differs; inspect track before retrying"}};
-    return scoreState(args);
+    return scoreState(args, document);
 }
 inline QJsonObject editTracks(const QJsonObject &args) {
     const Document document = choose(args);
@@ -1119,8 +1119,8 @@ inline QJsonObject readMasterBars(const QJsonObject &args) {
     return {{"document", document.id()}, {"bars", bars}, {"bar_count", int(master->masterBarCount())}, {"direction_marks", directionMarks},
         {"scope", "Score-wide master bars; key signatures use concert pitch"}, {"index_base", 0}};
 }
-inline QJsonObject editMeasure(const QJsonObject &args) {
-    const Document document = choose(args);
+inline QJsonObject editMeasure(const QJsonObject &args, const Document &bound = {}) {
+    const Document document = bound.score ? bound : choose(args);
     if (!document.score) return {{"error", "Native score unavailable"}};
     const QString operation = args.value("operation").toString();
     QSet<QString> allowed{"document", "operation"};
@@ -1239,13 +1239,13 @@ inline bool singleBeatRange(const gp::core::ScoreModelRange &range, gp::core::Sc
         ((range.beatCount() == 1 && !range.isPlaceholder()) || (allowEmpty && range.beatCount() <= 1)) &&
         range.baseModelIndex().beat() == cursor.beat();
 }
-inline QJsonObject editConnection(const QJsonObject &args) {
-    const Document document = choose(args);
+inline QJsonObject editConnection(const QJsonObject &args, const Document &bound = {}) {
+    const Document document = bound.score ? bound : choose(args);
     if (!document.score) return {{"error", "Native score unavailable"}};
     const QString kind = args.value("kind").toString(), scope = args.value("scope").toString("cursor");
     if ((kind != "legato" && kind != "tie") || (scope != "cursor" && scope != "selection") || !args.value("enabled").isBool())
         return {{"error", "kind must be legato or tie; scope must be cursor or selection; enabled must be boolean"}};
-    if (args.contains("string") && (kind != "tie" || scope != "cursor")) return {{"error", "string is supported only for a cursor tie"}};
+    if ((args.contains("string") || args.contains("note_index")) && (kind != "tie" || scope != "cursor" || (args.contains("string") && args.contains("note_index")))) return {{"error", "Choose string or note_index only for a cursor tie"}};
     auto &cursor = document.score->cursor();
     gp::core::ScoreModelRange single(cursor.modelIndex(), 0, static_cast<gp::core::ScoreModelRange::SortingPolicy>(0));
     const auto &range = scope == "selection" ? cursor.selectionRange() : single;
@@ -1261,7 +1261,12 @@ inline QJsonObject editConnection(const QJsonObject &args) {
             {"bar", cursor.barIndex()}, {"voice", int(cursor.voiceIndex())}, {"beat", cursor.beatIndex()}});
     }
     std::shared_ptr<gp::core::Note> selected;
-    if (args.contains("string")) {
+    if (args.contains("string") || args.contains("note_index")) {
+        if (args.contains("note_index")) {
+            const auto value = args.value("note_index"); const int n = value.toInt(-1);
+            if (!value.isDouble() || n < 0 || value.toDouble() != n || size_t(n) >= cursor.beat()->notes().size()) return {{"error", "note_index must identify an existing note"}};
+            selected = cursor.beat()->notes()[size_t(n)];
+        } else {
         const auto value = args.value("string");
         const int string = value.toInt(-1);
         if (!value.isDouble() || string < 0 || string > 15 || value.toDouble() != string)
@@ -1271,8 +1276,9 @@ inline QJsonObject editConnection(const QJsonObject &args) {
             selected = note;
         }
         if (!selected) return {{"error", "No note on that string at the cursor"}};
-        single.mutableBaseModelIndex().setNoteString(unsigned(string));
-        single.mutableExtentModelIndex().setNoteString(unsigned(string));
+        }
+        single.mutableBaseModelIndex().setNoteString(selected->string());
+        single.mutableExtentModelIndex().setNoteString(selected->string());
         single.mutableBaseModelIndex().setNoteMidi(unsigned(selected->midi()));
         single.mutableExtentModelIndex().setNoteMidi(unsigned(selected->midi()));
         if (single.baseModelIndex().note() != selected) return {{"error", "Cannot construct native single-note range"}};
@@ -1330,8 +1336,8 @@ inline QJsonObject editConnection(const QJsonObject &args) {
         {"cursor", cursorState(document.score)}, {"cursor_preserved", beforeCursor == cursorState(document.score)},
         {"dirty", document.object->property("isDirty").toBool()}, {"undo_available", document.score->undoAvailable()}};
 }
-inline QJsonObject editNoteEffect(const QJsonObject &args) {
-    const Document document = choose(args);
+inline QJsonObject editNoteEffect(const QJsonObject &args, const Document &bound = {}) {
+    const Document document = bound.score ? bound : choose(args);
     if (!document.score) return {{"error", "Native score unavailable"}};
     const QString property = args.value("property").toString();
     QJsonValue value = args.value("value");
@@ -1542,8 +1548,8 @@ inline QJsonObject transpose(const QJsonObject &args) {
     if (!matched) result["error"] = "Native transpose readback differs; inspect score before retrying";
     return result;
 }
-inline QJsonObject editBeatEffect(const QJsonObject &args) {
-    const Document document = choose(args);
+inline QJsonObject editBeatEffect(const QJsonObject &args, const Document &bound = {}) {
+    const Document document = bound.score ? bound : choose(args);
     if (!document.score) return {{"error", "Native score unavailable"}};
     const QString property = args.value("property").toString();
     auto value = args.value("value");

@@ -55,7 +55,7 @@ $exitHandle = [GpmcpRegressionProcess]::OpenProcess(0x1000, $false, $process.Id)
 if ($exitHandle -eq [IntPtr]::Zero) { throw 'Cannot retain a process handle for exit-code verification.' }
 $exitCode = $null
 Write-Output "Regression host PID $($process.Id). Session: $sessionFile"
-$suites = @('mcp','native','editing','tracks','measures','effects','selection','saving','document-operations','document-tabs','lifecycle','session','structure','clipboard','tuplets','connections','notation','instruments','score-form','transfer','audio','p6')
+$suites = @('mcp','native','editing','tracks','measures','effects','selection','saving','document-operations','document-tabs','lifecycle','session','structure','clipboard','tuplets','connections','notation','instruments','score-form','transfer','audio','p6','p8')
 $results = @()
 $fixtureRestorations = @()
 $complete = $false
@@ -79,6 +79,7 @@ try {
         $parameters = @{SessionFile=$sessionFile}
         if ($suite -eq 'document-tabs') { $parameters.VerifyDocumentMenu = $true }
         if ($suite -eq 'audio' -and $env:GPMCP_DEVELOPMENT) { $parameters.Render = $true }
+        if ($suite -eq 'p8') { $parameters.SkipFaults = -not [bool]$env:GPMCP_DEVELOPMENT }
         $output = @(& "$PSScriptRoot/test-$suite.ps1" @parameters | Tee-Object -FilePath (Join-Path $run "$suite.log"))
         $pass = @($output | Where-Object { $_ -match '^PASS:\s*(\d+)' })
         if ($pass.Count -ne 1 -or $pass[0] -notmatch '^PASS:\s*(\d+)') { throw "No unambiguous passing result from $suite." }

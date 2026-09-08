@@ -68,7 +68,7 @@ function New-McpSession {
 }
 function Invoke-McpTool {
     param($Session,[string]$Name,[hashtable]$Arguments=@{},[switch]$AllowError,[switch]$NoWait)
-    $body = @{jsonrpc='2.0';id=2;method='tools/call';params=@{name=$Name;arguments=$Arguments}} | ConvertTo-Json -Depth 12 -Compress
+    $body = @{jsonrpc='2.0';id=2;method='tools/call';params=@{name=$Name;arguments=$Arguments}} | ConvertTo-Json -Depth 64 -Compress
     try { $response = Invoke-RestMethod -Uri $Session.Url -Method Post -Headers $Session.Headers -ContentType 'application/json' -Body ([Text.Encoding]::UTF8.GetBytes($body)) -TimeoutSec 15 -MaximumRedirection 0 }
     catch { throw "MCP tool $Name failed: $($_.Exception.Message). Its outcome may be unknown; inspect the target before retrying a mutation." }
     if ($response.error) { throw ($response.error | ConvertTo-Json) }

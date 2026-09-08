@@ -37,7 +37,7 @@ MCP 客户端 -> 本机 HTTP /mcp -> GuitarPro.exe 内的 C++ 插件 -> Qt/GPCor
 
 ## 阶段目标
 
-P0-P7 已按下表声明的范围完成，P8 和 P9 已登记为当前规划但尚未实现或验收。P8/P9 的实施细节和验收拆分见 [docs/DEVELOPMENT_PLAN.md](docs/DEVELOPMENT_PLAN.md)；阶段状态和具名证据见 [docs/COVERAGE.md](docs/COVERAGE.md)。
+P0-P8 已按下表声明的范围完成，P9 扩展已登记为当前规划但尚未实施或验收。P8 验收记录和 P9 实施拆分见 [docs/DEVELOPMENT_PLAN.md](docs/DEVELOPMENT_PLAN.md)；阶段状态和具名证据见 [docs/COVERAGE.md](docs/COVERAGE.md)。
 
 | 阶段 | 目标与当前范围 | 明确保留的边界 |
 | --- | --- | --- |
@@ -49,8 +49,8 @@ P0-P7 已按下表声明的范围完成，P8 和 P9 已登记为当前规划但�
 | P5 播放与音频 | 速度点/渐变、展开时间线、循环、播放定位、已有音色/效果、设备选项和 PCM 验证 | 任意音色/效果定义、ASIO/驱动故障和全部声学组合不在范围 |
 | P6 文件交换与工作区 | GP5/GPX/MusicXML/MIDI 交换、PDF/PNG/WAV 输出、页面/谱表和明确作用域偏好 | 物理打印队列、其他编码器、任意样式和完整权限受限回归不在范围 |
 | P7 发布验收 | 最终包完整回归、双客户端、十份文档、一小时长测、资源回落、恢复、退出和真实安装生命周期 | 以支持版本和发布证据为准，不扩展未验收宿主或已排除功能 |
-| P8 高层编曲与曲谱语义 | 批量建谱、JSON 交换、文本六线谱、歌曲结构和曲谱语义对象 | 尚未实现或验收；实施细节、边界和验收拆分见 [P8 计划](docs/DEVELOPMENT_PLAN.md#p8高层编曲与曲谱语义接口) |
-| P9 编辑面板剩余能力 | 补齐当前截图中尚未覆盖的编辑按钮：歌词/和弦图/文本、力度与谱号、谱面排版、任意乐器与指法、任意音色/效果、完整自动化、系统剪贴板及剩余技法组合 | 尚未实现或验收；实施细节、宿主边界和验收拆分见 [P9 计划](docs/DEVELOPMENT_PLAN.md#p9编辑面板剩余能力) |
+| P8 高层编曲与曲谱语义 | 批量建谱与一次撤销、JSON 语义交换、文本六线谱、歌曲结构、和弦/和弦图、五行歌词、段落及页面元数据；通过真实宿主专项和完整原生回归 | JSON v1 限 32 轨、256 小节、20000 拍，不是完整 GP 文件备份；ASCII 不可逆；任意乐器、自动指法搜索、全部自定义音程/技法组合和完整歌词/刻谱排版不在验收范围 |
+| P9 编辑面板剩余能力 | 沿用 P8 的和弦/歌词基础，补齐当前截图中尚未覆盖的文本、力度与谱号、谱面排版、任意乐器与指法、任意音色/效果、完整自动化、系统剪贴板及剩余技法组合 | P9 扩展尚未实施或验收；实施细节、宿主边界和验收拆分见 [P9 计划](docs/DEVELOPMENT_PLAN.md#p9编辑面板剩余能力) |
 
 ## 质量门槛
 
@@ -65,6 +65,6 @@ P0-P7 已按下表声明的范围完成，P8 和 P9 已登记为当前规划但�
 - [README.md](README.md)：项目概览、用户入口、MCP 工具范围概览和开发启动。
 - [docs/INSTALL.md](docs/INSTALL.md)：安装包使用、更新/卸载和故障恢复。
 - [docs/COVERAGE.md](docs/COVERAGE.md)：已验证能力、保留边界和证据索引。
-- [native/README.md](native/README.md)：C++/Qt 实现、API 边界和测试命令。
-- [docs/DEVELOPMENT_PLAN.md](docs/DEVELOPMENT_PLAN.md)：P8/P9 实施计划、历史阶段计划和验收记录；当前目标以本文件为准。
+- [native/README.md](native/README.md)：C++/Qt 实现、API 边界和测试命令；P8 格式与调用细节见 [native/P8.md](native/P8.md)。
+- [docs/DEVELOPMENT_PLAN.md](docs/DEVELOPMENT_PLAN.md)：P9 实施计划、P0-P8 阶段计划和验收记录；当前目标以本文件为准。
 - [docs/README.md](docs/README.md)：面向用户和开发者的文档导航。

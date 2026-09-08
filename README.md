@@ -6,7 +6,7 @@
 MCP 客户端 -> 本机 HTTP /mcp -> GuitarPro.exe 内的 C++ 插件 -> Qt/GPCore 原生文档模型
 ```
 
-当前发布范围为 Windows x64 的 Guitar Pro **8.1.1.17**。P0-P7 已按声明范围完成验收。系统剪贴板互通、独立 GUI 多进程、原生标签拖动、原生保存进度取消和部分宿主可靠性场景仍是实验项或宿主限制。当前状态和证据以 [覆盖清单](docs/COVERAGE.md) 为准。
+当前支持 Windows x64 的 Guitar Pro **8.1.1.17**。P0-P8 已按声明范围完成验收，P8 新增批量编曲与曲谱语义接口。系统剪贴板互通、独立 GUI 多进程、原生标签拖动、原生保存进度取消和部分宿主可靠性场景仍是实验项或宿主限制。当前构建、历史发布包和证据以 [覆盖清单](docs/COVERAGE.md) 为准。
 
 ## 文档入口
 
@@ -14,6 +14,7 @@ MCP 客户端 -> 本机 HTTP /mcp -> GuitarPro.exe 内的 C++ 插件 -> Qt/GPCor
 | --- | --- | --- |
 | 最终用户 | [docs/INSTALL.md](docs/INSTALL.md) | 安装、更新、启停、卸载和故障恢复 |
 | 开发者 | [native/README.md](native/README.md) | 构建、连接、协议边界、工具参数和测试入口 |
+| 编曲调用 | [native/P8.md](native/P8.md) | 批量建谱、语义 JSON、六线谱、和弦、歌词和页面元数据 |
 | 验收/维护 | [docs/COVERAGE.md](docs/COVERAGE.md) | 当前能力、边界和最新证据 |
 | 历史追溯 | [docs/DEVELOPMENT_PLAN.md](docs/DEVELOPMENT_PLAN.md) | 历史阶段和验收检查点 |
 | 自动加载 | [native/AUTOLOAD.md](native/AUTOLOAD.md) | Qt 加载入口和探针验证 |
@@ -52,6 +53,8 @@ MCP 客户端 -> 本机 HTTP /mcp -> GuitarPro.exe 内的 C++ 插件 -> Qt/GPCor
 - 播放、时间线、音色、效果和音频设备
 - Qt 对象检查、原生窗口控制和开发模式探针
 - GP5/GPX/MusicXML/MIDI 导入以及 PDF/PNG/WAV 导出
+- 批量建谱、riff 插入、JSON 交换、ASCII 六线谱和歌曲结构摘要
+- 原生和弦符号/和弦图、五行歌词、段落及页面元数据
 
 服务使用协议版本 `2025-06-18`，默认端点为 `http://127.0.0.1:18432/mcp`。默认端口被占用时会自动选择其他本机端口；显式设置 `GPMCP_PORT` 时，冲突会报告错误。连接配置绑定实例 UUID，宿主重启后必须重新导入新配置，编辑请求不会自动重放。
 
