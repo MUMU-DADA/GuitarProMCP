@@ -55,7 +55,7 @@ $exitHandle = [GpmcpRegressionProcess]::OpenProcess(0x1000, $false, $process.Id)
 if ($exitHandle -eq [IntPtr]::Zero) { throw 'Cannot retain a process handle for exit-code verification.' }
 $exitCode = $null
 Write-Output "Regression host PID $($process.Id). Session: $sessionFile"
-$suites = @('mcp','native','editing','tracks','measures','effects','selection','saving','document-operations','document-tabs','lifecycle','session','structure','clipboard','tuplets','connections','notation','instruments','score-form','transfer','audio','p6','p8')
+$suites = @('mcp','native','editing','tracks','measures','effects','selection','saving','document-operations','document-tabs','lifecycle','session','structure','clipboard','tuplets','connections','notation','instruments','score-form','transfer','audio','p6','p8','p9')
 $results = @()
 $fixtureRestorations = @()
 $complete = $false

@@ -19,7 +19,7 @@ public:
     std::unique_ptr<FileHandle, std::function<void(FileHandle *)>> openHandle(const QString &, Mode);
 };
 }
-namespace am::music { enum class Accidental : int {}; }
+namespace am::music { enum class Accidental : int {}; enum class Dynamic : int {}; }
 namespace am::painting {
 class Color { public: int red, green, blue, alpha; };
 class Size { public: double width, height; };
@@ -157,6 +157,8 @@ enum class DirectionMark : int {};
 enum class AccentFlag : int {};
 enum class Rasgueado : int {};
 enum class BassAttack : int {};
+enum class Clef : int {};
+enum class StemOrientation : int {};
 struct Harmonic {
     enum class Type : int {};
     enum class Fret : int {};
@@ -224,12 +226,28 @@ public:
 class __declspec(dllimport) Automation {
 public:
     enum class Type : int {};
+    static std::shared_ptr<Automation> make(Type);
     virtual ~Automation();
     virtual unsigned barIndex() const;
+    virtual std::shared_ptr<Automation> cloneAutomation() const;
     float position() const; float value() const; bool isLinear() const;
     const std::string &text() const;
     virtual void setBarIndex(unsigned);
     void setPosition(float); void setValue(float); void setLinear(bool); void setText(const std::string &);
+    Type type() const;
+    static Type typeFromString(const std::string &);
+    static const std::string typeToString(Type);
+};
+class __declspec(dllimport) DSPParamAutomation : public Automation {
+public:
+    std::shared_ptr<Automation> cloneAutomation() const override;
+    int parameterId() const;
+};
+class __declspec(dllimport) SoundAutomation : public Automation {
+public:
+    std::shared_ptr<Automation> cloneAutomation() const override;
+    virtual void valueFromString(const std::string &);
+    virtual std::string valueToString() const;
 };
 class __declspec(dllimport) TempoAutomation : public Automation {
 public:
@@ -238,7 +256,9 @@ public:
 };
 class __declspec(dllimport) AutomationContainerProxy {
 public:
+    virtual void getAutomations(std::vector<std::shared_ptr<Automation>> &) const;
     virtual void getAutomations(Automation::Type, std::vector<std::shared_ptr<Automation>> &) const;
+    virtual void forEachBypass(const std::function<void(Automation::Type, bool)> &) const;
 };
 class __declspec(dllimport) Timeline {
 public:
@@ -373,8 +393,14 @@ public:
     const std::vector<std::shared_ptr<Note>> &notes() const;
     bool isRest() const; bool isPlaceholder() const; const RhythmValue &rhythm() const;
     const std::string &freeText() const;
+    const class NoteDynamic &dynamic() const;
     const QString &chord() const;
     const std::array<LyricsElement, 5> &lyrics() const;
+    StemOrientation drawingUserStemOrientation() const;
+    StemOrientation userConcertPitchStemOrientation() const;
+    StemOrientation userTransposedPitchStemOrientation() const;
+    bool hasUserConcertPitchStemOrientation() const;
+    bool hasUserTransposedPitchStemOrientation() const;
     void setLyrics(const std::string &, unsigned);
     bool isLegatoOrigin() const; bool isLegatoDestination() const;
     GraceType graceType() const; Direction pickStroke() const;
@@ -396,7 +422,14 @@ public:
 class __declspec(dllimport) Bar {
 public:
     bool isSimileBar() const;
+    Clef clef() const;
     const std::array<std::shared_ptr<Voice>, 4> &voices() const;
+};
+class __declspec(dllimport) NoteDynamic {
+public:
+    am::music::Dynamic value() const;
+    std::string toString() const;
+    static int stringToInt(const std::string &);
 };
 class __declspec(dllimport) GuitarTuning {
     // QObject's two pointers followed by the native tuning implementation.
@@ -583,10 +616,15 @@ public:
     void setChord(const ScoreModelRange &, const chord::Chord &, const chord::Diagram &);
     void unsetChord(const ScoreModelRange &);
     void setBeatFreeText(const ScoreModelRange &, const std::string &, bool);
+    void setBeatDynamic(const ScoreModelRange &, am::music::Dynamic, bool);
+    void setAutoStemOrientations(const ScoreModelRange &);
+    void setUserStemOrientations(const ScoreModelRange &, StemOrientation);
+    void setClef(const ScoreModelRange &, Clef, Ottavia, bool);
     void setMasterBarSection(unsigned, bool, const MasterBar::Section &, bool);
     void unsetMasterBarSection(const ScoreModelRange &);
     void setTempo(const std::string &, TempoUnit, float);
     void modifyMasterTrackAutomations(const std::vector<std::shared_ptr<Automation>> &, const std::map<Automation::Type, bool> &);
+    void modifyTrackAutomations(TrackBase::Type, int, const std::vector<std::shared_ptr<Automation>> &, const std::map<Automation::Type, bool> &);
     void setTrackSound(Track &, unsigned, const Sound &, bool);
     void setForcedSoundIndex(Track &, int);
     void setMasterBarTimeSignature(const ScoreModelRange &, bool, const TimeSignature &);
@@ -618,6 +656,10 @@ static_assert(sizeof(Score) == 0x1E8 && alignof(Score) == 8);
 __declspec(dllimport) QString scorePropertyToQString(ScoreProperty);
 __declspec(dllimport) std::string playbackStateToString(PlaybackState);
 __declspec(dllimport) std::string tempoUnitToString(TempoUnit);
+__declspec(dllimport) Clef clefFromString(const std::string &);
+__declspec(dllimport) std::string clefToString(Clef);
+__declspec(dllimport) StemOrientation stemOrientationFromString(const std::string &);
+__declspec(dllimport) std::string stemOrientationToString(StemOrientation);
 __declspec(dllimport) float convertTempo(float, TempoUnit, TempoUnit);
 __declspec(dllimport) std::string vibratoToString(Vibrato);
 __declspec(dllimport) std::string antiAccentToString(AntiAccent);

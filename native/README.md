@@ -104,11 +104,12 @@ try {
 | `gp_recover` | `request` | 重试 `recovery_available=true` 的标签回滚、保存状态恢复或新建模板路径复原；P8 未知提交只观察模型，不重放编辑；文档集合变化时只核验当前映射 |
 | `gp_activate` | `document` | 调用原生 `activateNextDocumentView` 导航至目标，并读回文档管理器确认 |
 | `gp_score` | `document?` | 读取元数据、音轨摘要、光标、未保存和撤销重做状态 |
-| `gp_read_bars` | `document?`, `track?=0`, `staff?=0`, `bar?=0`, `count?=1` | 每次读取 1–16 个完整存在的小节，音符包括 `effects`；单次节拍/音符读取量有上限 |
+| `gp_read_bars` | `document?`, `track?=0`, `staff?=0`, `bar?=0`, `count?=1`, `include_dynamic?`, `include_clef?`, `include_stem?` | 每次读取 1–16 个完整存在的小节，音符包括 `effects`；`include_dynamic=true` 额外返回节拍 `dynamic`/`dynamic_value`，`include_clef=true` 额外返回小节 `clef`，`include_stem=true` 额外返回节拍 `stem`（符干方向和用户方向标志）；默认结构不变 |
 | `gp_read_master_bars` | `document?`, `bar?=0`, `count?=1` | 每次读取 1–128 个全曲共享小节的拍号、实音调号、反复和小节线状态 |
-| `gp_edit_measure` | `document?`, `operation` 及对应参数 | 修改光标所在的单个全曲共享小节，参数见下表；支持原生撤销 |
+| `gp_edit_measure` | `document?`, `operation` 及对应参数 | 修改光标所在的单个全曲共享小节；`clef` 支持 `G2`、`F4`、`C3`，其他参数见下表；支持原生撤销 |
 | `gp_edit_metadata` | `document?`, `property`, `value` | 属性名使用 `gp_score.metadata` 的原始键，例如 `Title`；值最长 16384 个 UTF-16 代码单元 |
 | `gp_edit_tempo` | `document?`, `value`, `unit?`, `label?` | 修改初始速度，`value` 为 1–400 的整数，省略单位或标记时保留原值 |
+| `gp_automation` | `document?`, `operation`, `track?`, `parameter?`, `bar?`, `position?`, `value?`, `linear?`, `text?` | `types/state` 读取宿主音轨自动化；`set/remove` 仅对 `DSPParam_00..DSPParam_31` 提供实验性曲线写入，提交时保留同轨道其他自动化及旁路状态，参数语义和播放影响尚未完成宿主专项验证 |
 | `gp_edit_track` | `document?`, `track`, `property`, `value` | 修改 `name`、`short_name`、`color`、`volume`、`pan`、`playback_state` 或记谱 `transposition` |
 | `gp_edit_tuning` | `document?`, `track`, `staff?`, `tuning?`, `capo?`, `partial_capo?`, `partial_capo_strings?`, `preserve_pitch?` | 修改弦乐谱表的调弦、变调夹及部分变调夹，支持撤销 |
 | `gp_transpose` | `document?`, `semitones`, `scope?=cursor` | 光标单拍或明确选区的实音移调，范围为 -24..24 半音；拒绝打击乐 |
@@ -120,7 +121,7 @@ try {
 | `gp_edit_note` | `document?`, `operation`, `string?`, `fret?`, `midi?` | 弦乐用弦号和品位；键盘和打击乐用 MIDI 0..127，不能混用两套定位参数；`set` 新增、`remove` 删除 |
 | `gp_edit_note_effect` | `document?`, `string?`, `note_index?`, `property`, `value` | 用弦号或 `notes` 数组下标选择已有单音，支持原生撤销；取值见下表 |
 | `gp_edit_beat_effect` | `document?`, `property`, `value` | 修改当前单拍的装饰音、扫拨方向、渐强弱、轮指等技法，支持撤销 |
-| `gp_edit_beat` | `document?`, `operation`, `denominator?`, `dots?`, `scope?=cursor`, `level?`, `actual?`, `normal?`, `enabled?` | `insert` 插入休止拍，`rhythm` 设置基础时值，`dots` 设置附点，`tuplet` 设置连音，`clear` 清空音符，`remove` 删除节拍；`scope=selection` 接受 `rhythm/dots/tuplet` |
+| `gp_edit_beat` | `document?`, `operation`, `denominator?`, `dots?`, `text?`, `dynamic?`, `orientation?`, `scope?=cursor`, `level?`, `actual?`, `normal?`, `enabled?` | `insert` 插入休止拍，`rhythm` 设置基础时值，`dots` 设置附点，`tuplet` 设置连音，`text` 设置节拍文本，`dynamic` 设置 `PPP`–`FFF` 力度标记，`stem` 设置 `Upward`/`Downward` 或 `auto` 符干方向，`clear` 清空音符，`remove` 删除节拍；`scope=selection` 接受 `rhythm/dots/tuplet/text/dynamic/stem`；力度清除和力度/表情自动化仍未核验 |
 | `gp_edit_connection` | `document?`, `kind`, `enabled`, `scope?=cursor`, `string?`, `note_index?` | `legato` 连奏或 `tie` 延音线；光标延音线可用弦号或音符数组索引指定单音；选区支持跨声部、音轨及谱表 |
 | `gp_clipboard` | 按操作提供 `document?`, `id?`, `scope?`, `repeat?`, `include_text?`, `track?`, `staff?`, `bar?`, `count?` | 原生独立快照的复制、剪切、读取和粘贴；见原生剪贴板章节 |
 | `gp_edit_bars` | `document?`, `operation`, `index`, `count?=1` | `insert` / `remove` 同步增删所有音轨的小节，数量 1–128；曲谱最多 100000 小节 |
@@ -137,8 +138,17 @@ try {
 | `gp_edit_chord` / `gp_edit_lyrics` | `document?`, `track`, `staff`, `bar`, `voice`, `beat`，以及 `chord/operation` 或 `line/text` | 精确定位的符号/和弦图或歌词片段编辑，返回请求 ID |
 | `gp_read_sections` / `gp_edit_section` | `document?`，写入另需 `bar`, `name?`, `text?`, `operation?` | 读段落起止；异步设置或移除原生段落起点 |
 | `gp_presentation` 的页面元数据 | `document?`, `operation=set`, `page_metadata` | 标题、作者、作曲者、版权、页眉页脚和页码，异步整组提交及一次撤销 |
+| `gp_p9_status` | 无 | 读取 P9 能力矩阵及“已实现、已验证、实验性、未实现、宿主受限”状态，不改变曲谱 |
 
-P8 编辑请求通过 `gp_operation` 查询 `applied/unchanged/error`，新建为 `created`；`gp_documents.editing` 提供最近编辑状态。格式、默认值、上限、模板复用及恢复语义见 [P8 编曲与语义 JSON](P8.md)。PowerShell 客户端仅自动等待保存工具，P8 请求需要显式查询终态。
+P8/P9 编辑请求通过 `gp_operation` 查询 `applied/unchanged/error`，新建为 `created`；`gp_documents.editing` 提供最近编辑状态。格式、默认值、上限、模板复用及恢复语义见 [P8 编曲与语义 JSON](P8.md)；P9 能力边界和专项证据见 [覆盖清单](../docs/COVERAGE.md#p9验收)。PowerShell 客户端仅自动等待保存工具，P8/P9 请求需要显式查询终态。
+
+`gp_edit_beat operation=text` 使用 `text` 字段写入当前光标或明确选区内节拍的原生 `Beat::freeText`；空串用于清除，Unicode 和空白按宿主 GPIF 可保存范围保留。请求会逐项读回实际文本并进入宿主撤销栈，支持 `scope=selection` 及 `tracks/staves/voices` 筛选；调用方应检查 `gp_operation`、`gp_score.dirty`，并在保存重开后再次读取。文本操作不接受 rhythm/tuplet 的参数，未核验的布局按钮仍由 `gp_p9_status` 标为宿主受限。
+
+`gp_edit_beat operation=dynamic` 使用 `dynamic` 字段写入当前光标或选区内节拍的原生 `Beat::dynamic`，接受 `PPP`、`PP`、`P`、`MP`、`MF`、`F`、`FF`、`FFF`（大小写不敏感）。选区写入按每个实际节拍提交为一个宏命令，调用方应通过 `gp_read_bars include_dynamic=true` 读回 `dynamic`/`dynamic_value`，再检查撤销和保存重开。当前宿主没有可靠的力度清除写入路径，空值或额外参数会被拒绝；`gp_p9_status` 将清除标为宿主受限。
+
+`gp_edit_beat operation=stem` 使用 `orientation` 字段写入符干方向：`Upward`、`Downward` 或 `auto`（大小写不敏感）。`auto` 调用宿主 `setAutoStemOrientations` 清除用户方向，其他两项调用 `setUserStemOrientations`；光标和选区都支持 `tracks/staves/voices` 筛选并进入原生撤销栈。用 `gp_read_bars include_stem=true` 读取 `stem.drawing`、`stem.concert`、`stem.transposed` 及 `has_user_*` 标志。该接口只修改 GPCore 符干状态，不承诺细粒度符杠、连音括号或页面间距布局。
+
+`gp_automation operation=state` 读取整条音轨的原生自动化点及旁路状态，包含宿主尚未列入公共枚举的类型。`set/remove` 目前只开放 `DSPParam_00..DSPParam_31` 的实验性路径；写入前会保留该音轨的其他自动化和旁路映射，并在读回不一致时拒绝报告成功。参数对应的宿主 UI 语义、力度/表情/音量映射和 PCM 影响尚未核验，因此 `gp_p9_status.track_automation` 保持“实验性”，不能把它当作完整自动化交付。
 
 所有索引从 0 开始。弦索引沿用宿主内部顺序，并不直接等于日常所说的“第一弦”。光标尚未选中音符时，`note_string` 和 `note_midi` 可能为 `-1`。
 
@@ -553,6 +563,9 @@ IDocumentsManager + 0x10 → 管理器实现对象
 
 # P8 批量编曲、语义对象、异常恢复；PDF 复核依赖见 P8.md
 ./native/test-p8.ps1 -SessionFile <session.json> -RenderPdf
+
+# P9 节拍文本、力度/符干/谱号和能力矩阵
+./native/test-p9.ps1 -SessionFile <session.json>
 ```
 
 失败时保留宿主和 `artifacts/` 证据；不要把 `scheduled`、菜单枚举或 DLL 加载成功当作原生能力已验证。真实宿主回归需要 Guitar Pro 8.1.1.17 及匹配的宿主文件哈希。
