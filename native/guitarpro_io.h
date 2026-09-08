@@ -1,5 +1,5 @@
 #pragma once
-#include "guitarpro_audio.h"
+#include "guitarpro_semantics.h"
 #include <QtCore/QDataStream>
 #include <QtCore/QCoreApplication>
 #include <QtCore/qscopeguard.h>
@@ -8,7 +8,7 @@
 #include <QtGui/QImage>
 
 namespace guitarpro {
-inline QJsonObject presentation(const QJsonObject &args) {
+inline QJsonObject presentation(const QJsonObject &args, std::function<QJsonObject()> *recovery = nullptr) {
     const auto document = choose(args);
     if (!document.object || !document.score) return {{"error", "Existing native document required"}};
     const QString operation = args.value("operation").toString("state");
@@ -30,6 +30,7 @@ inline QJsonObject presentation(const QJsonObject &args) {
             state["design_mode"] = QJsonValue::fromVariant(document.view->property("designMode"));
             state["multivoice_edition"] = QJsonValue::fromVariant(document.view->property("multivoiceEdition"));
         }
+        state["page_metadata"] = pageMetadata(document.score);
         return state;
     };
     if (operation == "state") return {{"document", document.id()}, {"scope", "document"}, {"state", resultState()}, {"undoable", false}};
@@ -37,8 +38,17 @@ inline QJsonObject presentation(const QJsonObject &args) {
     const bool pageChange = args.contains("width") || args.contains("height") || args.contains("left") || args.contains("top") || args.contains("right") || args.contains("bottom") || args.contains("orientation");
     const bool viewChange = args.contains("zoom") || args.contains("design_mode") || args.contains("multivoice_edition");
     const bool trackChange = args.contains("track");
-    if ((pageChange ? 1 : 0) + (viewChange ? 1 : 0) + (trackChange ? 1 : 0) != 1)
+    const bool pageMetadataChange = args.contains("page_metadata");
+    if ((pageChange ? 1 : 0) + (viewChange ? 1 : 0) + (trackChange ? 1 : 0) + (pageMetadataChange ? 1 : 0) != 1)
         return {{"error", "Set one presentation group at a time: page, view, or track"}};
+    if (pageMetadataChange) {
+        if (!recovery || !args.value("page_metadata").isObject()) return {{"error", "page_metadata must be an object submitted through the document operation"}};
+        const auto staged = semanticCopy(document.score);
+        setPageMetadata(staged.get(), args.value("page_metadata").toObject());
+        semanticMatch(args.value("page_metadata"), pageMetadata(staged.get()), "page_metadata");
+        auto result = semanticCommit(document, staged, *recovery);
+        result["state"] = resultState(); result["undoable"] = true; return result;
+    }
     for (const char *name : {"design_mode", "multivoice_edition", "standard_notation", "tablature"})
         if (args.contains(name) && !args.value(name).isBool()) return {{"error", "Presentation flags must be boolean"}};
     if ((args.contains("standard_notation") || args.contains("tablature")) && !trackChange) return {{"error", "Choose a track for notation changes"}};

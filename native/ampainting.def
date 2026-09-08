@@ -1,0 +1,6 @@
+LIBRARY AMPainting.dll
+EXPORTS
+??0FormattedText@painting@am@@QEAA@AEBV012@@Z
+??1FormattedText@painting@am@@UEAA@XZ
+?setText@FormattedText@painting@am@@QEAAXAEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@@Z
+?text@FormattedText@painting@am@@QEBAAEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@XZ

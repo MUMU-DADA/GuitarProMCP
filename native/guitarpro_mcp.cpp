@@ -27,6 +27,7 @@
 #include "guitarpro_audio.h"
 #include "guitarpro_io.h"
 #include "guitarpro_clipboard.h"
+#include "guitarpro_semantics.h"
 #include "object_registry.h"
 #include <QtCore/QEvent>
 #include <QtCore/QPointer>
@@ -58,6 +59,7 @@ class Bridge : public QObject {
     QPointer<QObject> creationDocument;
     QElapsedTimer creationElapsed;
     QTimer creationPoll{this};
+    std::shared_ptr<gp::core::Score> creationPrepared;
     QJsonObject opening;
     QElapsedTimer openingElapsed;
     QTimer openingPoll{this};
@@ -67,6 +69,8 @@ class Bridge : public QObject {
     QJsonObject saving;
     QJsonObject exporting;
     QJsonObject moving;
+    QJsonObject editing;
+    bool editingNativeActive = false;
     std::function<QJsonObject()> pendingRecovery;
     QString recoveryRequest;
     bool recoveryActive = false;
@@ -171,7 +175,9 @@ class Bridge : public QObject {
             creation["document"] = document.id();
             const QString documentId = document.id();
             const QString openedBefore = document.object->property("openedFilePath").toString();
-            const auto adopt = [document, path, openedBefore, documentId]() -> QJsonObject {
+            const auto attempted = std::make_shared<bool>(false);
+            const auto commitRecovery = std::make_shared<std::function<QJsonObject()>>();
+            const auto adopt = [this, document, path, openedBefore, documentId, prepared = creationPrepared, attempted, commitRecovery]() -> QJsonObject {
                 if (!document.object || !document.view)
                     return {{"resolution", "document_closed"}, {"document", documentId}};
                 for (const char *property : {"openedFilePath", "saveFilePath"}) {
@@ -185,6 +191,20 @@ class Bridge : public QObject {
                     !document.object || !QMetaObject::invokeMethod(document.object, "setSaveFilePath", Qt::DirectConnection, Q_ARG(QString, empty)) ||
                     !document.object || !document.object->property("openedFilePath").toString().isEmpty() || !document.object->property("saveFilePath").toString().isEmpty())
                     return {{"error", "Native template path reset did not complete"}, {"outcome_unknown", true}};
+                if (prepared) {
+                    if (*attempted) {
+                        if (!*commitRecovery) return {{"resolution", "created"}, {"document", documentId}};
+                        auto observed = (*commitRecovery)();
+                        if (observed.value("resolution") == "applied") observed["resolution"] = "created";
+                        return observed;
+                    }
+                    const auto activated = guitarpro::activate({{"document", documentId}}, services());
+                    if (activated.contains("error")) return activated;
+                    *attempted = true;
+                    const auto applied = guitarpro::semanticCommit(document, prepared, *commitRecovery);
+                    creation["spec_result"] = applied;
+                    if (applied.contains("error")) return applied;
+                }
                 return {{"resolution", "created"}, {"document", document.id()}};
             };
             QJsonObject result;
@@ -201,6 +221,7 @@ class Bridge : public QObject {
                 creation.remove("outcome_unknown"); creation.remove("error");
                 if (creation.value("status") == "error") creation["error"] = "New document closed before initialization completed";
             }
+            creationPrepared.reset();
             return;
         }
         if (creation.value("status") == "cancelling" && creation.value("cancel_decision_available").toBool()) {
@@ -223,6 +244,46 @@ class Bridge : public QObject {
         if (request.isEmpty()) return;
         operationHistory.insert(request, operation); operationOrder.append(request);
         while (operationOrder.size() > 64) operationHistory.remove(operationOrder.takeFirst());
+    }
+
+    QJsonObject scheduleSemantic(const QString &tool, QJsonObject args) {
+        const auto target = guitarpro::choose(args);
+        if (!target.score || !target.view) return {{"error", "Choose an existing verified document"}};
+        args["document"] = target.id();
+        if (tool == "gp_apply_spec" || tool == "gp_import_json") {
+            QJsonObject spec; QString error;
+            if (!guitarpro::semanticParseSpec(args, &spec, &error) || !guitarpro::semanticValidateSpec(spec, &error)) return {{"error", error}};
+            args["spec"] = spec;
+        }
+        archiveOperation(editing); pendingRecovery = {};
+        editing = {{"request", nonce()}, {"status", "scheduled"}, {"kind", tool}, {"document", target.id()}};
+        const QString request = editing.value("request").toString();
+        const int delay = qEnvironmentVariableIsSet("GPMCP_DEVELOPMENT") ? qBound(0, args.value("debug_delay_ms").toInt(), 2000) : 0;
+        QTimer::singleShot(delay, this, [this, tool, args, request]() {
+            if (editing.value("request") != request || editing.value("status") != "scheduled") return;
+            QScopedValueRollback<bool> active(editingNativeActive, true);
+            editing["status"] = "requested"; recoveryRequest = request;
+            QJsonObject result;
+            try {
+                if (QApplication::activeModalWidget()) throw std::runtime_error("A dialog appeared before the edit; resolve it and issue a new request");
+                result = guitarpro::activate({{"document", args.value("document")}}, services());
+                guitarpro::semanticResult(result);
+                if (tool == "gp_apply_spec" || tool == "gp_import_json") result = guitarpro::applySpec(args, pendingRecovery);
+                else if (tool == "gp_insert_tab") result = guitarpro::insertTab(args, pendingRecovery);
+                else if (tool == "gp_edit_chord") result = guitarpro::editChord(args, pendingRecovery);
+                else if (tool == "gp_edit_lyrics") result = guitarpro::editLyrics(args, pendingRecovery);
+                else if (tool == "gp_edit_section") result = guitarpro::editSection(args, pendingRecovery);
+                else result = guitarpro::presentation(args, &pendingRecovery);
+            } catch (const std::exception &e) { result = {{"error", QString::fromUtf8(e.what())}, {"outcome_unknown", bool(pendingRecovery)}}; }
+            catch (...) { result = {{"error", "Unknown native semantic edit exception"}, {"outcome_unknown", bool(pendingRecovery)}}; }
+            editing["result"] = result;
+            editing["status"] = result.contains("error") ? "error" : result.value("status").toString("applied");
+            editing["native_returned"] = true;
+            editing["recovery_available"] = bool(pendingRecovery);
+            if (result.contains("error")) editing["error"] = result.value("error");
+            if (result.value("outcome_unknown").toBool()) editing["outcome_unknown"] = true;
+        });
+        return editing;
     }
 
     void checkOpening() {
@@ -321,7 +382,7 @@ class Bridge : public QObject {
     }
 
     QJsonObject cancelOperation(const QString &request) {
-        for (auto operation : {&creation, &opening, &closing, &saving, &moving, &exporting}) {
+        for (auto operation : {&creation, &opening, &closing, &saving, &moving, &exporting, &editing}) {
             if (operation->value("request") != request) continue;
             if (!pending(*operation)) return {{"error", "Operation already completed"}, {"operation", *operation}};
             if (operation->value("status") == "scheduled") {
@@ -382,9 +443,9 @@ class Bridge : public QObject {
     }
 
     QJsonObject recoverOperation(const QString &request) {
-        if (recoveryActive || loadNativeActive || closingNativeActive || savingOperation || QApplication::activeModalWidget())
+        if (recoveryActive || editingNativeActive || loadNativeActive || closingNativeActive || savingOperation || QApplication::activeModalWidget())
             return {{"error", "A native operation or dialog is still active; inspect gp_operation and gp_dialogs"}};
-        for (auto operation : {&creation, &opening, &closing, &saving, &moving}) {
+        for (auto operation : {&creation, &opening, &closing, &saving, &moving, &editing}) {
             if (operation->value("request") != request) continue;
             if (operation->value("status") != "error" || !operation->value("outcome_unknown").toBool() || request != recoveryRequest || !pendingRecovery)
                 return {{"error", "This operation has no pending recoverable outcome"}, {"operation", *operation}};
@@ -705,35 +766,54 @@ class Bridge : public QObject {
         if (!QDir().mkpath(QFileInfo(sessionFile).absolutePath())) {
             gpmcp::diagnostic("configuration_error", "Cannot create the MCP session directory"); return;
         }
-        const QJsonObject str{{"type", "string"}}, integer{{"type", "integer"}}, boolean{{"type", "boolean"}};
+        const QJsonObject str{{"type", "string"}}, integer{{"type", "integer"}}, boolean{{"type", "boolean"}}, anyObject{{"type", "object"}};
         const QJsonObject indices{{"type", "array"}, {"items", integer}, {"minItems", 1}, {"uniqueItems", true}};
         QJsonArray tools;
         auto add = [&](const QString &name, const QString &description, QJsonObject properties, QJsonArray required = {}) {
+            if (name == "gp_apply_spec" && qEnvironmentVariableIsSet("GPMCP_DEVELOPMENT")) {
+                properties["debug_fault"] = QJsonObject{{"type", "string"}, {"enum", QJsonArray{"before_commit", "after_commit"}}};
+                properties["debug_delay_ms"] = QJsonObject{{"type", "integer"}, {"minimum", 0}, {"maximum", 2000}};
+            }
             tools.append(QJsonObject{{"name", name}, {"description", description},
                 {"inputSchema", QJsonObject{{"type", "object"}, {"properties", properties}, {"required", required}, {"additionalProperties", false}}}});
         };
         if (qEnvironmentVariableIsSet("GPMCP_DEVELOPMENT")) add("gp_debug_objects", "开发用：从已知 Qt 对象读取关联的 C++ RTTI，定位原生模型。", {});
         if (qEnvironmentVariableIsSet("GPMCP_DEVELOPMENT")) add("gp_audio_probe", "开发验收：原生渲染最多 30 秒测试曲谱，返回 PCM 帧数、能量和哈希。", {{"document", str}});
         add("gp_audio_device", "原生全局音频设备：state/set。property/value 必须来自返回的 choices；修改前停止播放，不加入曲谱撤销栈。", {{"operation", str}, {"property", str}, {"value", QJsonObject{{"anyOf", QJsonArray{str, integer}}}}});
+        add("gp_p9_status", "读取 P9 编辑面板能力矩阵。每项明确返回已实现、已验证、实验性、未实现或宿主受限；只读，不改变曲谱。", {});
         add("gp_preferences", "读取或设置明确允许的全局原生偏好。scope 为 application，model 为 general/gui/score。文档设置使用 gp_presentation。设置失败会恢复旧值。", {{"scope", str}, {"model", str}, {"operation", str}, {"property", str}, {"value", QJsonObject{{"anyOf", QJsonArray{boolean, QJsonObject{{"type", "number"}}}}}}});
-        add("gp_presentation", "读取或设置文档页面、缩放、编辑显示和谱表可见性。页面尺寸/边距使用毫米；一次只设置页面、视图或谱表一组。standard_notation、tablature 使用宿主原生曲谱模型。", {{"document", str}, {"operation", str}, {"width", QJsonObject{{"type", "number"}}}, {"height", QJsonObject{{"type", "number"}}}, {"left", QJsonObject{{"type", "number"}}}, {"top", QJsonObject{{"type", "number"}}}, {"right", QJsonObject{{"type", "number"}}}, {"bottom", QJsonObject{{"type", "number"}}}, {"orientation", str}, {"zoom", QJsonObject{{"type", "number"}}}, {"design_mode", boolean}, {"multivoice_edition", boolean}, {"track", integer}, {"standard_notation", boolean}, {"tablature", boolean}});
+        add("gp_presentation", "读取或设置文档页面、页面元数据、缩放、编辑显示和谱表可见性。页面尺寸/边距使用毫米；一次只设置页面、page_metadata、视图或谱表一组。page_metadata 异步写入 title/author/composer/copyright，以及 even_header/odd_header、first_footer/even_footer/odd_footer、first_page_number/even_page_number/odd_page_number（对象含 text、visibility=0 可见/1 隐藏/2 折叠）。使用 gp_operation 查询终态，整组一次撤销。", {{"document", str}, {"operation", str}, {"width", QJsonObject{{"type", "number"}}}, {"height", QJsonObject{{"type", "number"}}}, {"left", QJsonObject{{"type", "number"}}}, {"top", QJsonObject{{"type", "number"}}}, {"right", QJsonObject{{"type", "number"}}}, {"bottom", QJsonObject{{"type", "number"}}}, {"orientation", str}, {"page_metadata", anyObject}, {"zoom", QJsonObject{{"type", "number"}}}, {"design_mode", boolean}, {"multivoice_edition", boolean}, {"track", integer}, {"standard_notation", boolean}, {"tablature", boolean}});
         if (qEnvironmentVariableIsSet("GPMCP_DEVELOPMENT")) add("gp_debug_resources", "开发用：只读枚举宿主嵌入的 Qt 资源路径。", {{"query", str}});
         add("gp_templates", "枚举宿主内置曲谱模板，供 gp_new 使用。", {});
-        add("gp_edit_connection", "原生编辑连奏和延音线，支持撤销。kind 为 legato/tie，enabled 必填；scope 为 cursor（默认）或 selection。cursor 的 legato 连接下一拍，tie 连接前一拍；tie 可用 string 指定单音，省略时整拍处理，可能改写音高/升降号或补入音符。selection 支持跨声部/音轨，沿用 128 小节、20000 拍上限。返回 observed_beats 和 changed_selected_beats，后者不含选区外的相邻端点；status=executed 不保证每个音符都可连接。重复命令可能增加原生撤销记录。", {{"document", str}, {"kind", str}, {"enabled", boolean}, {"scope", str}, {"string", integer}}, {"kind", "enabled"});
+        add("gp_edit_connection", "原生编辑连奏和延音线，支持撤销。kind 为 legato/tie，enabled 必填；scope 为 cursor（默认）或 selection。cursor 的 legato 连接下一拍，tie 连接前一拍；tie 可用 string 或 note_index 指定单音，省略时整拍处理，可能改写音高/升降号或补入音符。selection 支持跨声部/音轨，沿用 128 小节、20000 拍上限。返回 observed_beats 和 changed_selected_beats，后者不含选区外的相邻端点；status=executed 不保证每个音符都可连接。重复命令可能增加原生撤销记录。", {{"document", str}, {"kind", str}, {"enabled", boolean}, {"scope", str}, {"string", integer}, {"note_index", integer}}, {"kind", "enabled"});
         add("gp_new", "使用宿主内置模板异步新建曲谱；轮询 gp_documents.creation 确认 request 对应的 created 状态。", {{"template", str}}, {"template"});
-        add("gp_read_bars", "按小节读取实时音符、音高、品位、弦、时值和休止；每次最多 16 小节。", {{"document", str}, {"track", integer}, {"staff", integer}, {"bar", integer}, {"count", integer}});
+        add("gp_create_from_spec", "异步使用宿主模板创建曲谱，先在原生副本构建并核对规格，再创建文档、一次提交。用 gp_operation 查询 created/error 终态。", {{"template", str}, {"spec", guitarpro::semanticSpecSchema()}}, {"template", "spec"});
+        add("gp_apply_spec", "在当前实时文档中批量应用元数据、音轨名称、谱表、小节、节拍、音符、和弦、歌词和拍号。replace 重建音轨和音符；append/insert 增加全局小节且拒绝更改现有音轨属性。未提供的元数据/主小节属性沿用原模型，音轨配置沿用所选模板或原音轨。异步返回 request，用 gp_operation 查询 applied/unchanged/error；一次原生撤销。", {{"document", str}, {"spec", guitarpro::semanticSpecSchema()}, {"mode", str}, {"bar", integer}}, {"spec"});
+        add("gp_insert_tab", "将单弦 riff（0-2-2，r 为休止，| 分小节）写入指定音轨/谱表/声部。默认八分音符。append/insert 新增全局小节，replace 仅替换指定声部的已有小节。异步返回 request，用 gp_operation 查询终态；一次原生撤销。", {{"document", str}, {"text", str}, {"mode", str}, {"bar", integer}, {"track", integer}, {"staff", integer}, {"voice", integer}, {"string", integer}, {"denominator", integer}}, {"text"});
+        add("gp_export_json", "返回 guitarpromcp.p8 v1 的 spec：音轨/谱表/小节/声部按数组从零定位；含音符、技法、连音、和弦、歌词、反复、段落、速度。上限为 32 轨、256 小节、总计 20000 拍。", {{"document", str}});
+        add("gp_import_json", "导入 gp_export_json.spec 对象或其 JSON 字符串。replace 替换曲谱内容，append/insert 要求音轨和谱表与目标一致。先在原生副本构建，再一次提交。异步返回 request，用 gp_operation 查询终态。", {{"document", str}, {"spec", QJsonObject{{"anyOf", QJsonArray{guitarpro::semanticSpecSchema(), str}}}}, {"mode", str}, {"bar", integer}}, {"spec"});
+        add("gp_export_tab", "导出 ASCII 六线谱；每拍一列，时值另列，各声部分开，高音弦在上。返回原生节拍和不可表示项；ASCII 不可逆。", {{"document", str}, {"track", integer}, {"staff", integer}, {"bar", integer}, {"count", integer}, {"voice", integer}});
+        add("gp_structure", "读取统一歌曲结构摘要：主小节、拍号、调号、反复、跳转、段落、音轨和速度。", {{"document", str}});
+        add("gp_read_chords", "按实际拍关联解引用宿主和弦集合，读取名称、根音、低音、类型、音程、转位和和弦图；types 返回原生类型选项。", {{"document", str}, {"track", integer}, {"staff", integer}, {"bar", integer}, {"count", integer}, {"voice", integer}});
+        add("gp_edit_chord", "在指定拍设置/移除和弦语义对象。chord 含 root、可选 bass/name/type/degrees/diagram；diagram 含 first_fret、frets、barres、fingers。弦从低音弦零起算；frets 为绝对品位，指法/横按 fret 为图内相对品位。barres 的 finger 默认 1（食指），以原生重复指法位置持久化；实际音符独立。异步返回 request，用 gp_operation 查询终态。", {{"document", str}, {"track", integer}, {"staff", integer}, {"bar", integer}, {"voice", integer}, {"beat", integer}, {"operation", str}, {"chord", anyObject}}, {"track", "staff", "bar", "voice", "beat"});
+        add("gp_read_lyrics", "读取实时拍歌词行和文本片段，并返回音轨/谱表/小节/声部/拍关联。", {{"document", str}, {"track", integer}, {"staff", integer}, {"bar", integer}, {"count", integer}, {"voice", integer}});
+        add("gp_edit_lyrics", "在指定实时拍的 0..4 行写入一个歌词文本片段，空字符串清除；空格和连字符原样保留。异步返回 request，gp_operation 查询终态；一次原生撤销。", {{"document", str}, {"track", integer}, {"staff", integer}, {"bar", integer}, {"voice", integer}, {"beat", integer}, {"line", integer}, {"text", str}}, {"track", "staff", "bar", "voice", "beat", "line", "text"});
+        add("gp_read_sections", "读取原生段落起点，end_bar 为下一段落前一小节或曲谱末尾。", {{"document", str}});
+        add("gp_edit_section", "在指定主小节设置或清除段落名称和文本。异步返回 request，gp_operation 查询终态；段落结束由下一个起点决定。", {{"document", str}, {"operation", str}, {"bar", integer}, {"name", str}, {"text", str}}, {"bar"});
+        add("gp_read_bars", "按小节读取实时音符、音高、品位、弦、时值和休止；每次最多 16 小节。include_dynamic/include_clef/include_stem=true 时额外返回节拍力度、小节谱号或符干方向，默认输出结构不变。", {{"document", str}, {"track", integer}, {"staff", integer}, {"bar", integer}, {"count", integer}, {"include_dynamic", boolean}, {"include_clef", boolean}, {"include_stem", boolean}});
         add("gp_set_fret", "通过原生命令修改当前光标节拍中一个已有音符的品位；弦索引从 0 开始。", {{"document", str}, {"string", integer}, {"fret", integer}}, {"string", "fret"});
         add("gp_edit_note", "在当前节拍或占位拍上原生增删音符。operation 为 set/remove；弦乐用 string 和 fret，键盘及打击乐用 midi 0..127，不混用两类定位。set 对已有 MIDI 音符不重复添加；打击乐 MIDI 必须属于当前乐器。", {{"document", str}, {"operation", str}, {"string", integer}, {"fret", integer}, {"midi", integer}}, {"operation"});
         add("gp_edit_note_effect", "原生修改当前拍音符技法，用 string 或 note_index 定位，支持撤销。palm_mute/let_ring/left_hand_tapping/right_hand_tapping/dead/hopo/staccato/staccatissimo/accent/heavy_accent/tenuto 使用布尔值；vibrato、anti_accent、left_fingering/right_fingering、ornament 使用原生名称。trill: {enabled:true,midi:0..127}（十六分音符）或 {enabled:false}；slide: {kind,enabled} 或 {kind:None}；harmonic: {type,fret} 或 {type:None}；bend: {enabled,origin_value,middle_value,destination_value,origin_offset,middle_offset1,middle_offset2,destination_offset}，音高值为 0..12 半音，位置 0..1，清除只传 {enabled:false}。", {{"document", str}, {"string", integer}, {"note_index", integer}, {"property", str}, {"value", QJsonObject{{"anyOf", QJsonArray{boolean, str, QJsonObject{{"type", "object"}}}}}}}, {"property", "value"});
         add("gp_edit_beat_effect", "修改光标单拍技法，支持原生撤销。grace、pick_stroke、fade、hairpin、golpe、ottavia、rasgueado、bar_vibrato、bass_attack、arpeggio、brush 使用原生名称，错误值返回 choices；通常 None 清除，hairpin 用 NoHairpin。琶音和扫弦采用宿主默认时序。whammy 与音符 bend 的七点格式相同，音高范围 -12..12 半音。dead_slap 用布尔值；tremolo 用 8/16/32/64 分音符，0 清除。装饰音转换会改变时值，死拍会清空音符，撤销可恢复。", {{"document", str}, {"property", str}, {"value", QJsonObject{{"anyOf", QJsonArray{boolean, str, integer, QJsonObject{{"type", "object"}}}}}}}, {"property", "value"});
         add("gp_transpose", "按半音移动光标单拍或选区音符的实际音高，支持撤销。semitones 为 -24..24，scope 为 cursor（默认）或 selection；打击乐和超出 MIDI 音域的请求会拒绝。记谱用移调乐器偏移通过 gp_edit_track 的 transposition 设置。", {{"document", str}, {"semitones", integer}, {"scope", str}}, {"semitones"});
-        add("gp_edit_beat", "原生编辑节拍：insert 新增休止节拍，rhythm 设置基础时值并保留附点/连音，dots 设置附点，tuplet 设置连音，clear 清空音符，remove 删除节拍。tuplet 的 level 为 primary（默认）或 secondary；actual/normal 均为 1..255；enabled=false 清除指定层且不接受比例参数。scope 默认 cursor；selection 批量修改 rhythm/dots/tuplet/clear/remove，可用 tracks/staves/voices 非空索引数组筛选当前选区，本次调用生效，先用 gp_selection beats 核对相同筛选。最多 128 小节、20000 拍，跳过空占位拍，可一次撤销。", {{"document", str}, {"operation", str}, {"denominator", integer}, {"dots", integer}, {"scope", str}, {"level", str}, {"actual", integer}, {"normal", integer}, {"enabled", boolean}, {"tracks", indices}, {"staves", indices}, {"voices", indices}}, {"operation"});
+        add("gp_edit_beat", "原生编辑节拍：insert 新增休止节拍，rhythm 设置基础时值并保留附点/连音，dots 设置附点，tuplet 设置连音，text 设置或清除节拍文本，dynamic 设置力度标记，stem 设置符干方向，clear 清空音符，remove 删除节拍。text 使用 text 字段并保留 Unicode/空白；dynamic 使用 dynamic 字段，值为 PPP、PP、P、MP、MF、F、FF 或 FFF（大小写不敏感）；stem 使用 orientation=auto、Upward 或 Downward，并按当前谱表显示模式清除或设置用户符干方向；清除力度标记没有核验的原生路径；tuplet 的 level 为 primary（默认）或 secondary；actual/normal 均为 1..255；enabled=false 清除指定层且不接受比例参数。scope 默认 cursor；selection 批量修改 rhythm/dots/tuplet/text/dynamic/stem/clear/remove，可用 tracks/staves/voices 非空索引数组筛选当前选区，本次调用生效，先用 gp_selection beats 核对相同筛选。最多 128 小节、20000 拍，跳过空占位拍，可一次撤销。", {{"document", str}, {"operation", str}, {"denominator", integer}, {"dots", integer}, {"text", str}, {"dynamic", str}, {"orientation", str}, {"scope", str}, {"level", str}, {"actual", integer}, {"normal", integer}, {"enabled", boolean}, {"tracks", indices}, {"staves", indices}, {"voices", indices}}, {"operation"});
         add("gp_edit_bars", "原生插入或删除小节，作用于整份曲谱的所有音轨。operation 为 insert/remove，index 从 0 开始，count 默认 1。", {{"document", str}, {"operation", str}, {"index", integer}, {"count", integer}}, {"operation", "index"});
         add("gp_score", "读取实时曲谱元数据、音轨小节数量、光标及撤销状态；直接调用 GPCore。", {{"document", str}});
         add("gp_read_master_bars", "读取全曲共享的小节拍号、实音调号、反复记号和小节线；分页最多 128 小节。", {{"document", str}, {"bar", integer}, {"count", integer}});
-        add("gp_edit_measure", "原生修改光标小节，支持撤销。time_signature(numerator,denominator)、key_signature(accidentals,major)、repeat_start/repeat_end/double_bar/free_time(enabled)，反复次数 repeat_count 2..100。alternate_endings 使用 endings（1..8 的不重复数组，空数组清除）；direction 使用 gp_read_master_bars.direction_marks 中的 ID 和 enabled。", {{"document", str}, {"operation", str}, {"numerator", integer}, {"denominator", integer}, {"accidentals", integer}, {"major", boolean}, {"enabled", boolean}, {"repeat_count", integer}, {"endings", QJsonObject{{"type", "array"}, {"items", integer}}}, {"direction", integer}}, {"operation"});
+        add("gp_edit_measure", "原生修改光标小节，支持撤销。clef 使用 clef 字段并支持 G2、F4、C3；time_signature(numerator,denominator)、key_signature(accidentals,major)、repeat_start/repeat_end/double_bar/free_time(enabled)，反复次数 repeat_count 2..100。alternate_endings 使用 endings（1..8 的不重复数组，空数组清除）；direction 使用 gp_read_master_bars.direction_marks 中的 ID 和 enabled。", {{"document", str}, {"operation", str}, {"clef", str}, {"numerator", integer}, {"denominator", integer}, {"accidentals", integer}, {"major", boolean}, {"enabled", boolean}, {"repeat_count", integer}, {"endings", QJsonObject{{"type", "array"}, {"items", integer}}}, {"direction", integer}}, {"operation"});
         add("gp_edit_tempo", "原生修改曲谱初始速度，支持撤销。value 为 1..400 的整数，unit 使用 gp_score.tempo.units 中的值，默认保留当前单位和 label；不编辑后续变速点。", {{"document", str}, {"value", QJsonObject{{"type", "number"}, {"minimum", 1}, {"maximum", 400}, {"multipleOf", 1}}}, {"unit", str}, {"label", str}}, {"value"});
         add("gp_tempo", "原生速度自动化：state/set/remove。bar 为原谱小节，position 为小节内 0..1（不含 1）的比例；value 为 1..400 整数，linear 使用宿主渐变语义。初始点不可删除。支持撤销。", {{"document", str}, {"operation", str}, {"bar", integer}, {"position", QJsonObject{{"type", "number"}}}, {"value", integer}, {"unit", str}, {"linear", boolean}, {"label", str}});
+        add("gp_automation", "读取宿主原生音轨自动化；operation=types/state 只读，set/remove 为实验性 DSPParam_00..DSPParam_31 曲线写入，提交前保留同轨道其他自动化和旁路状态，语义与播放影响需宿主专项验证。", {{"document", str}, {"operation", str}, {"track", integer}, {"parameter", integer}, {"bar", integer}, {"position", QJsonObject{{"type", "number"}}}, {"value", QJsonObject{{"type", "number"}}}, {"linear", boolean}, {"text", str}});
         add("gp_audio_track", "原生音色和已有效果链：state/select/copy/midi_program/effect_bypass/effect_parameter/effect_swap/effect_remove。select 的 sound=-1 恢复自动音色；copy 复用 source_document/source_track/source_sound。效果参数为 0..1；MIDI program 为 0..127，仅影响 MIDI 音源。音轨混音使用 gp_edit_track。", {{"document", str}, {"operation", str}, {"track", integer}, {"sound", integer}, {"source_document", str}, {"source_track", integer}, {"source_sound", integer}, {"effect", integer}, {"parameter", integer}, {"other", integer}, {"value", QJsonObject{{"type", "number"}}}, {"enabled", boolean}}, {"track"});
         add("gp_edit_track", "原生设置音轨 name/short_name、color (#RRGGBB)、volume/pan (0..1)、transposition（记谱移调偏移 -24..24 半音，保留发声音高）或 playback_state (Default/Solo/Mute)。播放状态不加入撤销栈，其余属性支持撤销。", {{"document", str}, {"track", integer}, {"property", str}, {"value", QJsonObject{{"anyOf", QJsonArray{str, QJsonObject{{"type", "number"}}}}}}}, {"track", "property", "value"});
         add("gp_edit_tracks", "原生复制、删除或交换音轨，支持撤销；operation 为 duplicate/remove/swap，复制到原轨之后，swap 需要 other 索引。", {{"document", str}, {"operation", str}, {"track", integer}, {"other", integer}}, {"operation", "track"});
@@ -779,7 +859,7 @@ class Bridge : public QObject {
             if (tool == "gp_midi_import") return midiImport(args);
             if (tool == "gp_operation") {
                 const QString request = args.value("request").toString();
-                for (const auto &operation : {creation, opening, closing, saving, moving, exporting}) if (operation.value("request") == request) return QJsonObject{{"operation", operation}};
+                for (const auto &operation : {creation, opening, closing, saving, moving, exporting, editing}) if (operation.value("request") == request) return QJsonObject{{"operation", operation}};
                 if (operationHistory.contains(request)) return QJsonObject{{"operation", operationHistory.value(request)}};
                 return QJsonObject{{"error", "Unknown or expired operation request"}};
             }
@@ -787,26 +867,41 @@ class Bridge : public QObject {
             if (tool == "gp_recover") return recoverOperation(args.value("request").toString());
             if (pending(exporting) && (tool == "gp_close_window" || tool == "gp_window" || tool == "gp_trigger" || tool == "gp_set_property"))
                 return QJsonObject{{"error", "Export is active; cancel its request and observe completion first"}};
-            static const QSet<QString> modalReads{"gp_capabilities", "gp_documents", "gp_score", "gp_read_bars", "gp_read_master_bars", "gp_templates", "gp_objects", "gp_actions", "gp_debug_objects", "gp_debug_resources", "gp_formats"};
+            const bool automationRead = tool == "gp_automation" && (args.value("operation").toString("types") == "types" || args.value("operation").toString("state") == "state");
+            static const QSet<QString> modalReads{"gp_capabilities", "gp_p9_status", "gp_documents", "gp_score", "gp_read_bars", "gp_read_master_bars", "gp_templates", "gp_objects", "gp_actions", "gp_debug_objects", "gp_debug_resources", "gp_formats", "gp_export_json", "gp_export_tab", "gp_structure", "gp_read_chords", "gp_read_lyrics", "gp_read_sections"};
             static const QSet<QString> dialogActions{"gp_trigger", "gp_set_property", "gp_close_window", "gp_window"};
-            if (QApplication::activeModalWidget() && !modalReads.contains(tool) && !dialogActions.contains(tool))
+            if (QApplication::activeModalWidget() && !modalReads.contains(tool) && !automationRead && !dialogActions.contains(tool))
                 return QJsonObject{{"error", "A modal dialog blocks native operations; inspect gp_dialogs"}, {"dialog", modalState()}};
-            const bool operationPending = recoveryActive || loadNativeActive || closingNativeActive || savingOperation ||
-                pending(creation) || pending(opening) || pending(closing) || pending(saving) || pending(moving) || pending(exporting);
+            const bool operationPending = recoveryActive || editingNativeActive || loadNativeActive || closingNativeActive || savingOperation ||
+                pending(creation) || pending(opening) || pending(closing) || pending(saving) || pending(moving) || pending(exporting) || pending(editing);
             const bool outsideDialogEdit = !QApplication::activeModalWidget() && (tool == "gp_trigger" || tool == "gp_set_property");
-            if (operationPending && !modalReads.contains(tool) && (!dialogActions.contains(tool) || outsideDialogEdit))
+            if (operationPending && !modalReads.contains(tool) && !automationRead && (!dialogActions.contains(tool) || outsideDialogEdit))
                 return QJsonObject{{"error", "A document operation is pending; inspect gp_documents or cancel its request before another mutation"}};
             // Host command observers update the active document's dirty state.
             // Bind every model mutation to its document before calling native APIs.
-            static const QSet<QString> mutations{"gp_edit_note", "gp_edit_note_effect", "gp_edit_beat_effect", "gp_edit_tuning", "gp_transpose", "gp_edit_connection", "gp_edit_beat", "gp_edit_bars", "gp_edit_track", "gp_edit_tracks", "gp_insert_track", "gp_edit_tempo", "gp_edit_measure", "gp_set_fret", "gp_edit_metadata", "gp_cursor", "gp_undo_redo"};
-            if (mutations.contains(tool) || ((tool == "gp_tempo" || tool == "gp_audio_track" || tool == "gp_presentation") && args.value("operation").toString("state") != "state") || (tool == "gp_preferences" && args.value("operation").toString("state") != "state" && args.value("scope").toString("application") == "document")) {
+            static const QSet<QString> mutations{"gp_edit_note", "gp_edit_note_effect", "gp_edit_beat_effect", "gp_edit_tuning", "gp_transpose", "gp_edit_connection", "gp_edit_beat", "gp_edit_bars", "gp_edit_track", "gp_edit_tracks", "gp_insert_track", "gp_edit_tempo", "gp_edit_measure", "gp_set_fret", "gp_edit_metadata", "gp_cursor", "gp_undo_redo", "gp_apply_spec", "gp_insert_tab", "gp_import_json", "gp_edit_chord", "gp_edit_lyrics", "gp_edit_section"};
+            if (mutations.contains(tool) || (tool == "gp_automation" && args.value("operation").toString("types") != "types" && args.value("operation").toString("state") != "state") || ((tool == "gp_tempo" || tool == "gp_audio_track" || tool == "gp_presentation") && args.value("operation").toString("state") != "state") || (tool == "gp_preferences" && args.value("operation").toString("state") != "state" && args.value("scope").toString("application") == "document")) {
                 const auto target = guitarpro::choose(args);
                 if (!target.view || !target.score) return QJsonObject{{"error", "Choose a document with a verified native score"}};
                 const QJsonObject activated = guitarpro::activate(QJsonObject{{"document", target.id()}}, services());
                 if (activated.contains("error")) return activated;
             }
             if (tool == "gp_preferences") return preferences(args);
-            if (tool == "gp_presentation") return guitarpro::presentation(args);
+            if (tool == "gp_p9_status") return guitarpro::p9Status();
+            if (tool == "gp_automation") return guitarpro::automationState(args);
+            if (tool == "gp_presentation") return args.contains("page_metadata") && args.value("operation") == "set" ? scheduleSemantic(tool, args) : guitarpro::presentation(args);
+            if (tool == "gp_export_json") return guitarpro::exportJson(args);
+            if (tool == "gp_import_json") return scheduleSemantic(tool, args);
+            if (tool == "gp_export_tab") return guitarpro::exportTab(args);
+            if (tool == "gp_structure") return guitarpro::structure(args);
+            if (tool == "gp_read_chords") return guitarpro::readChords(args);
+            if (tool == "gp_edit_chord") return scheduleSemantic(tool, args);
+            if (tool == "gp_read_lyrics") return guitarpro::readLyrics(args);
+            if (tool == "gp_edit_lyrics") return scheduleSemantic(tool, args);
+            if (tool == "gp_read_sections") return guitarpro::readSections(args);
+            if (tool == "gp_edit_section") return scheduleSemantic(tool, args);
+            if (tool == "gp_apply_spec") return scheduleSemantic(tool, args);
+            if (tool == "gp_insert_tab") return scheduleSemantic(tool, args);
             if (tool == "gp_templates" || tool == "gp_new") {
                 if (!guitarpro::supportedBuild()) return QJsonObject{{"error", "Template creation requires the verified host build"}};
                 const QDir templates(":/GPBase/MainWindow/Templates");
@@ -818,6 +913,7 @@ class Bridge : public QObject {
                 if (creationPoll.isActive()) return QJsonObject{{"error", "A template creation is already pending"}, {"creation", creation}};
                 creationBefore.clear();
                 creationDocument.clear();
+                creationPrepared.reset();
                 for (const auto &document : guitarpro::documents()) creationBefore.append(document.object);
                 const QString path = templates.filePath(name + ".gpt");
                 archiveOperation(creation);
@@ -825,6 +921,24 @@ class Bridge : public QObject {
                 creationElapsed.restart(); creationPoll.start(50);
                 dispatchLoad("create", path);
                 return creation;
+            }
+            if (tool == "gp_create_from_spec") {
+                if (!guitarpro::supportedBuild()) return QJsonObject{{"error", "Template creation requires the verified host build"}};
+                QJsonObject spec; QString specError;
+                if (!guitarpro::semanticParseSpec(args, &spec, &specError) || !guitarpro::semanticValidateSpec(spec, &specError)) return QJsonObject{{"error", specError}};
+                const QDir templates(":/GPBase/MainWindow/Templates");
+                const QString name = args.value("template").toString();
+                if (!templates.entryList({"*.gpt"}, QDir::Files).contains(name + ".gpt")) return QJsonObject{{"error", "Unknown built-in template name"}};
+                if (creationPoll.isActive()) return QJsonObject{{"error", "A template creation is already pending"}, {"creation", creation}};
+                const auto seed = std::make_shared<gp::core::Score>(); seed->load(templates.filePath(name + ".gpt"));
+                QObject temporary;
+                creationPrepared = guitarpro::semanticBuild({nullptr, &temporary, seed.get()}, spec, "replace", 0);
+                creationBefore.clear(); creationDocument.clear();
+                archiveOperation(creation);
+                for (const auto &document : guitarpro::documents()) creationBefore.append(document.object);
+                const QString path = templates.filePath(name + ".gpt");
+                creation = {{"request", nonce()}, {"status", "scheduled"}, {"kind", "create_from_spec"}, {"template", name}, {"template_path", path}, {"spec_validated", true}};
+                creationElapsed.restart(); creationPoll.start(50); dispatchLoad("create", path); return creation;
             }
             if (tool == "gp_debug_resources" && qEnvironmentVariableIsSet("GPMCP_DEVELOPMENT")) {
                 QJsonArray paths;
@@ -935,6 +1049,7 @@ class Bridge : public QObject {
                 if (!saving.isEmpty()) result["saving"] = saving;
                 if (!exporting.isEmpty()) result["exporting"] = exporting;
                 if (!moving.isEmpty()) result["moving"] = moving;
+                if (!editing.isEmpty()) result["editing"] = editing;
                 checkClosing();
                 if (!closing.isEmpty()) result["closing"] = closing;
                 return result;
@@ -1079,7 +1194,8 @@ class Bridge : public QObject {
                 result["session_file"] = sessionFile;
                 result["plugin_data_directory"] = gpmcp::dataDirectory();
                 result["modal_dialog"] = modalState();
-                result["limitations"] = QJsonArray{"Full control remains incomplete: complete notation/effects, track configuration, import/export, audio/settings, recovery and compatibility need further native adapters and verification.", "New/open/save/close workflows and playback can complete asynchronously; poll operation/document/playback state. Activate a document before playback control."};
+                result["p9"] = guitarpro::p9Status();
+                result["limitations"] = QJsonArray{"P9 status is exposed by gp_p9_status; unsupported engraving, arbitrary instrument/fingering and dynamics/volume automation remain explicitly host-limited. gp_automation DSP parameter writes are experimental and do not claim complete automation semantics.", "System clipboard interop remains experimental and disabled unless GPMCP_DEVELOPMENT=1 with an isolated validation environment.", "New/open/save/close workflows and playback can complete asynchronously; poll operation/document/playback state. Activate a document before playback control."};
                 return result;
             }
             const QHash<QString, QString> operations{{"gp_objects", "native_objects"}, {"gp_actions", "native_actions"}, {"gp_trigger", "native_trigger"}, {"gp_set_property", "native_set_property"}, {"gp_close_window", "native_close_window"}};

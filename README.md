@@ -1,33 +1,22 @@
-# GuitarProMCP 开发者入口
+# GuitarProMCP
 
-本文件是开发者入口。GuitarProMCP 是运行在 Guitar Pro 8 进程内的 C++/Qt MCP 插件。MCP 客户端通过本机 HTTP `/mcp` 连接插件，插件在 Qt 主线程中调用已验证的宿主文档和曲谱接口。
+GuitarProMCP 是运行在 Guitar Pro 8 进程内的 C++/Qt MCP 插件。MCP 客户端通过本机 HTTP `/mcp` 连接插件，插件在 Qt 主线程中调用已核验的 Guitar Pro 文档和曲谱接口。
 
 ```text
 MCP 客户端 -> 本机 HTTP /mcp -> GuitarPro.exe 内的 C++ 插件 -> Qt/GPCore 原生文档模型
 ```
 
-当前发布范围为 Windows x64 的 Guitar Pro **8.1.1.17**。P0-P7 已按声明范围完成验收。系统剪贴板互通、独立 GUI 多进程、原生标签拖动、原生保存进度取消和部分宿主可靠性场景仍是实验项或宿主限制。当前状态和证据以 [覆盖清单](docs/COVERAGE.md) 为准。
+当前支持 Windows x64 的 Guitar Pro **8.1.1.17**。当前能力、边界和验收证据见 [覆盖清单](docs/COVERAGE.md)。
 
-## 文档入口
+## 用户安装
 
-| 读者 | 文档 | 内容 |
-| --- | --- | --- |
-| 最终用户 | [docs/INSTALL.md](docs/INSTALL.md) | 安装、更新、启停、卸载和故障恢复 |
-| 开发者 | [native/README.md](native/README.md) | 构建、连接、协议边界、工具参数和测试入口 |
-| 验收/维护 | [docs/COVERAGE.md](docs/COVERAGE.md) | 当前能力、边界和最新证据 |
-| 历史追溯 | [docs/DEVELOPMENT_PLAN.md](docs/DEVELOPMENT_PLAN.md) | 历史阶段和验收检查点 |
-| 自动加载 | [native/AUTOLOAD.md](native/AUTOLOAD.md) | Qt 加载入口和探针验证 |
-| 协作规范 | [AGENTS.md](AGENTS.md) | 唯一的目标、范围和质量门槛来源 |
+使用预编译包中的 `Install.cmd` 安装。安装后从原有 Guitar Pro 入口启动；安装前已经运行的实例需要重启，插件不会热附加。
 
-## 安装使用
-
-预编译包使用 `Install.cmd` 安装，安装后从原有 Guitar Pro 入口启动。正常启动窗口可见；后台启动使用 `start-installed.ps1 -Background`。插件生成的连接配置位于 `%LOCALAPPDATA%/GuitarProMCP`，从 MCP 菜单或 `.cache/mcp-client.json` 获取实际端点和令牌。
-
-安装前已经运行的 Guitar Pro 实例需要重启，插件不会热附加。安装器不替换宿主 EXE、Qt DLL、快捷方式或文件关联。详细步骤和回滚方式见 [docs/INSTALL.md](docs/INSTALL.md)。
+详细的安装、更新、停用、启用、卸载和故障恢复步骤见 [安装说明](docs/INSTALL.md)。
 
 ## 开发启动
 
-需要 Visual Studio x64 C++ 工具和 Qt 5.15.2 MSVC x64 开发包。开发 SDK 默认位于 `.tools/qt/5.15.2/msvc2019_64`。
+需要 Visual Studio x64 C++ 工具和 Qt 5.15.2 MSVC x64 开发包。SDK 默认位于 `.tools/qt/5.15.2/msvc2019_64`。
 
 ```powershell
 ./setup.ps1
@@ -38,24 +27,15 @@ MCP 客户端 -> 本机 HTTP /mcp -> GuitarPro.exe 内的 C++ 插件 -> Qt/GPCor
 ./start-plugin.ps1 -Visible
 ```
 
-插件输出到 `.tools/native/plugins/generic/guitarpro_mcp.dll`。开发启动使用隔离的新进程，不附加到已经运行的普通 Guitar Pro 实例；重新编译 DLL 前先关闭加载该 DLL 的宿主。
+开发启动使用隔离的新进程，不附加到已经运行的普通 Guitar Pro 实例。完整构建、协议、实例和测试命令见 [原生插件开发](native/README.md) 和 [原生 MCP API 参考](native/API.md)。
 
-完整构建、环境变量、实例发现、DDE 文件关联和 PowerShell 客户端说明见 [native/README.md](native/README.md)。
+## MCP 连接
 
-## MCP 接口
+默认端点为 `http://127.0.0.1:18432/mcp`。默认端口被占用时会自动选择其他本机端口；实际 URL 和令牌以实例生成的客户端配置为准。连接配置绑定实例 UUID，宿主重启后必须重新导入新配置，编辑请求不会自动重放。
 
-完整工具目录、参数、返回状态和宿主限制只维护在 [native/README.md#使用原生曲谱工具](native/README.md#使用原生曲谱工具)。工具按以下范围覆盖：
+完整工具目录、参数和原生行为只维护在 [原生 MCP API 参考](native/API.md)；P8 批量编曲和语义 JSON 见 [P8 原生编曲与语义 JSON](native/P8.md)。
 
-- 实例、模态对话框、文档打开/新建/关闭/保存和恢复
-- 曲谱读取、光标、选区、音符/节拍/小节/音轨编辑
-- 技法、连奏/延音线、调弦、移调和插件独立剪贴板
-- 播放、时间线、音色、效果和音频设备
-- Qt 对象检查、原生窗口控制和开发模式探针
-- GP5/GPX/MusicXML/MIDI 导入以及 PDF/PNG/WAV 导出
-
-服务使用协议版本 `2025-06-18`，默认端点为 `http://127.0.0.1:18432/mcp`。默认端口被占用时会自动选择其他本机端口；显式设置 `GPMCP_PORT` 时，冲突会报告错误。连接配置绑定实例 UUID，宿主重启后必须重新导入新配置，编辑请求不会自动重放。
-
-## 验证入口
+## 验证
 
 关闭测试宿主后运行完整原生回归：
 
@@ -63,17 +43,23 @@ MCP 客户端 -> 本机 HTTP /mcp -> GuitarPro.exe 内的 C++ 插件 -> Qt/GPCor
 ./native/test-all.ps1
 ```
 
-指定隔离宿主使用 `-Exe`；协议、安装包和单项专项命令见 [native/README.md](native/README.md)。真实宿主回归需要 Guitar Pro 8.1.1.17 及匹配的宿主文件哈希。没有实际状态读回或保存重开证据时，不把 DLL 加载、JSON 返回或菜单枚举视为能力完成。
+可使用 `-Exe` 指定隔离宿主。真实宿主回归需要 Guitar Pro 8.1.1.17 及匹配的宿主文件哈希。
 
-## 当前边界
+## 文档
 
-- 私有接口只对已核验的宿主文件哈希启用，不支持的版本会拒绝加载。
-- 手工编辑与 MCP 编辑共用宿主文档、未保存状态和撤销历史；未知异步结果会阻止后续写入。
-- 系统剪贴板互通、独立 GUI 多进程、原生标签拖动和原生保存进度取消不属于当前交付前提。
-- 启动瞬间的 AMNetwork 快速退出等待仍是宿主限制；正常使用后的退出已按发布范围验收。
+| 内容 | 文档 |
+| --- | --- |
+| 用户安装与恢复 | [docs/INSTALL.md](docs/INSTALL.md) |
+| 当前能力与证据 | [docs/COVERAGE.md](docs/COVERAGE.md) |
+| 构建、ABI 和测试 | [native/README.md](native/README.md) |
+| 协议和工具参数 | [native/API.md](native/API.md) |
+| P8 JSON 与编曲接口 | [native/P8.md](native/P8.md) |
+| Qt 自动加载 | [native/AUTOLOAD.md](native/AUTOLOAD.md) |
+| 阶段计划与 P9 验收 | [docs/DEVELOPMENT_PLAN.md](docs/DEVELOPMENT_PLAN.md) |
+| 完整文档索引 | [docs/README.md](docs/README.md) |
 
-完整能力矩阵、限制、构建哈希和验收证据见 [docs/COVERAGE.md](docs/COVERAGE.md)。
+## 支持边界
 
-## 许可与免责声明
+私有接口只对已核验的宿主文件哈希启用，不支持的版本会拒绝加载。系统剪贴板互通、独立 GUI 多进程、原生标签拖动、原生保存进度取消和部分编辑组合仍按覆盖清单标记为实验性、未实现或宿主受限。
 
-本项目按 [MIT License](LICENSE) 授权，不隶属于也未获 Guitar Pro 或 Arobas Music 官方认可。插件调用 Guitar Pro 私有接口，宿主更新、插件冲突或环境差异可能导致无法加载、操作失败或影响未保存曲谱；使用前请备份曲谱，并只在已验证的宿主版本上使用。
+本项目按 [MIT License](LICENSE) 授权，不隶属于也未获 Guitar Pro 或 Arobas Music 官方认可。使用前请备份曲谱，并只在已验证的宿主版本上使用。

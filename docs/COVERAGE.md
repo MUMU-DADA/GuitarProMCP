@@ -1,8 +1,8 @@
 # 原生控制覆盖清单
 
-更新日期：2026-09-08。目标是无需输入模拟、无需前台窗口的完整 Guitar Pro MCP 插件。P0–P7 已按已声明范围完成，P8 已登记为后续计划但尚未实现或验收；未实现、实验性和宿主限制仍在各节明确列出。以下按照具体能力记录证据，不以 DLL 加载成功、菜单可枚举或导出符号存在代替功能完成。
+更新日期：2026-09-09。P0–P9 已按已声明范围完成，P9 仅将具备原生路径和实际证据的项目计入已完成范围；未实现、实验性和宿主限制仍在各节明确列出。P9 当前源码构建与 P7 历史发布包分别记录证据，以下不以 DLL 加载成功、菜单可枚举或导出符号存在代替功能完成。
 
-当前开发目标、范围决策和质量门槛统一见 [AGENTS.md](../AGENTS.md)。本清单记录操作覆盖与验证证据；未列入当前范围的扩展和宿主限制单独标明，不视为已验证能力。阶段历史和验收过程见 [开发计划](DEVELOPMENT_PLAN.md)。
+当前开发目标、范围决策和质量门槛统一见 [AGENTS.md](../AGENTS.md)。本清单记录操作覆盖与最新验证证据；未列入当前范围的扩展和宿主限制单独标明，不视为已验证能力。阶段计划见 [开发计划](DEVELOPMENT_PLAN.md)，历史验收见文末归档。
 
 ## 已验证的范围
 
@@ -14,6 +14,10 @@
 | 曲谱元数据 | 读取 11 项元数据；使用原生命令修改，支持撤销重做和中文保存 | 拒绝宿主不能可靠保存的补充平面 Unicode 字符和 XML 控制字符 |
 | 曲谱读取 | 音轨、小节、谱表数量；分页读取声部、节拍、音符、弦、品位、MIDI 和发声音高、时值、休止、占位拍、记谱技法及调弦/变调夹 | 未暴露全部自动化、排版、音色和隐藏模型状态；发声音高字段不是连续弯音曲线 |
 | 曲谱编辑 | 弦乐用弦/品位，键盘及打击乐用 MIDI 增删和弦音符、休止及占位拍首音；全音符至 128 分音符、0–2 附点；插入/清空/删除节拍；钢琴上下谱表、多声部及跨轨移调 | 打击乐按宿主默认演奏法映射；内容转移边界见下方 P4 验收 |
+| P8 批量编曲与交换 | 模板建谱、批量 `replace/append/insert`、单弦 riff；原生副本预检和一次撤销；多轨、多声部、钢琴双谱表、鼓组、调弦、连接链与既有技法；JSON v1 真实导入/往返、ASCII、结构摘要 | 32 轨、256 小节、20000 拍及 1 MiB 请求；复用已有/模板乐器配置；JSON 不备份完整 GP 模型，ASCII 不可逆，全部技法和自动化组合未穷举 |
+| P8 和弦与歌词 | 原生符号、根音/低音、类型/音程/转位、和弦图首品/弦位/横按/指法；精确拍位置五行歌词与清除；谱表隔离、一次撤销、GPIF 和保存重开 | 符号与实际音符独立；已验收 m7 类型与具体图形/指法，全部自定义音程组合未穷举；不做自动指法搜索或跨拍自动分词 |
+| P8 段落与页面元数据 | 段落起点、名称/文本、推导结束小节；标题、作者、作曲者、版权、页眉页脚及页码文本/可见性；整组一次撤销、保存重开、PDF 文本与页面呈现 | 段落名不自动设置播放跳转；任意刻谱样式、完整歌词排版和物理打印队列未扩展 |
+| P9 编辑面板与能力矩阵 | `gp_edit_beat operation=text/dynamic/stem` 按光标/选区写入节拍文本、`PPP`–`FFF` 力度标记和 `Upward`/`Downward`/`auto` 符干方向，保留 Unicode/空白；实际 `Beat::freeText`/`Beat::dynamic`/符干 getter 读回；`gp_edit_measure operation=clef` 写入 `G2/F4/C3` 并读回；`gp_automation` 读取整条音轨自动化并以实验性 DSP 参数路径保留其他点和旁路状态；dirty、撤销/重做、保存重开；`gp_p9_status` 返回每项能力的状态值 | P9 剩余要求包括力度清除、力度/表情/音量自动化、细粒度排版、完整歌词/刻谱排版、任意乐器/指法、自定义音色/效果、完整自动化、系统剪贴板、任意音轨映射、剩余特别粘贴过滤项和全部技法组合；分别标为宿主受限、实验性或未实现，详见 [P9 剩余要求](DEVELOPMENT_PLAN.md#p9-剩余要求归档) |
 | 连音 | 两层比例结构化读取和原生编辑；单拍、选区、反向跨小节、跨声部/音轨、钢琴谱表；指定层独立清除；另一层及音符/基础时值/附点隔离；重复写入、原生宏命令一次撤销、重做、GPIF、嵌套与次层单独保存重开及插件内复制粘贴 | 比例为 1..255；不自动重排小节或改变连音括号/分组排版；任意比例组合的实际发声和极端时长播放尚未验证 |
 | 音符及节拍技法 | 掌根闷音、延音、点弦、揉弦、弱音/重音、指法、死音、击勾弦、颤音、回音/波音、滑音、泛音、弯音；装饰音、扫拨、渐强弱、敲击、八度、轮指、拍弦/勾弦、琶音、扫弦及摇把曲线；支持清除、撤销重做、保存重开和单音隔离 | 颤音固定十六分音符；琶音/扫弦使用宿主默认时序；装饰音转换改变时值，死拍清空原音符；音源实际声音效果归 P5 |
 | 连奏与延音线 | 原生起止状态读取；光标整拍、和弦单音、反向跨小节、跨声部/音轨及钢琴谱表；跨两小节八音长链、长链移调及弯音组合；清除、撤销重做、GPIF 和保存重开 | 原生连接可能改变音高或补入音符；重复命令可能留下撤销记录；全部技法组合和声学输出未穷举 |
@@ -32,230 +36,56 @@
 
 ## 保留边界与后续扩展
 
-宿主剪贴板互通已加入仅开发模式可用的 `native_state/native_copy/native_import` 实验接口，未计入已验证范围。已定位并校验 `EditFeature` 的快照所有权；完整隔离测试因本机不能创建 Windows 窗口站而未完成。真实桌面测试曾恢复失败，当前测试脚本已强制独立窗口站，普通桌面会拒绝执行。详见 [宿主剪贴板实验](../native/README.md#宿主剪贴板实验)。
+已验证范围以能力矩阵和下面的最新证据为准。以下项目继续保留，不计入完整按钮覆盖：
 
-| 范围 | 后续需要完成的工作 |
-| --- | --- |
-| 文件与文档 | 更广泛的共同编辑、模态、GPIF 模型语义及异常组合验证；独立 GUI 多开、原生标签拖动和原生保存进度取消按用户决定列为宿主限制，不作为当前交付条件 |
-| 完整乐谱编辑 | P3 按用户确认的必要范围验收；自定义乐器定义、符杠/括号排版和指法搜索不作为 P3 完成条件，相关后续扩展另按 P5/P6 需求处理 |
-| 选区和编辑上下文 | P4 按最小必要范围完成；系统剪贴板隔离验证、任意音轨集合剪贴板、其余特别粘贴过滤项和部分小节跨栏替换属于保留扩展，未声明可用 |
-| 播放与音频 | P5 按最小必要范围完成；任意音色/效果定义、更多自动化、ASIO/驱动故障及跨重启设备持久化、未穷举的技法与跳转声学组合为保留扩展 |
-| 文件导入导出 | P6 按用户确认的最小范围完成；已验证 GP5/GPX/MusicXML/MIDI 交换和原生 PDF/PNG/WAV 输出。P6 阶段的完整回归曾因权限限制跳过，P7 已对最终候选包执行适用回归；打印限定原生 PDF 目标，不扩展物理队列或其他音频编码器 |
-| 设置与工作区 | P6 页面、谱表及明确作用域偏好按最小范围完成；P6 阶段的完整回归曾因权限限制跳过，P7 已复验发布包中的适用路径。页面和显示设置不进入宿主撤销栈，视图缩放不承诺跨重开保持；任意样式、插件管理和更多偏好不在当前范围 |
-| 完整状态 | 按真实用户操作建立清单，为每项状态/修改建立读回和持久化验证 |
-| 兼容性与可靠性 | 多文档、并发、长时间运行、取消、异常路径、宿主升级，以及安装和卸载体验 |
+- 宿主限制：独立 GUI 多进程、原生标签拖动、原生保存进度取消，以及启动期间 AMNetwork 快速退出挂起。
+- 实验性：系统剪贴板互通和整轨 DSP 参数自动化；实验接口默认不启用。
+- 未实现或未穷举：细粒度排版、完整歌词排版、任意乐器/指法、自定义音色/效果、完整自动化、任意音轨映射、剩余特别粘贴过滤项和全部技法组合。
+
+逐项状态见 [开发计划](DEVELOPMENT_PLAN.md#p9-剩余要求归档)；宿主剪贴板实验见 [原生 API 参考](../native/API.md#宿主剪贴板实验)。
 
 ## 当前验证证据
 
-P7 是当前发布结论。下面的 P1-P6 段落保留阶段证据和构建哈希，供追溯使用；它们不覆盖 P7 的最终状态，也不重新定义当前范围。
+当前源码和最近发布包的结论如下；旧版检查点已移至文末归档。
+
+### P9 验收
+
+当前 `0.4.0` 源码构建：P9 专项 65 项通过，完整原生回归 24 组、4406 项通过，退出码 0，连接描述已清理。覆盖节拍文本、力度、符干方向、谱号、能力矩阵和实验性整轨 DSP 参数路径。证据：`artifacts/native-p9-1666ae49cb204e44a9c18183b6440c9c/verification.json`、`artifacts/regression-6b51102da11049a0b4fcfb39902da538/regression.json`。
+
+核心 DLL SHA-256：`EE23C06BC74896C246EA8600ECEF38EADEC051A1B97A2E58A70CE88AF50F502D`；自动加载器：`1B436DFCE03136E3C40F821689AB1617340F2E720599BAA17B451B3011695E73`；宿主：`B233B0F1C87DEB3AECE693D51E8D3C3A841C88FEE78828607B20034737C4C6DF`。
+
+### P8 验收
+
+2026-09-08 完成最小必要范围：P8 专项及 PDF 复核 207 项，完整原生回归 23 组、4375 项；同一 DLL 的 SHA-256 为 `52541545944091638DBFEA5BCEF7FA8C859D890DCD2976440F99681CCBA49DD4`。详细覆盖与证据见 [历史阶段验收](archive/COVERAGE_HISTORY.md#历史阶段验收)。接口格式见 [P8 原生编曲与语义 JSON](../native/P8.md)。
 
 ### P7 验收
 
-状态：已完成（2026-09-08）。按本次最小发布范围复用 P0–P6 的已实现功能，不扩展其他宿主版本或已排除的功能。双客户端、十份文档、至少 100 次循环和一小时混合使用均已完成；AMNetwork 快速退出仍是明确的厂商限制。
-
-候选包：`artifacts/GuitarProMCP-0.3.0-9d6312e4f62d43ec8215e2eb21285f7d.zip`。核心 SHA-256 为 `90F2FD97B1BB3716B7D0A105BA3FAB94ED939B1BA2CE891B4365C7780DF5D642`；自动加载器为 `B713945BCE9B877270074B4A958191532DEE34DDC84A021F69DF448965E6A56D`。原生源码与 P6 构建记录一致，无需重编译或新增运行时依赖。候选包含更新后的中文诊断恢复及支持边界说明。
-
-| 检查 | 当前结果 | 证据 |
-| --- | --- | --- |
-| 安装包自动加载后的完整功能回归 | 22 组、4153 项通过，正常退出 0，连接描述已清理；记录实际加载 DLL，覆盖全部既有功能及 P6 生产 WAV 输出 | `artifacts/regression-3b3d86d9c1c645b3957283293718d97a/regression.json` |
-| 安装文件归属、不同 DLL 回滚、中文配置 | PowerShell 7 与 5.1 各 33 项通过 | `artifacts/installer-files-858f089c40bb4b4586f993c18e88707e/verification.json`、`artifacts/installer-files-925a69d6632f48a6a23033e33f8764a9/verification.json` |
-| 手动安装包结构与脚本兼容 | 8 项通过；三个文件、DLL 与候选包一致、更新及卸载正确 | `artifacts/p7-manual-cc0564cb868547ff82ccc59a9dcceeae/verification.json` |
-| 宿主兼容清单 | Windows x64 Guitar Pro 8.1.1.17，10 个宿主文件哈希一致 | `artifacts/p7-host-matrix.json` |
-| 持续运行与资源回落 | 124 个周期、3748 秒（约 62.5 分钟）、28 项收尾检查；两个客户端、10 份文档、大型 514 小节曲谱、保存重开、播放推进和实例清理通过。混合阶段私有内存约 472→598 MiB，关闭文档后约 522 MiB；句柄 772→674、线程 54→21，文档 10→0，IDocument 22→2，未见文档或音频对象随循环累积 | `artifacts/p7-soak-391766fe4f194074b85abc6667a0c367/hour-acceptance.json`、同目录 `resources.jsonl` |
-| 设置跨重启 | 12 项通过；GUI 高亮和音频缓冲区写入、重启读回、恢复原值并再次重启读回均通过，原设置已恢复 | `artifacts/p7-settings-06c6c346522c4d02b6eaaa95a4a732c1/verification.json` |
-| 实例、重连和入口转发 | 72 项通过；默认端口、端口回退、双客户端、MCP Inspector 2.5.0、重启旧身份拒绝及文件关联 DDE 通过；独立 GUI 多进程仍按宿主限制不计 | `artifacts/instances-8e18878f8eb1431a9b4fbf039a947a82/verification.json` |
-| 普通退出路径 | 8/8 通过；后台/可见、generic/autoload、窗口/动作退出均为 0 并清理实例文件，启动等待 30000 ms | `artifacts/shutdown-bec6bc4eaaf94e34992dcccf6aa0bda/verification.json` |
-| 候选包快速退出路径 | 8/8 通过；在端点就绪后立即关闭仍正常退出。真正启动瞬间的 AMNetwork 挂起由无 MCP 核心基线复现，继续作为厂商限制 | `artifacts/shutdown-85748e58eadd437bad57c70feb72d156/verification.json`、`artifacts/exit-baseline-ee2f813e0b8343d7856fa611439c315e/` |
-| 保存与标签故障恢复 | 保存恢复 380 项；标签恢复 405 项；关闭干净文档并在恢复期间新增文档分支 397 项，均正常退出 | `artifacts/save-recovery-2718d30fff4147539f75c507e6af7c3e/verification.json`、`artifacts/tab-recovery-a87c5d2abe37489f850dee9d0522b725/verification.json`、`artifacts/tab-recovery-9fc4d2d306c94615a28e07ff150a1f3a/verification.json` |
-| 真实安装生命周期与入口 | 真实 `Program Files` 目录 52 项；更新、安装、停用/启用、卸载、重装、设置凭据保留通过。普通用户 EXE、快捷方式、文件关联和后台入口 68 项通过 | `artifacts/installed-lifecycle-88b4e0a3be3440c8af820ab3bc16a2c5/verification.json`、`artifacts/installed-entrypoints-a52fae8a2a47432181b345aaa1cf8c41/verification.json` |
-
-持续运行期间资源有约 126 MiB 的混合阶段增长，但关闭十份文档后回落约 76 MiB，句柄、线程、文档及音频文档对象均回落；这支持“未观察到文档生命周期泄漏”的结论，不把宿主缓存误称为零增长。候选包的 `native/test-audio.ps1 -Render` 本次生成了 89 项 PCM 证据但结束时留下未保存对话框，`complete=false`，因此不计为完整通过；P6 生产 WAV 证据仍有效。
-
-持续运行夹具由原生模板、剪贴板和保存生成，含吉他、钢琴双谱表、打击乐、多声部及速度自动化，共 514 小节。GPIF 会复用相同的节拍和音符节点，因此按实际引用次数统计规模，不能仅数唯一 XML 节点。嵌套连音、长连接链、移调乐器和复杂反复跳转由上述完整回归覆盖。
-
-保留的测试准备失败：空声部光标断言为 `p7-soak-c065127ef4e646c99c4fc0b7ed022522`；安装记录替换瞬时失败且 DLL 已回滚为 `p7-soak-7606140e199f42c3a45cd37b5f5d7dc8`；GPIF 去重导致初始规模计数错误为 `p7-soak-ed76188d5f6842ebb1b869a9df9efc15`；修正固定客户端配置保留断言前主动停止的准备运行为 `p7-soak-e983631297934756a466df9e95a94ab9`。这些目录均在 `artifacts/`，不计为持续运行通过，测试宿主均已正常关闭。
-
-AMNetwork 快速退出继续作为明确的最小发布范围限制，不计为修复或通过；首版不承诺启动期间立即退出可靠。诊断、正常关闭失败后的处理和凭据脱敏要求见 [安装说明](INSTALL.md#故障恢复与支持边界)。
-
-### P1 验收
-
-2026-09-07 已完成用户确认的安装集成范围。验收包 `artifacts/GuitarProMCP-0.3.0-9b2770a215574ebc810546de0a842397.zip`，SHA-256 为 `B0BE5B161BCF0A9E82B7666AEF42E2C97E9B265D953BFA40629AC392E8A08281`。真实目录 `C:/Program Files/Arobas Music/Guitar Pro 8` 已安装并启用该版本，保留原有用户设置和凭据。汇总索引：`artifacts/p1-acceptance-20260907/verification.json`；同目录 `verify-evidence.ps1` 只读核验已有验收记录、ZIP/解压包/正式安装字节、宿主兼容列表和源码一致性，生成汇总，不重跑安装或宿主测试。
-
-| 验证项 | 通过结果 | 证据 |
-| --- | --- | --- |
-| 真实安装生命周期 | Windows PowerShell 5.1.19041.6456，48 项；更新、全新安装、再次更新、停用、启用、卸载及重装；停用/卸载后的普通宿主退出码均为 0 | `artifacts/installed-lifecycle-bfaceaa7bc9946f2951e0132a200d7ce/verification.json` |
-| 生命周期内的启动入口 | 68 + 20 + 20 项；四种入口、启用后后台、重装后后台，全部退出码为 0 并清理实例文件 | 同一生命周期目录的 `entrypoints/verification.json`、`enabled/verification.json`、`reinstalled/verification.json` |
-| 普通用户真实入口 | PowerShell 7.6.5，68 项；`mumu` 非管理员；EXE、原有快捷方式、中文/空格路径关联文件、后台隐藏及焦点检查；运行中打开第二份及重复打开，读回实际音符 | `artifacts/installed-entrypoints-3f13bd101a4d4b6e87ac7572d9808d62/verification.json` 及 `execution-context.json` |
-| 隔离安装与失败诊断 | Windows PowerShell 5.1，46 项及 27 项协议检查；状态入口、启停、运行中更新拒绝、显式端口冲突、配置/凭据/客户端配置不可用、不支持的宿主和卸载 | `artifacts/installation-4c97c72b35164662ba10357f8339016e/verification.json`；27 项协议输出见前置任务 `01a07b1f-cb14-7f81-869a-6cb005bd35c6` 的对应命令记录 |
-| 文件归属、回滚及中文配置 | PowerShell 5.1/7 各 33 项；两份内容不同的 DLL 在回执提交失败后恢复旧字节，无归属/被修改文件拒绝，BOM-less UTF-8 配置启停后保留中文值 | `artifacts/installer-files-b2eb512eaaaf4084a1aa8892f35e5c03/verification.json`、`artifacts/installer-files-685af3524c484cc8975eb70adf79b2e3/verification.json` |
-
-以上结构化记录共 336 项，另有 27 项协议检查通过输出。核心 SHA-256 为 `888F31675C7894AECFD0EED61DBA215F755564281B444739843A36607A608991`，自动加载器为 `21341BD69888E2741C81783964DB0C653944EBDD3610A3A52A780660E25EFD37`；与下方 P5 的 4056 项完整功能回归二进制一致，P1 未重新编译核心。安装器 SHA-256 为 `8ED58EBAE4CB5A8FBDB32539A03A4EC3592A91EDFB471E0EF0B09CAD0FB91F58`，修复 Windows PowerShell 5.1 按系统编码读取 JSON 导致解析失败或中文配置损坏的问题；包内脚本与当前源码一致。
-
-最终入口脚本 SHA-256 为 `FC573B84E3C49324958A2B39FCBAD6F3A496841DBA22461429C5DB61E05C4F50`，生命周期脚本为 `081E40ABE0C1EB8AE8B1547A845DC7656B61382359F6FF7187F3C53AF7345E50`，文件测试脚本为 `A3859C5839BD48E60718A2AC15201F206BC85B6B2B18D80462856E4B65CB6673`。生命周期内入口记录保留当时脚本哈希 `82AF098A3303286905845AD061B1A9FF78DF8BB660488E20615DB30E62E42F76`；后续修正普通入口窗口启动方式和就绪判断后，最终脚本通过上述普通用户四入口复验。
-
-P1 普通退出统一采用 `StartupSettleMs=30000`。启动瞬间的 AMNetwork 挂起在 P7 仍复现；失败、线程栈及受控清理保留在 `artifacts/installed-lifecycle-c5822d8d9f964a3ea20b381cc0bbe68f/`，不计通过，等待 30 秒也不是修复。早期活动文档假设失败保留在 `installed-lifecycle-f0e43e4dd491473bbc601c385dc44f82`，窗口句柄等待失败在 `installed-lifecycle-normal-20260907`，错误沙箱账户启动失败及清理在 `installed-entrypoints-dcb22c564d254c2d8f8f8b3ec47c3c07`，均位于 `artifacts/`。本段只保留 P1 阶段证据，当前状态以 P7 验收和 [AGENTS.md](../AGENTS.md) 为准。
-
-### P5 验收
-
-按本次“不要过度设计，能不做就不做”完成必要范围，完整边界见 [P5 计划](DEVELOPMENT_PLAN.md#p5完整播放与音频控制)。最终构建在 PowerShell 7.6.5 通过 21 组、4056 项回归，`complete=true`，宿主退出码 0，会话描述已清理：`artifacts/regression-bb637050ad1448b4bce39929131450f3/regression.json`。
-
-新增 `native/test-audio.ps1 -Render` 在最终回归通过 100 项：`artifacts/native-audio-970f775bf5504ff29275f5ffd4f57ac3/verification.json`。同一最终构建的独立专项也通过 100 项：`artifacts/native-audio-690410935e1f426a91f093b31b5bbf55/verification.json`。测试包括速度点增删/渐变/边界/撤销重做/GPIF/重开，效果旁路/参数/顺序/删除、音色选择、MIDI program、设备枚举/更换/恢复/无效值/播放中拒绝，反复和房子逐小节序列、D.C. al Fine、分页定位、循环真实回跳、立即播放停止、待播放时切换文档和其他文档不变。
-
-原生 44100 帧/秒双声道浮点 PCM：两小节 90 BPM 为 235200 帧；第二小节改 180 BPM 为 176400；首点向第二点渐变为 137200；整段反复 3 次为 705600。逐次核对渲染帧数与原生时长，并验证非静音、音量归零衰减、左右声像、混响参数和钢琴音色替换的能量差异。探针只在 `GPMCP_DEVELOPMENT=1` 开放，最大 30 秒，不是 P6 文件导出接口。未穷举全部技法或每种音源输出。
-
-验收环境为 Windows x64 Guitar Pro 8.1.1.17、Standard 后端、Studio 2 PRO 输出、512/1024 缓冲区。音色库：`C:/ProgramData/Arobas Music/Soundbanks/com.arobas-music.soundbank.standard`，使用 Steel Guitar (`D-Steel`) 和 Acoustic Piano 模板；真实 MIDI 输出不经此 RSE 渲染器。设备原生 Qt 配置模型负责持久化，测试恢复原设置；跨重启持久化、ASIO、热拔插与厂商驱动故障归 P7。未知设备在写入前拒绝，原生失败恢复分支未作驱动故障注入验收。
-
-核心 SHA-256：`888F31675C7894AECFD0EED61DBA215F755564281B444739843A36607A608991`；自动加载器：`21341BD69888E2741C81783964DB0C653944EBDD3610A3A52A780660E25EFD37`。候选包：`artifacts/GuitarProMCP-0.3.0-41b1caa18745469a9d4e3dcf194d4d66.zip`，SHA-256：`664A1913FC4754E72CC31A16963CA17005A731381886F3D11A95EBDDC43691C4`；包内 DLL 与回归构建一致。该段记录的是 P5 阶段候选包，后续真实安装和发布状态以 P7 验收为准。
-
-调查记录：停止状态下速度自动化只改模型会使帧数继续沿用旧值，已通过原生 `updateTempoManagerAsync` 修正并覆盖撤销；宿主 `isUpdatingData` 可能长期为真，因此不作为唯一完成条件。默认最小夹具为 MIDI 引擎，仅复制 RSE 音色不会切换引擎；`native-audio-33c157cb7c3b459eb5d0f4fb3ed8834a` 的静音结果不算通过，最终在 RSE 测试副本中验证真实声音。早期沙箱启动因自动备份目录写入受限产生原生保存提示，审批首次超时、重试通过后在正常权限隔离副本验收，未禁用全局自动备份。
-
-### P4 验收
-
-按本次“不要过度设计，能不做就不做”的要求完成必要范围，范围决定见 [P4 计划](DEVELOPMENT_PLAN.md#p4复杂选区与内容转移)。最终构建在 PowerShell 7.6.5 通过 20 组、3956 项回归，`complete=true`、退出码为 0，连接描述已清理：`artifacts/regression-1204f8c47bd54f778f5c17ab010e7dd9/regression.json`。
-
-新增 `native/test-transfer.ps1` 通过 224 项，证据为 `artifacts/native-transfer-71beb2b2ef594e82b2537a510ca1514a/verification.json`。覆盖单拍/小节重复、100 次及 128 小节边界、51 轨片段重复后的 20000 拍拒绝、文本保留与过滤、跨小节剪切/整小节替换、多轨清空/删除、部分音轨/声部与钢琴下谱表隔离、键盘/打击乐单音、不同调弦/变调夹/记谱移调、乐器和原弦可演奏性拒绝、一次撤销/重做和原生保存重开。旧选区 980 项、剪贴板 112 项均在最终构建重新通过。
-
-核心 SHA-256：`1CC3F53C596DBDA772A47C4AD5774E561E4D5F535C5858AD1710253C359EDE0F`；自动加载器：`16A588466C6C3199A55B8DC499C8630B8E9F8FFD0E11685583C5BCC4950C6519`。候选包：`artifacts/GuitarProMCP-0.3.0-9597dd29fefa4766baba900518efa781.zip`，SHA-256：`E2A6999843CF2A43B1E9C74430AED20B888C971A819300EE43B9E435E031D10D`；包内 DLL 与回归构建一致。该段记录的是 P4 阶段候选包，后续真实安装和发布状态以 P7 验收为准。
-
-保留限制与调查结果：宿主兼容性检查会接受鼓组到吉他的无意义映射，插件已补前置拒绝。`artifacts/native-transfer-323b56aa6f7243b1811d0eda6075e1f0/verification.json` 的旧跨小节替换断言不足，进一步逐音核对发现未选中的末端 MIDI 52 消失；该记录不能证明边界隔离。最终版本拒绝部分小节跨栏替换，要求显式全音轨整小节范围，并断言完整音符序列。首次测试还遇到沙箱禁止宿主自动备份，改为普通用户权限运行隔离副本；失败夹具品位、单音字段、GPIF 文本格式及 PowerShell 保留变量断言均已修正，最终回归重新执行。
-
-系统剪贴板测试入口 `.tools/run-isolated-clipboard.ps1` 在沙箱内外均于 `CreateWindowStation` 失败，在访问当前剪贴板前退出。没有系统剪贴板互通通过证据；`native_*` 仍默认禁用，测试仍要求独立窗口站。本次不搭建独立用户/虚拟机，不增加任意音轨集合剪贴板、自动指法或完整特别粘贴过滤系统。
-
-### P3 验收
-
-P3 已按 2026-09-07 用户确认的必要范围完成。最终构建在 PowerShell 7.6.5 通过 19 组、3732 项完整回归，`complete=true`、退出码为 0，连接描述已清理：`artifacts/regression-ae4ce003bf6c4bd18acd3f8f32a5672a/regression.json`。以下列出本阶段新增能力与保留边界；P2 双版本专项仍对应下方各自的验收构建。
-
-| 操作 | 当前实现与验证 | 限制或剩余验收 |
-| --- | --- | --- |
-| 音符技法 | `gp_edit_note_effect` 支持弦号或 `note_index`；新增死音、击勾弦、回音/波音、重音类、颤音、8 种滑音、6 类泛音和弯音曲线，逐项修改/清除/撤销/重做/保存重开 | 颤音固定十六分音符；全部技法组合和音源实际效果未穷举 |
-| 节拍技法 | `gp_edit_beat_effect` 支持装饰音、扫拨、渐强弱、敲击、八度、死拍、轮指、扫弦指法、摇把揉弦、拍弦/勾弦、琶音、扫弦和摇把曲线 | 琶音/扫弦采用宿主默认时序；装饰音转换改变时值，死拍清空音符，撤销恢复 |
-| MIDI 与谱表 | 键盘及打击乐的 MIDI 增删、重复设置幂等、钢琴双谱表及多声部、和弦序号技法；返回弦乐/无固定音高分类及打击乐可用 MIDI | 打击乐选择宿主默认演奏法；内部 `string/fret` 不是实际琴弦/品位；独立演奏法选择未提供 |
-| 调弦与移调 | 调弦、变调夹及部分变调夹；保留音高/保留指法；原弦可演奏性预检；区分记谱偏移与实音移调；全音轨及谱表选区一次撤销 | 保留音高要求原弦品位在 0..36，不搜索替代指法；实音移调拒绝打击乐；原生撤销快照可能补齐短声部的休止 |
-| 乐器配置 | 复用 `gp_templates`、`gp_new`、`gp_insert_track` 克隆模板或已有音轨；吉他/钢琴/鼓混合曲谱通过 | 任意乐器定义及演奏法配置未实现；混音、音色与效果链另归 P5 |
-| 连接与连音 | 沿用已验证的两层比例和跨声部/音轨批量命令；新增八拍连奏、跨小节八音延音链、整链移调及弯音组合的保存重开 | 自定义分组、符杠和括号排版未实现，按用户决定不作为 P3 完成条件 |
-| 反复与跳转 | 反复房子 1..8、19 种跳转及逐项清除、同小节多记号隔离；嵌套反复、D.C. al Fine、时间线长度与播放帧推进；记号移动、删除前序小节及小节/音轨结构改变后的自动化引用 | 全部跳转组合与音频交互另归 P5/P7 |
-
-最终回归中的 P3 专项：记谱 627 项，`artifacts/native-notation-236282e496334ac3929d6009778e7c4a/verification.json`；混合乐器 210 项，`artifacts/native-instruments-51e0780104f04c97b3d3fb9b46af0757/verification.json`；结构 307 项，`artifacts/native-score-form-d3d7d348c0c84f78995b6630ace8aaa3/verification.json`。包含原生模型、撤销重做、GPIF、保存重开和播放推进验证。
-
-P3 核心 SHA-256 为 `2AFEC99F536990E0A7C2506A444B152D355D4799F09B73A7F743217D01AEDF19`，自动加载器为 `FC6E027A86D722656CA08560665B839A9146CB789C17F90C9C220DA1C7274F52`。安装包 `artifacts/GuitarProMCP-0.3.0-b2e49e7a7b7a4a14bec0998f211994d7.zip` 的 SHA-256 为 `EA8CCEF423BE8DC4644C21E0C228D184FECDCB3721AA8232452078A0F22BE299`，包内两份 DLL 与验收构建一致。未更新真实安装目录，P1 状态不变。
-
-历史失败保留：结构专项 `artifacts/native-score-form-d2f3deaa91a94e88aef566cae4c07f48/verification.json` 在 147 项后发现跳转清除无效，现已使用原生 `NoDirection` 清除并在同一宏内恢复其余记号。回归 `artifacts/regression-34bf63c4598949f395eb63e8aaf88adf/regression.json` 在 53 项后因自动备份目录写入受限中断；沙箱外启动的自动审批及一次重试曾超时，用户随后明确授权隔离测试副本正常写入其备份目录，最终回归在该环境完成，未关闭全局备份。
-
-回归 `artifacts/regression-f03d7c1a1022432c8174647c5b4e4d4c/regression.json` 发现剪贴板测试的手工占位拍缺少新增默认技法字段，补齐预期后仍按完整模型比较。`artifacts/regression-5327676ac06647d892651b4af83fcc0d/regression.json` 通过全部功能检查，但附加会话的 .NET 进程对象返回空退出码，收尾未通过。测试入口现保留原生进程句柄读取真实退出码，最终回归同时验证正常退出和连接描述清理；这两轮历史记录均不计为完整通过。
-
-### P2 已验收基线
-
-P2 必要范围在 2026-09-07 按用户决定排除三项宿主限制：独立 GUI 多开、原生标签拖动和原生保存进度取消。单实例、多文档、标准客户端、可确认的取消及失败恢复的完整入口为 `native/test-p2.ps1`。最终双版本证据在 `artifacts/p2-6716e7c27dd14c0599dc4c568de4cbcd/verification.json`，全部 14 个构建/执行步骤退出码为 0。
-
-P2 验收核心 SHA-256：`9A6FC7D11C4C87B98838D556DDEE0B9D928B09D6E2831C5F040D1525949C6ACC`；自动加载器：`3F706CE5E0B73515F1766473A682C09F852EBC61183086B54111E8FA30BE3F05`。PowerShell 7 与 Windows PowerShell 5.1 各通过完整功能回归 2588 项、保存恢复 380 项、标签及原生异常恢复 405 项、文档集合变化 397 项、连接/Inspector/DDE 72 项，每个版本 3842 项，合计执行 7684 项。完整功能回归为 `artifacts/regression-64a332ab0d5b43cdbc3e39fde52334db/regression.json` 和 `artifacts/regression-3eb4aa4f71444e1185d08d3578674920/regression.json`；所有测试宿主正常退出并清理连接描述。
-
-保存恢复证据：`artifacts/save-recovery-9dbadcff317d4a61929129ff0efd2ee9/verification.json`、`artifacts/save-recovery-1f923e90c80140baad7e6327ba12159c/verification.json`。标准标签/原生异常恢复证据：`artifacts/tab-recovery-a19cbb62067a44dc870c534c81b39d13/verification.json`、`artifacts/tab-recovery-4d7412538cdb43b1b0fac0968c563458/verification.json`；其中 `throw_after_open`、`throw_after_create`、`throw_close` 均保留异常并确认真实成功终态，`all_documents_closed` 验证全部原对象关闭后恢复与重开。`error_open`、`error_create` 验证只有“确定”按钮的加载错误提示关闭后仍为 `error`，不误报 `cancelled`，不遗留未知结果或文档。部分关闭并新增文档的证据：`artifacts/tab-recovery-92c7c9e3b81149dba94437b3076a27f6/verification.json`、`artifacts/tab-recovery-1eebab63af6f49ed9a5967dea1e83e02/verification.json`。
-
-标准客户端证据：`artifacts/instances-10d101fa7689489eb13758c9d5058822/verification.json`、`artifacts/instances-f35b44e054b7475097617163c0da71df/verification.json`。固定客户端配置也绑定当前 UUID，旧配置在原端口重新启动宿主后返回 409；端口变化后由官方 MCP Inspector 2.5.0 重新导入配置并读取正确实例。未声称运行中的客户端自动刷新配置。
-
-该构建另通过隔离安装 46 项和协议 27 项：`artifacts/installation-2349d95da47b4d95823bc98c70e0c3b2/verification.json`，含显式 `GPMCP_PORT` 冲突时报告 `service_error`、不发布错误描述且保留普通宿主。该检查在现有文件沙箱内运行，恢复隔离宿主 EXE/Qt DLL 后卸载测试插件；不代表 P1 真实安装验收通过。
-
-共同编辑补验通过 8 项：`artifacts/native-coediting-6a31335393474265a7d400d50b166624/verification.json`。实际触发宿主 `actionUndo` 撤销 MCP 元数据编辑，再通过 MCP Redo 恢复，继续编辑并保存副本、原生重开，验证共享历史、内容持久化及源文件不变；宿主正常退出并清理描述。首次文件沙箱内运行在完成编辑/重开后，因宿主自动备份目录写入受限而收尾失败，失败证据保留为 `artifacts/native-coediting-3924216f6c3f433b988f028c8ab633e7/verification.json`；该首次运行不计入通过数量。
-
-不兼容 GPIF 修订的修复前证据：`artifacts/native-load-dialog-05d5b1d5c79e44f7b595862da7b5606a/verification.json`，原生静默结束使请求长期保持未知。新增文档专项各 64 项，验证不兼容/非法 required 修订被预检拒绝、不遗留阻塞，以及 required=13007、recommended=999999 的兼容文件仍可原生打开。P1 真实安装及 P3-P7 不在本次 P2 完成范围内。
-
-### 历史检查点
-
-显式标签恢复检查点的核心 DLL SHA-256 为 `40213CBD82BDAC3EA454A792982E94C039B81E14824F1C8119B82E02D1E814C7`，自动加载器为 `E409DF16F3201CFA37A670A5BF49A59015E5A45E568A3BBEA4381A79CDBBC4CD`，宿主为 `B233B0F1C87DEB3AECE693D51E8D3C3A841C88FEE78828607B20034737C4C6DF`。PowerShell 7.6.5 与 Windows PowerShell 5.1.19041.6456 各完整通过十六组、2574 项并正常退出：`artifacts/regression-395453faa288485fb67164457b217930/regression.json`、`artifacts/regression-45dd4bebdb514544a7972482058f8a85/regression.json`。两轮源码哈希一致，281 项标签/原生菜单分支均记录 `menu_verified=true`：`artifacts/document-tabs-4e82228ab1a1429a96bfbb686a717687/verification.json`、`artifacts/document-tabs-6fe320c0d61e4d6898964718daf09a3f/verification.json`。
-
-两个版本的标准显式恢复分支各通过 330 项：`artifacts/tab-recovery-8f72e220f904457c801022cbb9fa9643/verification.json`、`artifacts/tab-recovery-aec4e8fe39ca41f185a4746b35969380/verification.json`；部分原文档关闭后的核验分支各通过 327 项：`artifacts/tab-recovery-8d3a10bd36c948d2b282cf7569073bb2/verification.json`、`artifacts/tab-recovery-0455071f91334be096435427efd1952b/verification.json`。标签探针 SHA-256 仍为 `8A835AB1A8DF0D80B4560C9B9EAD614C9150EDBB40DB8FDD5D035FDE3951871C`。同一核心另在 Windows PowerShell 5.1 通过保存故障恢复 265 项：`artifacts/save-recovery-85a38cb13070403a9b98ce81124f4062/verification.json`，保存探针 SHA-256 为 `819A9C1E5A655708053DFE46DEC5EAA0998E01F32CAF5E95C9F1FECE575FAF56`。上述进程均正常退出并清理连接描述，原始夹具未变。
-
-`gp_recover` 验证恢复请求绑定、重复失败时阻塞保持、模态与已完成/过期请求拒绝、恢复后编辑/保存重开，以及原失败和后续恢复历史分别保留。首次原生关闭再取消在 `artifacts/tab-recovery-9dc6e44848ed4907837ecfb54c631807/verification.json` 失败：宿主先关闭三份干净文档，再为唯一未保存文档显示确认框；取消不会重开前三份。恢复现在核验剩余对象、原相对顺序及活动文档，返回 `documents_closed` 与关闭的 UUID，不重开文档或误报完整回滚。该分支验证三份关闭、一份保留，全部原文档关闭尚无专项证据。保存/其他操作没有保留恢复上下文时明确拒绝 `gp_recover`，不会解除未知结果阻塞；这些缺口仍属于 P2。
-
-标签故障回滚检查点的核心 DLL SHA-256 为 `950455B31A9B5E78517CDF23A68C24A8A8DB29B55DEFF1FB4F86EA008C1E41FE`，自动加载器为 `54F2A1A468F3DDA2D4A8A6EB9879D3271FA88A69B4F85535A21DB7AC14CF165E`，宿主为 `B233B0F1C87DEB3AECE693D51E8D3C3A841C88FEE78828607B20034737C4C6DF`。PowerShell 7.6.5 与 Windows PowerShell 5.1.19041.6456 分别完整通过十六组、2574 项并正常退出：`artifacts/regression-ece4d5f8e8f64b2e8a0af5e1a8038c57/regression.json`、`artifacts/regression-248282b0d46d4d11a1ff829960c98cd0/regression.json`。两轮源码哈希与本检查点一致，标签/菜单专项各为 281 项且 `menu_verified=true`：`artifacts/document-tabs-7e568d4d883d4b158337aa2289a3f4ee/verification.json`、`artifacts/document-tabs-29988c18193d4673a4b63fb3540baeb7/verification.json`。
-
-同一核心在两个版本各通过 303 项标签故障恢复并正常退出：`artifacts/tab-recovery-a2ae563164d74a8c96f7a2df2d7288fc/verification.json`、`artifacts/tab-recovery-bed9ff2417ca4c19bad20c9c6c497d05/verification.json`。探针 SHA-256 为 `8A835AB1A8DF0D80B4560C9B9EAD614C9150EDBB40DB8FDD5D035FDE3951871C`。验证包括完整顺序、活动/非活动标签异常、额外重排、活动文档切换、撤销重做、保存副本重开和后续重试；恢复通知再次异常时如实保留未知结果及写入阻塞。同一核心另在 Windows PowerShell 5.1 通过保存故障恢复 264 项并正常退出：`artifacts/save-recovery-acbd8c29203e43eeb652ff3ad5b93928/verification.json`。上述进程均清理连接描述。
-
-修复前的 `artifacts/tab-recovery-518dba2b610849ecb8a0f0813b941102/verification.json` 证明目标位置正确而另外两个标签被交换时仍误报 `moved`。首次回滚方案在活动文档被故障切换后未能恢复宿主活动文档，失败记录分别为 `artifacts/tab-recovery-20281610a1694c83bc183ab71e6c826f/verification.json` 和 `artifacts/tab-recovery-546c1a8288a548c5a6c65740552c630f/verification.json`。最终实现恢复完整排列后，先同步当前页面对应的原生标签选择，再选回原标签，并核对完整映射和宿主活动文档。`gp_move_document` 同步返回带 `request` 的结果；回滚失败的请求可在 `gp_operation`/`gp_documents.moving` 查阅，并阻止后续修改。回滚再次失败后的状态协调仍待完成，未计入 P2 完成。
-
-保存异常恢复检查点的核心 DLL SHA-256 为 `C6FA4C8CC527E750A3939A7E6589B75762D6BC07F8FB8D4C63FE3C4DCD090345`，自动加载器为 `752C11B40009D362A4CEB48887A081BA581D3F47EB2E837159B979FB4DCACE0F`，宿主为 `B233B0F1C87DEB3AECE693D51E8D3C3A841C88FEE78828607B20034737C4C6DF`。PowerShell 7.6.5 与 Windows PowerShell 5.1.19041.6456 分别完整通过十六组、2574 项，退出码均为 0 且连接描述已清理：`artifacts/regression-56427ad87d9246caa72515d193b8fe0c/regression.json`、`artifacts/regression-7540a229688648ec86a9201797cd2cfa/regression.json`。两轮源码哈希与当前构建一致，标签专项各为 281 项且 `menu_verified=true`：`artifacts/document-tabs-7d5b373353974bd08fc86a09570031a0/verification.json`、`artifacts/document-tabs-bcc8b58847fa40e8bae9e389d4c16928/verification.json`。
-
-同一核心在两个 PowerShell 版本各通过 264 项保存故障恢复并正常退出，分别见 `artifacts/save-recovery-070d927e63b94067ade50013c961976b/verification.json` 和 `artifacts/save-recovery-f23b76e7202740dfa742615c6db355d3/verification.json`。测试探针 SHA-256 为 `819A9C1E5A655708053DFE46DEC5EAA0998E01F32CAF5E95C9F1FECE575FAF56`。新增六种异常情形，覆盖原生保存通知、打开路径通知及恢复通知：恢复成功时原文件字节、两种路径、未保存内容、撤销重做及重开均已核验；恢复再次异常时保留完整备份及写入阻塞，不能当作恢复完成。该专项仍明确记录完整保存进度取消未验证。
-
-修复前的复现为 `artifacts/save-recovery-cfe6e5ae39ba4fbea7b3df57e5db907f/verification.json`：原生通知抛出异常后，保存结果不明、两种路径不一致、未保存标记被清除，局部备份已在外层捕获前销毁。现在在备份存活期间捕获并恢复，恢复路径通知再次异常也继续尝试恢复未保存标记。独立测试脚本的两次失败另外保留：`artifacts/save-recovery-8d7a94e9a4f74863bccea7d2fe9a933d/` 在最后退出响应断开时中止，已补充退出码和描述清理核对；`artifacts/save-recovery-88dd7edb954c45769724edce93291b1a/` 遇到 PowerShell 5.1 控制文件 `Set-Content` 流错误，已改用 .NET 写入并在两个版本重跑通过。其他未知结果及恢复再次失败后的状态协调仍属 P2 未完成项。
-
-窗口恢复检查点的核心 DLL SHA-256 为 `58A49CDD43C6829C03C4E4E60252A693380769628304EE4EC46BCFB6EC6C567F`。PowerShell 7.6.5 与 Windows PowerShell 5.1.19041.6456 分别完整通过十六组、2574 项，退出码均为 0 且连接描述已清理：`artifacts/regression-89d802af6b7048c1af5ca9b5b6f98e2a/regression.json`、`artifacts/regression-a9757085257743968b98fd9ffede8d9b/regression.json`。两轮都包含 281 项标签/原生菜单检查，`menu_verified=true`，分别见 `artifacts/document-tabs-a757a290bb3f4346bb3c155d66030314/verification.json` 和 `artifacts/document-tabs-93b5e00541df4318baea186a998b9811/verification.json`；相同核心另通过 Windows PowerShell 5.1 保存故障恢复 167 项并正常退出：`artifacts/save-recovery-bfe0efd62a504dcba05ff2e49774f1db/verification.json`。
-
-反复隐藏后菜单被禁用的原因与修复已经验证：宿主在 Qt 原生焦点窗口变化时重新检查活动主窗口，只有 `showNormal()` 不能恢复该上下文。`restore` 现调用公开的 `activateWindow()`，可将窗口带到前台；后台曲谱接口无需这一操作。回归实际触发三次隐藏/恢复后的五个文档菜单，核对每个目标，并检查隐藏后不占前台、原生关闭确认仍可取消。只读探针调用栈及反汇编证据在 `artifacts/menu-probe-553f7e6f35784b4ea8984a42be527797/`；未直接修改菜单启用属性。其他桌面、窗口焦点策略及全部模态上下文仍需在 P7 覆盖。
-
-另存路径与标签修复检查点的核心 DLL SHA-256 为 `7775931BBE25D049D095887C017F73DE44894416AD8ADC858E3FA45B14814971`。PowerShell 7.6.5 与 Windows PowerShell 5.1.19041.6456 分别完整通过十六组、2486 项，退出码均为 0 且连接描述已清理：`artifacts/regression-03bca8639e8a447b994d56f49deba77f/regression.json`、`artifacts/regression-b1474eed170c4298bc6d9526fad40170/regression.json`。两轮均记录六次原始夹具恢复；保存专项增加到 47 项，并验证旧路径与新路径的文档身份、中文文件名及原生界面名称。
-
-同一核心在 Windows PowerShell 5.1 通过保存故障恢复 167 项：`artifacts/save-recovery-a706bcc394a04f8bb2bf2eef4b11427a/verification.json`，包括失败后的 `opened_path_restored`。新隔离宿主的原生菜单专项通过 221 项且 `menu_verified=true`：`artifacts/document-tabs-3a21e86f47334806a28be46a4afec6f7/verification.json`；该宿主使用 15000 ms 启动等待并正常退出，退出证据为 `artifacts/save-label-menu-bed7e9d147bf47ef91701d7cc2cd1e85/verification.json`。
-
-首次整套回归 `artifacts/regression-a58ec49485ff46788c1621e7b8397559/regression.json` 停于菜单名称检查：宿主保留已关闭文档的勾选动作，当前标签对应的名称实际正确。保存测试现按当前标签对应动作核验，未放宽菜单可用性专项。额外的三次恢复/隐藏观察中，第二、三次恢复后的当前文档动作仍禁用，原始状态见同一菜单宿主目录的 `menu-cycles.json`；此历史观察不计入通过项，菜单上下文问题由后续窗口恢复检查点修复。
-
-标签重排检查点的核心 DLL SHA-256 为 `35F81B75172BD1CBC5CEA17834C8757D3FF870D7BA3984C361315C84F1F7B355`。PowerShell 7.6.5 与 Windows PowerShell 5.1.19041.6456 分别完整通过十六组、2469 项，退出码均为 0 且连接描述已清理：`artifacts/regression-b2dd344767674bf0b1ef7e8f68a1b724/regression.json`、`artifacts/regression-2d306138117b48409e1a9b64dcf92898/regression.json`。其中标签基础专项为 193 项；另在新隔离宿主执行含原生菜单的 221 项，`menu_verified=true`：`artifacts/document-tabs-cfafc40ebb02415c9a7ae8fd9adc3aad/verification.json`。相同核心在 Windows PowerShell 5.1 通过保存故障恢复 167 项并正常退出：`artifacts/save-recovery-f662e3c6b0e34d8d866d5f8540db3a6d/verification.json`。
-
-标签早期验证发现并修正了模板名称、未保存标记前缀及另存后空提示被误当作文件路径的校验问题；后续保存修复补齐路径通知，解决未命名文档另存后的空标签。原生菜单在反复隐藏/恢复的已有测试宿主中曾保持禁用，相关失败不计通过；新宿主的菜单专项不能证明所有窗口上下文已通过。用户确认原生拖动不改变顺序，插件重排不替代该项验收。同步重排故障回滚、显式恢复重试及部分文档关闭后的状态核验已有后续专项验证，其他复杂文档集变化仍待处理。
-
-`09185ab` 历史构建在 Windows PowerShell 5.1 和 PowerShell 7 下均完整通过十五组、2276 项回归，两轮退出码均为 0，连接描述已清理。证据分别为 `artifacts/regression-9e09be6fb7784486bc7423a8a50cd9f5/regression.json` 和 `artifacts/regression-b7fb07a5f6c14bd5abe4811a36c14159/regression.json`。核心 DLL SHA-256 为 `A22ECD07B9C48776CF25CA1E9FA4A8C650CF9E93841F511380FF97FE7F73227F`。新增 HTTP UTF-8 解码对照检查，修复旧版 PowerShell 的中文路径/工具说明乱码，并让完整测试入口兼容该运行时。
-
-同一构建的保存故障专项在 Windows PowerShell 5.1 下通过 167 项：`artifacts/save-recovery-a9adcab860bc4afd944359d371399572/verification.json`。已验证原生部分写入失败、宿主拒绝损坏输出、保存后校验失败、保存后关闭失败和恢复失败时备份保留；宿主正常退出并清理连接描述。保存错误提示关闭后仍报告 `error`；该专项明确记录完整原生保存进度取消尚未验证。
-
-此前连接及两个客户端并发专项通过 53 项：`artifacts/instances-b41dfdb2831a4167be7453cf8d4907d9/verification.json`。后续确认 `.gp` 文件关联还使用 DDE `[open("%1")]`；单独重复执行 EXE 命令没有覆盖该协议。未加载 MCP 核心的宿主收到空单实例消息后，DDE 才触发文件打开，基线证据为 `artifacts/forwarding-probe-7e502806f8224290bbf07076d1299123/baseline.json`。真实安装入口、独立 GUI 多进程、真实 MCP 客户端配置重新加载、手工标签重排和未知原生结果恢复仍未通过验收。P1 实际安装目录仍为旧版，P2 仍是中间检查点。
-
-`09185ab` 构建的 DDE/连接专项在 PowerShell 7 后台模式通过 61 项：`artifacts/instances-3833810d444349888852106424949221/verification.json`；Windows PowerShell 5.1 可见模式通过 60 项：`artifacts/instances-3b540bd0135545bc965d08b618631733/verification.json`。覆盖中文会话目录和文件路径、错误 DDE 接收进程拒绝、重复打开不重复建文档、并发编辑、重启失效和端口回退。两轮记录的启动等待均为 15000 ms，不代表较早退出已可靠。默认 5000 ms 的两次运行在重启后的宿主退出时仍卡于 `AMNetwork::NetworkServiceGuard`，失败证据和线程栈保留在 `artifacts/instances-69d4f4d62d6141b6b52b1c3fc4271ebd/` 与 `artifacts/instances-70832e139e884a3c895c1ceb8b32c41e/`。
-
-此前回归 `artifacts/regression-d55d5d21f0cb4eaa81a816918169e7cb/regression.json` 在通过 1775 项后停于模板新建检查，保留宿主中已观察到成功创建。模板测试错误地将中间状态 `requested` 当作结束条件，已改为等待明确终态并在失败时输出实际状态。该轮失败记录仍保留，未计为完整通过。
-
-P2 上一检查点十四组回归共 2225 项通过，退出码为 0，连接描述已清理：`artifacts/regression-dd6830958c334f7cb5ad42add6e4bd4d/regression.json`。其中新增保存专项 30 项，证据为 `artifacts/native-saving-b5e392dce3c84e17b2812cc960cd84c3/verification.json`。该轮包含独立文档 UUID 和已退出进程身份识别修复；保存中途失败恢复仍未计入通过范围。
-
-同一构建的连接专项为 53 项通过，包括保留已退出进程句柄时重新接管旧连接描述。PowerShell 7 证据为 `artifacts/instances-d32b829a0032440a86a001624a5d01df/verification.json`，Windows PowerShell 5.1 证据为 `artifacts/instances-5524513fd40d4b2b988926b4abf5fd92/verification.json`。两轮均未将二次启动打开文件或独立 GUI 多进程计入通过范围。
-
-连接专项 52 项通过：`artifacts/instances-019140371f2f41f882a28657709dbe21/verification.json`，覆盖发现去重、两个客户端同时编辑同一或不同文档、错误实例拒绝、重连、重启后旧文档 ID 失效、端口回退和退出清理。此记录对应保存功能加入前的构建。旧版 `test-instances.ps1 -CheckLaunchForwarding` 仅重复执行命令行，在后台和可见模式均未打开第二份曲谱，可见模式失败证据为 `artifacts/instances-fa5b0650158348838bc0f681a3f46daa/verification.json`。该失败记录保留；新版专项按实际注册协议加入 DDE，并核对接收进程与文档内容。
-
-P1 候选检查点 DLL 的十三组回归共 2195 项通过，进程退出码为 0 且连接文件已清理，证据为 `artifacts/regression-f1463f227d554ba0b74060538e9ff651/regression.json`。安装检查 43 项及协议 26 项、安装文件归属和配置检查 23 项通过。阶段状态和安装包见 [开发计划](DEVELOPMENT_PLAN.md)。实际安装目录仍为旧版，最终真实启动入口验收尚未完成。
-
-启动后立即关闭存在独立的宿主网络线程等待问题；仅使用 Qt 关闭窗口的探针、不加载 MCP 核心也能复现。证据及线程栈位于 `artifacts/exit-baseline-ee2f813e0b8343d7856fa611439c315e/`。普通编辑回归正常退出不代表快速启动/退出稳定性已经通过，该问题仍保留在发布验收范围。
-
-2026-09-07 新增连奏与延音线专项 153 项，最新证据为 `artifacts/native-connections-ce6b417d13c046e0a4703353b0121ca9/verification.json`。十三组累计 2195 项通过。专项覆盖原生连接两端、音高变化、单音隔离、多声部/音轨和钢琴谱表，并独立读取 GPIF 和原生重开曲谱。
-
-此前 DLL 的八组回归共 1784 项通过：连接 153、协议 26、原生后台 26、节拍编辑 58、音符技法 254、选区 980、插件独立剪贴板 112、连音 175。汇总文件 `artifacts/native-connections-ce6b417d13c046e0a4703353b0121ca9/regression.json` 记录各项证据、宿主 PID 及 DLL/相关源码哈希。真实系统剪贴板不在该轮测试中。
-
-同日新增原生连音 175 项，最新证据为 `artifacts/native-tuplets-b7423876dcd8420e9e36b829fa92040a/verification.json`。该轮协议 26、原生后台 26、节拍编辑 58、选区 980、插件独立剪贴板 112、连音 175，共 1377 项通过；节拍批量分发修改后的现有操作回归通过。
-
-2026-09-07 在默认配置重新运行协议 26 项、原生后台 26 项、插件独立剪贴板 112 项，共 164 项通过。另确认三项实验性 `native_*` 操作在默认模式下拒绝执行，且插件缓冲区不变。该轮原生证据为 `artifacts/native-verification-19374c9022ec416ea4d36317884fd6f6/verification.json` 和 `artifacts/native-clipboard-6dd5d970ccb34e99b7028e3131c22f67/verification.json`；没有将未完成的宿主剪贴板验证加入历史累计数。
-
-- `native/test-mcp.ps1`：27 项协议、会话、鉴权、消息分帧、参数边界和 HTTP 客户端 UTF-8 解码检查。
-- `native/test-native.ps1`：26 项真实宿主后台检查，读取保存文件内部的 `Content/score.gpif` 验证标题和音符变化。
-- `native/test-editing.ps1`：58 项单拍音符/节拍编辑、无效参数、撤销重做、GPIF 音符引用和附点时值检查。
-- `native/test-tracks.ps1`：90 项音轨新增/复制/删除/交换、零轨恢复、跨文档配置复用、名称/颜色/混音/播放状态、无效输入、撤销及 GPIF 持久化检查。
-- `native/test-measures.ps1`：118 项拍号/实音调号边界、小节隔离、音高与拼写、反复/小节线/自由拍号、撤销和 GPIF；反复 3/100 次时的时间线、绝对 tick 定位和小节偏移越界检查。
-- `native/test-effects.ps1`：254 项音符技法检查，覆盖 21 种非默认取值、清除、重复设置、单音/声部/音轨隔离、光标不变、撤销重做、逐项 GPIF 和组合技法的原生保存/重开。
-- `native/test-selection.ps1`：980 项原生选区和批量时值检查，覆盖方向、端点、全选、模式复位、和弦/第二声部/其他音轨单音、无效输入、实际目标位置、四声部音乐时间映射、跨轨整曲和单小节、钢琴双谱表、128 小节限制、临时占位拍清理及重建、宏命令一次撤销、重做、重复写入和原生保存/重开。
-- `native/test-saving.ps1`：47 项当前路径保存、显式覆盖、目标保护、写入前拒绝后的状态保留、两种路径及标签/提示/窗口/对应菜单名称更新、中文文件名、旧路径独立打开、新路径复用及保存重开检查。
-- `native/test-save-recovery.ps1`：独立隔离宿主中的 264 项原生部分写入失败、损坏输出、保存后校验失败、原生保存/路径通知异常、恢复再次异常时保留备份与写入阻塞、错误提示控制、保存后关闭失败、撤销重做、再次保存重开及正常退出检查。使用单独构建的测试探针，不包含于常规回归或生产安装包。
-- `native/test-tab-recovery.ps1`：独立隔离宿主中的 330 项完整顺序、故障回滚、显式恢复重试、过期及重复请求、模态保护、内容/撤销隔离、恢复后编辑保存重开及请求历史检查；`-CloseCleanDocuments` 分支为 327 项，另核验宿主关闭干净文档后取消确认、剩余文档状态及原关闭结果保留。独立构建探针不进入生产包。
-- `native/test-document-operations.ps1`：50 项请求状态、保存/丢弃/取消关闭、原生确认与取消、过期请求隔离、64 条历史淘汰及损坏 ZIP/GPIF 拒绝检查。
-- `native/test-document-tabs.ps1`：基础 196 项插件重排、同名及未命名文档、四份未保存曲谱、稳定身份、活动文档保持、撤销重做、可见标签坐标、模态恢复/拒绝/取消、保存重开与关闭隔离检查。`-VerifyDocumentMenu` 扩展至 281 项，逐项触发三次隐藏/恢复后的原生菜单并核对目标和后台焦点；`test-all.ps1` 默认启用此分支，失败不计通过。
-- `native/test-lifecycle.ps1`：40 项定向关闭、未保存修改保护、旧 ID、无文档时继续服务、重开和窗口恢复/隐藏检查。
-- `native/test-session.ps1`：103 项原生打开、重复打开、反复切换、声部导航与编辑隔离、播放控制器关联、定位及播放/停止、初始速度与单位修改、撤销和保存、后续变速点保留检查。
-- `native/test-structure.ps1`：60 项模板新建、占位拍首音、跨文档未保存标记、节拍插入、小节管理、多音轨及钢琴上下谱表编辑隔离检查。
-- `native/test-clipboard.ps1`：112 项快照独立性、源文档关闭、单小节插入/替换、单/多声部及多轨剪切、多轨/跨小节插入与原内容顺移、空白目标、钢琴谱表隔离、兼容性拒绝、撤销重做和原生保存重开检查。
-- `native/test-tuplets.ps1`：175 项比例与参数边界、两层独立编辑/清除、嵌套、跨小节/声部/音轨、钢琴谱表、选区外隔离、时值/附点保留、重复写入、一次撤销/重做、GPIF、原生保存重开及插件内复制粘贴检查。
-- `native/test-connections.ps1`：153 项连奏与延音线检查，证据在 `artifacts/native-connections-*/verification.json`；包括原生重复命令的无模型变化及撤销记录行为。
-- `native/testdata/minimal.gp`：项目生成的简单夹具，1 条音轨、2 小节、8 个音符。
-- `artifacts/native-verification-*/verification.json`：每次运行记录宿主 PID、前台 PID、修改前后模型、保存结果和源文件哈希，不记录访问令牌。
-- 同目录的 `edited-copy.gp`、`edited.gp`、`restored.gp`：可在 Guitar Pro 中检查的输出。
-- `artifacts/native-editing-*/verification.json`、`artifacts/native-tracks-*/verification.json`、`artifacts/native-measures-*/verification.json`、`artifacts/native-effects-*/verification.json`、`artifacts/native-selection-*/verification.json`、`artifacts/native-lifecycle-*/verification.json`、`artifacts/native-session-*/verification.json`、`artifacts/native-structure-*/verification.json`、`artifacts/native-clipboard-*/verification.json`、`artifacts/native-tuplets-*/verification.json`、`artifacts/native-connections-*/verification.json`：各原生功能检查的模型与保存证据；包括协议检查在内，十三组累计 2195 项通过。
-
-早期 Python/原始 TCP 桥接的测试记录不能作为当前 C++ HTTP 服务器的验证证据。临时 RTTI 扫描只能帮助定位对象，不能直接用未经验证的扫描路径执行生产写入。
+2026-09-08 发布候选包通过完整回归 22 组、4153 项，并完成双客户端、一小时持续运行、资源回落、设置跨重启、入口和真实安装生命周期。AMNetwork 启动期间快速退出仍按宿主限制保留。详细数字、包哈希和证据见 [历史阶段验收](archive/COVERAGE_HISTORY.md#历史阶段验收)。
 
 ### P6 验收
 
-2026-09-07：按用户确认的最小范围完成 P6；用户明确要求跳过受权限限制的完整回归并提交 Git，该回归不计为通过。当前构建通过常规 P6 专项 116 项，证据 `artifacts/native-p6-aeacc535953546c2a1f62738de5a5d0e/verification.json`；显式 `-RenderPdf` 的独立 PDF 复核通过 119 项，证据 `artifacts/native-p6-ef2c61b0c7574ef79eadfa728df1d4ac/verification.json`。两轮后宿主正常退出（0）。独立读取 GP5/GPX 的 8 个音高以及 MIDI 事件、每音 480 tick、90 BPM；MusicXML 用禁用外部实体的 XML 解析器核对两小节及五线谱/六线谱各 8 个音符，四种曲谱实际导入。MIDI 的七项参数逐一读写恢复，并验收确认和取消。
+2026-09-07 完成最小必要范围：P6 专项 116 项，独立 PDF 复核 119 项；受权限限制的完整回归按用户要求跳过，不计为通过。详细证据见 [历史阶段验收](archive/COVERAGE_HISTORY.md#历史阶段验收)。
 
-原生 QPrinter 受控打印得到 PDF；同一绘制器生成 PNG，50 小节输出 3 页并检查第 2 页音符、谱表和页码。独立 PDF 渲染已视觉检查。RSE WAV 为 235200 帧（5.333 秒），验证非静音 PCM 能量和峰值。覆盖拒绝、成功覆盖、锁定目标提交失败、无效目录/页码及 WAV 取消保持目标一致，随后可继续导出；同值页面不改脏标记，页面/谱表保存重开，视图状态读回，13 个全局偏好逐项恢复，所有临时文档关闭且其他文档不变。
+### P5 验收
 
-先前 PDF 挂起来自错误使用 `ScoreView::clone`；改为宿主打印流程的构造加 `applyModel` 后已解决，不能再列为宿主受限。运行时仅依赖 Guitar Pro 自带组件，无 Python、Node.js、FFmpeg、Poppler 或虚拟打印机要求。外部 PDF 复核仅为开发者显式选择的验收手段，不进入安装包。打印限定 PDF 文件，音频限定 WAV；不增加物理队列、通用排版框架或第三方插件管理。跨重启偏好持久化和复杂格式转换保真度没有在本轮穷举。
+完成最小必要范围，最终构建完整回归 21 组、4056 项，含速度、播放定位、音色/效果、设备和 PCM 验证。详细证据见 [历史阶段验收](archive/COVERAGE_HISTORY.md#历史阶段验收)。
 
-当前核心 SHA-256 为 `90F2FD97B1BB3716B7D0A105BA3FAB94ED939B1BA2CE891B4365C7780DF5D642`。候选包 `artifacts/GuitarProMCP-0.3.0-1243df419412495c81281bcc7dca42e5.zip`，SHA-256 为 `3C3CC243F3FFD950447982F393E519447B34F489BF0FC76B661BD0E3DEA4A546`。包内两份 DLL 与已测构建一致；依赖、全部宿主及源码哈希见 `artifacts/p6-checkpoint.json`。候选包不含测试脚本和外部解释器/转换器，未替换真实安装。
+### P4 验收
 
-该记录属于 P6 阶段的权限受限尝试：完整回归只完成前两组 53 项，随后宿主写入 `AppData/Roaming/Arobas Music/guitarpro8/autobackups/native-test(4).gp.bak` 被沙箱拒绝，出现原生保存错误对话框。失败记录为 `artifacts/regression-41214c35507946c9a4f5a442144e7b1c/regression.json`，`complete=false`。P6 按用户要求跳过该回归，不沿用旧构建的回归结果；P7 已使用最终候选包完成适用的发布回归，见上方 P7 验收。
+完成最小必要范围，最终构建完整回归 20 组、3956 项，含选区筛选、批量编辑、插件剪贴板和内容转移。系统剪贴板仍为实验状态。详细证据见 [历史阶段验收](archive/COVERAGE_HISTORY.md#历史阶段验收)。
 
-专项脚本补充了清理失败时的证据落盘：模拟偏好恢复失败后仍保存 `complete=false` 和 `cleanup_error`，验证记录为 `artifacts/p6-cleanup-failure/verification.json`。这项修改仅影响测试失败分支，生产 DLL 和候选包字节不变。
+### P3 验收
+
+完成必要曲谱和音轨编辑范围，最终构建完整回归 19 组、3732 项，含主要技法、混合乐器、调弦/变调夹、移调、连接链和复杂反复。详细证据见 [历史阶段验收](archive/COVERAGE_HISTORY.md#历史阶段验收)。
+
+### P2 验收
+
+完成用户确认的必要流程，PowerShell 7 与 Windows PowerShell 5.1 各通过 3842 项，共执行 7684 项；覆盖实例、双客户端、文档生命周期、保存恢复和模态处理。独立 GUI 多开、原生标签拖动和原生保存进度取消按宿主限制保留。详细证据见 [历史阶段验收](archive/COVERAGE_HISTORY.md#历史阶段验收)。
+
+### P1 验收
+
+完成真实目录安装、更新、停用/启用、卸载、重装和四种入口；生命周期、入口、文件归属和配置保留均有证据。详细包信息和证据见 [历史阶段验收](archive/COVERAGE_HISTORY.md#历史阶段验收)。
+
+## 历史证据
+
+旧版阶段验收、检查点、失败记录和历史累计数字已移至 [覆盖清单历史归档](archive/COVERAGE_HISTORY.md)。当前结论只看本文件的能力矩阵和上面的最新证据。

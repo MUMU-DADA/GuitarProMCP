@@ -19,11 +19,21 @@ public:
     std::unique_ptr<FileHandle, std::function<void(FileHandle *)>> openHandle(const QString &, Mode);
 };
 }
-namespace am::music { enum class Accidental : int {}; }
+namespace am::music { enum class Accidental : int {}; enum class Dynamic : int {}; }
 namespace am::painting {
 class Color { public: int red, green, blue, alpha; };
 class Size { public: double width, height; };
 class Margins { public: double left, top, right, bottom; };
+// AMPainting 8.1.1.17: vptr, enable_shared_from_this storage, private pointer.
+class __declspec(dllimport) FormattedText {
+    unsigned char storage[0x18];
+public:
+    FormattedText(const FormattedText &);
+    virtual ~FormattedText();
+    const std::string &text() const;
+    void setText(const std::string &);
+};
+static_assert(sizeof(FormattedText) == 0x20);
 }
 namespace am::audio {
 // AudioDeviceInfo owns QString fields at +0x10/+0x18 and a scalar vector at
@@ -53,8 +63,10 @@ static_assert(sizeof(Color) == 3 && alignof(Color) == 1);
 
 // Declarations for verified MSVC x64 exports only. The host owns model objects.
 // Only the value types with verified storage below are constructed locally.
+#include "guitarpro_chord_abi.h"
 namespace gp::core {
 class Score;
+namespace view { enum class Visibility : int { Visible = 0, Hidden = 1, Collapsed = 2 }; }
 class __declspec(dllimport) ScoreView {
     alignas(8) unsigned char storage[0xa8];
 public:
@@ -82,6 +94,20 @@ __declspec(dllimport) generated::PageLayout::Orientation pageLayoutOrientationVa
 __declspec(dllimport) void setPageLayoutSize(Stylesheet &, const std::optional<am::painting::Size> &);
 __declspec(dllimport) void setPageLayoutMargins(Stylesheet &, const std::optional<am::painting::Margins> &);
 __declspec(dllimport) void setPageLayoutOrientation(Stylesheet &, const std::optional<generated::PageLayout::Orientation> &);
+#define GP_PAGE_FIELD(Name, Setter) \
+__declspec(dllimport) am::painting::FormattedText Name##FormattedTextValue(const Stylesheet &); \
+__declspec(dllimport) view::Visibility Name##VisibilityValue(const Stylesheet &); \
+__declspec(dllimport) void Setter##FormattedText(Stylesheet &, const std::optional<am::painting::FormattedText> &); \
+__declspec(dllimport) void Setter##Visibility(Stylesheet &, const std::optional<view::Visibility> &);
+GP_PAGE_FIELD(scoreEvenPageHeaderField, setScoreEvenPageHeaderField)
+GP_PAGE_FIELD(scoreOddPageHeaderField, setScoreOddPageHeaderField)
+GP_PAGE_FIELD(scoreFirstPageFooterCopyright2, setScoreFirstPageFooterCopyright2)
+GP_PAGE_FIELD(scoreEvenPageFooterCopyright2, setScoreEvenPageFooterCopyright2)
+GP_PAGE_FIELD(scoreOddPageFooterCopyright2, setScoreOddPageFooterCopyright2)
+GP_PAGE_FIELD(scoreFirstPageFooterPageNumber, setScoreFirstPageFooterPageNumber)
+GP_PAGE_FIELD(scoreEvenPageFooterPageNumber, setScoreEvenPageFooterPageNumber)
+GP_PAGE_FIELD(scoreOddPageFooterPageNumber, setScoreOddPageFooterPageNumber)
+#undef GP_PAGE_FIELD
 }
 namespace io {
 class Importer;
@@ -131,6 +157,8 @@ enum class DirectionMark : int {};
 enum class AccentFlag : int {};
 enum class Rasgueado : int {};
 enum class BassAttack : int {};
+enum class Clef : int {};
+enum class StemOrientation : int {};
 struct Harmonic {
     enum class Type : int {};
     enum class Fret : int {};
@@ -179,22 +207,47 @@ public:
 static_assert(sizeof(KeySignature) == 16 && alignof(KeySignature) == 8);
 class __declspec(dllimport) MasterBar {
 public:
+    struct Section {
+        std::string name;
+        std::string text;
+    };
+    static_assert(sizeof(Section) == 0x40 && alignof(Section) == 8);
     unsigned index() const; ScoreModel *model() const; int tickCount() const;
     const TimeSignature &timeSignature() const;
     const KeySignature &concertKeySignature() const;
     bool hasRepeatStart() const; bool hasRepeatEnd() const; unsigned repeatCount() const;
     bool hasDoubleBar() const; bool hasFreeTime() const;
     int alternateEndingMask() const;
+    bool hasSection() const;
+    const Section &section() const;
+
+
 };
 class __declspec(dllimport) Automation {
 public:
     enum class Type : int {};
+    static std::shared_ptr<Automation> make(Type);
     virtual ~Automation();
     virtual unsigned barIndex() const;
+    virtual std::shared_ptr<Automation> cloneAutomation() const;
     float position() const; float value() const; bool isLinear() const;
     const std::string &text() const;
     virtual void setBarIndex(unsigned);
     void setPosition(float); void setValue(float); void setLinear(bool); void setText(const std::string &);
+    Type type() const;
+    static Type typeFromString(const std::string &);
+    static const std::string typeToString(Type);
+};
+class __declspec(dllimport) DSPParamAutomation : public Automation {
+public:
+    std::shared_ptr<Automation> cloneAutomation() const override;
+    int parameterId() const;
+};
+class __declspec(dllimport) SoundAutomation : public Automation {
+public:
+    std::shared_ptr<Automation> cloneAutomation() const override;
+    virtual void valueFromString(const std::string &);
+    virtual std::string valueToString() const;
 };
 class __declspec(dllimport) TempoAutomation : public Automation {
 public:
@@ -203,7 +256,9 @@ public:
 };
 class __declspec(dllimport) AutomationContainerProxy {
 public:
+    virtual void getAutomations(std::vector<std::shared_ptr<Automation>> &) const;
     virtual void getAutomations(Automation::Type, std::vector<std::shared_ptr<Automation>> &) const;
+    virtual void forEachBypass(const std::function<void(Automation::Type, bool)> &) const;
 };
 class __declspec(dllimport) Timeline {
 public:
@@ -325,11 +380,28 @@ public:
     static Value noteValueFromTimeUnit(const am::utils::rational &);
 };
 static_assert(sizeof(RhythmValue) == 0x38 && alignof(RhythmValue) == 8);
+class __declspec(dllimport) LyricsElement {
+    // The host value contains a vptr, a small-string std::string and two
+    // scalar fields. Only the const text accessor is used by the bridge.
+    alignas(8) unsigned char storage[0x40];
+public:
+    const std::string &text() const;
+};
+static_assert(sizeof(LyricsElement) == 0x40 && alignof(LyricsElement) == 8);
 class __declspec(dllimport) Beat {
 public:
     const std::vector<std::shared_ptr<Note>> &notes() const;
     bool isRest() const; bool isPlaceholder() const; const RhythmValue &rhythm() const;
     const std::string &freeText() const;
+    const class NoteDynamic &dynamic() const;
+    const QString &chord() const;
+    const std::array<LyricsElement, 5> &lyrics() const;
+    StemOrientation drawingUserStemOrientation() const;
+    StemOrientation userConcertPitchStemOrientation() const;
+    StemOrientation userTransposedPitchStemOrientation() const;
+    bool hasUserConcertPitchStemOrientation() const;
+    bool hasUserTransposedPitchStemOrientation() const;
+    void setLyrics(const std::string &, unsigned);
     bool isLegatoOrigin() const; bool isLegatoDestination() const;
     GraceType graceType() const; Direction pickStroke() const;
     Fadding fadding() const; Hairpin hairpin() const; Golpe golpe() const; Ottavia ottavia() const;
@@ -350,7 +422,14 @@ public:
 class __declspec(dllimport) Bar {
 public:
     bool isSimileBar() const;
+    Clef clef() const;
     const std::array<std::shared_ptr<Voice>, 4> &voices() const;
+};
+class __declspec(dllimport) NoteDynamic {
+public:
+    am::music::Dynamic value() const;
+    std::string toString() const;
+    static int stringToInt(const std::string &);
 };
 class __declspec(dllimport) GuitarTuning {
     // QObject's two pointers followed by the native tuning implementation.
@@ -363,6 +442,8 @@ public:
 static_assert(sizeof(GuitarTuning) == 24 && alignof(GuitarTuning) == 8);
 class __declspec(dllimport) Staff {
 public:
+    chord::ChordCollection &chordCollection() const;
+    chord::DiagramCollection &diagramCollection() const;
     const std::vector<std::shared_ptr<Bar>> &bars() const;
     GuitarTuning &tuning() const;
     int midi(unsigned, int) const;
@@ -446,8 +527,18 @@ public:
     const std::vector<std::shared_ptr<Sound>> &sounds() const;
     int forcedSoundIndex() const;
 };
-class __declspec(dllimport) Score {
+class __declspec(dllimport) Score : public std::enable_shared_from_this<Score> {
+    // Native make_shared allocation at 0x1C5297 is 0x1F8, including its
+    // 0x10-byte control block. The first 0x10 bytes are enable_shared_from_this.
+    alignas(8) unsigned char storage[0x1D8];
 public:
+    Score();
+    ~Score();
+    Score(const Score &) = delete;
+    Score &operator=(const Score &) = delete;
+    Score &copyFrom(std::shared_ptr<const Score>, const ScoreModelRange *);
+    void load(const QString &);
+    void replaceScore(const std::shared_ptr<Score> &, int);
     ScoreView &activeView();
     const std::shared_ptr<style::Stylesheet> &newStylesheet() const;
     bool hasStdNotation(int);
@@ -521,8 +612,19 @@ public:
     void createBars(unsigned, unsigned); void removeBarRange(unsigned, unsigned);
     void createBeat(const ScoreModelRange &, const RhythmValue &);
     void setProperty(ScoreProperty, const std::string &);
+    void setChord(const ScoreModelRange &, const chord::Chord &, bool, bool);
+    void setChord(const ScoreModelRange &, const chord::Chord &, const chord::Diagram &);
+    void unsetChord(const ScoreModelRange &);
+    void setBeatFreeText(const ScoreModelRange &, const std::string &, bool);
+    void setBeatDynamic(const ScoreModelRange &, am::music::Dynamic, bool);
+    void setAutoStemOrientations(const ScoreModelRange &);
+    void setUserStemOrientations(const ScoreModelRange &, StemOrientation);
+    void setClef(const ScoreModelRange &, Clef, Ottavia, bool);
+    void setMasterBarSection(unsigned, bool, const MasterBar::Section &, bool);
+    void unsetMasterBarSection(const ScoreModelRange &);
     void setTempo(const std::string &, TempoUnit, float);
     void modifyMasterTrackAutomations(const std::vector<std::shared_ptr<Automation>> &, const std::map<Automation::Type, bool> &);
+    void modifyTrackAutomations(TrackBase::Type, int, const std::vector<std::shared_ptr<Automation>> &, const std::map<Automation::Type, bool> &);
     void setTrackSound(Track &, unsigned, const Sound &, bool);
     void setForcedSoundIndex(Track &, int);
     void setMasterBarTimeSignature(const ScoreModelRange &, bool, const TimeSignature &);
@@ -550,9 +652,14 @@ public:
     bool undoAvailable() const; bool redoAvailable() const;
     void undo(); void redo();
 };
+static_assert(sizeof(Score) == 0x1E8 && alignof(Score) == 8);
 __declspec(dllimport) QString scorePropertyToQString(ScoreProperty);
 __declspec(dllimport) std::string playbackStateToString(PlaybackState);
 __declspec(dllimport) std::string tempoUnitToString(TempoUnit);
+__declspec(dllimport) Clef clefFromString(const std::string &);
+__declspec(dllimport) std::string clefToString(Clef);
+__declspec(dllimport) StemOrientation stemOrientationFromString(const std::string &);
+__declspec(dllimport) std::string stemOrientationToString(StemOrientation);
 __declspec(dllimport) float convertTempo(float, TempoUnit, TempoUnit);
 __declspec(dllimport) std::string vibratoToString(Vibrato);
 __declspec(dllimport) std::string antiAccentToString(AntiAccent);

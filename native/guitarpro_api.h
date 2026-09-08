@@ -428,6 +428,20 @@ inline bool validHostText(const QString &text) {
             (character.unicode() < 0x20 && character != '\t' && character != '\n' && character != '\r')) return false;
     return true;
 }
+inline bool jsonFiniteNumber(const QJsonValue &value, double *number = nullptr) {
+    if (!value.isDouble()) return false;
+    const double candidate = value.toDouble();
+    if (!std::isfinite(candidate)) return false;
+    if (number) *number = candidate;
+    return true;
+}
+inline bool jsonInteger(const QJsonValue &value, int *number = nullptr) {
+    double candidate = 0;
+    if (!jsonFiniteNumber(value, &candidate) || std::floor(candidate) != candidate ||
+        candidate < -2147483648.0 || candidate > 2147483647.0) return false;
+    if (number) *number = static_cast<int>(candidate);
+    return true;
+}
 inline QJsonObject tempoState(gp::core::Score *score) {
     const auto master = score->masterTrack();
     if (!master) return {{"error", "Native master track unavailable"}};
@@ -440,6 +454,261 @@ inline QJsonObject tempoState(gp::core::Score *score) {
         {"quarter_bpm", int(unit) >= 1 && int(unit) <= 5 ? QJsonValue(gp::core::convertTempo(master->tempoValue(), unit, static_cast<gp::core::TempoUnit>(2))) : QJsonValue()},
         {"scope", "initial score tempo; later tempo automations are not included"}};
 }
+
+inline QJsonArray automationTypeChoices() {
+    QJsonArray result;
+    const auto append = [&](const std::string &label) {
+        const auto type = gp::core::Automation::typeFromString(label);
+        const auto roundTrip = gp::core::Automation::typeToString(type);
+        if (roundTrip != label) return;
+        result.append(QJsonObject{{"name", QString::fromStdString(label)}, {"type", int(type)}});
+    };
+    for (const auto &label : {"Tempo", "Sound", "Diagram", "SyncPoint", "SustainPedal"}) append(label);
+    for (int i = 0; i < 32; ++i) append(QString("DSPParam_%1").arg(i, 2, 10, QChar('0')).toStdString());
+    return result;
+}
+
+inline QJsonObject automationPointState(const std::shared_ptr<gp::core::Automation> &point) {
+    if (!point) return {};
+    const QString rtti = discovery::type(reinterpret_cast<quintptr>(point.get()));
+    QJsonObject result{{"bar", int(point->gp::core::Automation::barIndex())}, {"position", point->position()},
+        {"value", point->value()}, {"linear", point->isLinear()},
+        {"text", QString::fromStdString(point->text())}, {"type", int(point->type())},
+        {"name", QString::fromStdString(gp::core::Automation::typeToString(point->type()))}, {"rtti", rtti}};
+    if (rtti == ".?AVDSPParamAutomation@core@gp@@")
+        result["parameter_id"] = static_cast<const gp::core::DSPParamAutomation *>(point.get())->parameterId();
+    if (rtti == ".?AVSoundAutomation@core@gp@@")
+        result["value_text"] = QString::fromStdString(static_cast<const gp::core::SoundAutomation *>(point.get())->gp::core::SoundAutomation::valueToString());
+    if (rtti == ".?AVTempoAutomation@core@gp@@")
+        result["unit"] = QString::fromStdString(gp::core::tempoUnitToString(static_cast<const gp::core::TempoAutomation *>(point.get())->unit()));
+    return result;
+}
+
+inline bool automationPointEquivalent(const std::shared_ptr<gp::core::Automation> &left,
+                                      const std::shared_ptr<gp::core::Automation> &right) {
+    if (!left || !right || left->type() != right->type() ||
+        left->gp::core::Automation::barIndex() != right->gp::core::Automation::barIndex() ||
+        left->position() != right->position() || std::abs(left->value() - right->value()) > 0.0001f ||
+        left->isLinear() != right->isLinear() || left->text() != right->text()) return false;
+    const QString leftRtti = discovery::type(reinterpret_cast<quintptr>(left.get()));
+    const QString rightRtti = discovery::type(reinterpret_cast<quintptr>(right.get()));
+    if (leftRtti != rightRtti) return false;
+    if (leftRtti == ".?AVDSPParamAutomation@core@gp@@")
+        return static_cast<const gp::core::DSPParamAutomation *>(left.get())->parameterId() ==
+            static_cast<const gp::core::DSPParamAutomation *>(right.get())->parameterId();
+    if (leftRtti == ".?AVSoundAutomation@core@gp@@")
+        return static_cast<const gp::core::SoundAutomation *>(left.get())->gp::core::SoundAutomation::valueToString() ==
+            static_cast<const gp::core::SoundAutomation *>(right.get())->gp::core::SoundAutomation::valueToString();
+    if (leftRtti == ".?AVTempoAutomation@core@gp@@")
+        return static_cast<const gp::core::TempoAutomation *>(left.get())->unit() ==
+            static_cast<const gp::core::TempoAutomation *>(right.get())->unit();
+    return true;
+}
+
+inline bool automationPointMatches(const std::shared_ptr<gp::core::Automation> &point,
+                                   gp::core::Automation::Type type, unsigned bar, float position,
+                                   float value, bool linear, const std::string &text, int parameter) {
+    if (!point || point->type() != type || point->gp::core::Automation::barIndex() != bar ||
+        point->position() != position || std::abs(point->value() - value) > 0.0001f ||
+        point->isLinear() != linear || point->text() != text ||
+        discovery::type(reinterpret_cast<quintptr>(point.get())) != ".?AVDSPParamAutomation@core@gp@@") return false;
+    return static_cast<const gp::core::DSPParamAutomation *>(point.get())->parameterId() == parameter;
+}
+
+inline QJsonObject automationState(const QJsonObject &args) {
+    if (args.contains("operation") && !args.value("operation").isString())
+        return {{"error", "operation must be a string: types, state, set or remove"}};
+    const QString operation = args.value("operation").toString("types");
+    const QSet<QString> commonArguments{"document", "operation"};
+    const QSet<QString> stateArguments{"document", "operation", "track"};
+    const QSet<QString> writeArguments{"document", "operation", "track", "parameter", "bar", "position", "value", "linear", "text"};
+    const QSet<QString> removeArguments{"document", "operation", "track", "parameter", "bar", "position"};
+    const QSet<QString> &allowedArguments = operation == "types" ? commonArguments :
+        operation == "state" ? stateArguments : operation == "set" ? writeArguments : removeArguments;
+    if (!QStringList{"types", "state", "set", "remove"}.contains(operation))
+        return {{"error", "operation must be types, state, set or remove"}};
+    for (auto it = args.begin(); it != args.end(); ++it)
+        if (!allowedArguments.contains(it.key()))
+            return {{"error", QString("Unknown argument for automation operation '%1': %2").arg(operation, it.key())}};
+    if (!supportedBuild()) {
+        if (operation == "types")
+            return {{"types", QJsonArray()}, {"verified", false}, {"write_status", "宿主受限"}};
+        return {{"error", "Automation ABI disabled: this Guitar Pro build is not verified"}, {"verified", false}};
+    }
+    if (operation == "types")
+        return {{"types", automationTypeChoices()}, {"verified", true}, {"write_status", "只读"}};
+    const auto document = choose(args);
+    if (!document.score) return {{"error", "Native score unavailable"}};
+    int trackIndex = -1;
+    if (args.contains("track") && !jsonInteger(args.value("track"), &trackIndex))
+        return {{"error", "track must be an integer"}};
+    if (trackIndex < -1)
+        return {{"error", "track must be -1 for the master track or an existing track index"}};
+    if (operation == "state" && trackIndex >= 0 && size_t(trackIndex) >= document.score->tracks().size())
+        return {{"error", "state requires an existing track index or -1 for the master track"}};
+    if (operation != "state") {
+        if (!args.contains("track") || trackIndex < 0 || size_t(trackIndex) >= document.score->tracks().size() || !document.score->tracks()[size_t(trackIndex)])
+            return {{"error", "set/remove require an existing track index"}};
+        int parameter = -1;
+        if (!args.contains("parameter") || !jsonInteger(args.value("parameter"), &parameter))
+            return {{"error", "parameter must be an integer in 0..31"}};
+        if (parameter < 0 || parameter > 31) return {{"error", "parameter must be 0..31"}};
+        int bar = -1;
+        if (!args.contains("bar") || !jsonInteger(args.value("bar"), &bar))
+            return {{"error", "bar must be an integer in the score"}};
+        double position = 0;
+        if (!args.contains("position") || !jsonFiniteNumber(args.value("position"), &position))
+            return {{"error", "position must be a finite number in [0,1) of that score bar"}};
+        const auto master = document.score->masterTrack();
+        if (!master || bar < 0 || unsigned(bar) >= master->masterBarCount() || position < 0 || float(position) >= 1)
+            return {{"error", "bar must exist; position must be a fraction in [0,1) of that score bar"}};
+        if (operation == "set") {
+            double value = 0;
+            if (!args.contains("value") || !jsonFiniteNumber(args.value("value"), &value) || value < 0 || value > 1)
+                return {{"error", "value must be a finite number in [0,1]"}};
+            if (args.contains("linear") && !args.value("linear").isBool()) return {{"error", "linear must be a boolean"}};
+            if (args.contains("text") && (!args.value("text").isString() || !validHostText(args.value("text").toString())))
+                return {{"error", "text must be valid host text of at most 16384 UTF-16 units"}};
+        }
+        const auto &track = document.score->tracks()[size_t(trackIndex)];
+        const quintptr address = reinterpret_cast<quintptr>(track.get()) + 0x10;
+        if (discovery::type(address) != ".?AVTrack@core@gp@@")
+            return {{"error", "Track automation ABI is unavailable on this host build"}, {"track", trackIndex}};
+        const auto proxy = reinterpret_cast<const gp::core::AutomationContainerProxy *>(address);
+        const auto type = static_cast<gp::core::Automation::Type>(256 + parameter);
+        std::vector<std::shared_ptr<gp::core::Automation>> points;
+        proxy->gp::core::AutomationContainerProxy::getAutomations(points);
+        if (points.size() > 4096)
+            return {{"error", "Native automation count exceeds safety bound; inspect the score before editing"}, {"track", trackIndex}};
+        const auto beforePoints = points;
+        auto found = std::find_if(points.begin(), points.end(), [&](const auto &point) {
+            return point && point->type() == type && point->gp::core::Automation::barIndex() == unsigned(bar) && point->position() == float(position);
+        });
+        const bool existed = found != points.end();
+        const double requestedValue = args.value("value").toDouble();
+        const bool requestedLinear = args.contains("linear") ? args.value("linear").toBool() : (existed && (*found)->isLinear());
+        const std::string requestedText = args.contains("text") ? args.value("text").toString().toStdString() : (existed ? (*found)->text() : std::string());
+        const bool changed = operation == "remove" ? existed : !existed || std::abs((*found)->value() - float(requestedValue)) > 0.0001f || (*found)->isLinear() != requestedLinear || (*found)->text() != requestedText;
+        if (!changed) {
+            QJsonObject result{{"document", document.id()}, {"track", trackIndex}, {"parameter", parameter},
+                {"operation", operation}, {"changed", false}, {"dirty", document.object->property("isDirty").toBool()}, {"undo_available", document.score->undoAvailable()}};
+            result["state"] = automationState(QJsonObject{{"document", document.id()}, {"track", trackIndex}, {"operation", "state"}});
+            return result;
+        }
+        if (operation == "remove") {
+            points.erase(found);
+        } else {
+            if (!existed && points.size() >= 4096)
+                return {{"error", "Adding this automation point would exceed the 4096-point safety bound"}, {"track", trackIndex}};
+            std::shared_ptr<gp::core::Automation> replacement;
+            if (existed) {
+                if (discovery::type(reinterpret_cast<quintptr>(found->get())) != ".?AVDSPParamAutomation@core@gp@@")
+                    return {{"error", "Native DSP automation type validation failed"}};
+                replacement = static_cast<gp::core::DSPParamAutomation *>(found->get())->gp::core::DSPParamAutomation::cloneAutomation();
+            } else replacement = gp::core::Automation::make(type);
+            if (!replacement || discovery::type(reinterpret_cast<quintptr>(replacement.get())) != ".?AVDSPParamAutomation@core@gp@@")
+                return {{"error", "Host did not create a verified DSP automation"}};
+            replacement->gp::core::Automation::setBarIndex(unsigned(bar)); replacement->setPosition(float(position));
+            replacement->setValue(float(requestedValue));
+            replacement->setLinear(requestedLinear);
+            replacement->setText(requestedText);
+            if (existed) *found = replacement; else points.push_back(replacement);
+        }
+        std::sort(points.begin(), points.end(), [](const auto &a, const auto &b) {
+            return std::make_pair(a->gp::core::Automation::barIndex(), a->position()) < std::make_pair(b->gp::core::Automation::barIndex(), b->position());
+        });
+        std::map<gp::core::Automation::Type, bool> bypass;
+        proxy->gp::core::AutomationContainerProxy::forEachBypass([&](gp::core::Automation::Type bypassType, bool value) {
+            bypass.emplace(bypassType, value);
+        });
+        document.score->modifyTrackAutomations(static_cast<gp::core::TrackBase::Type>(0), trackIndex, points, bypass);
+        std::vector<std::shared_ptr<gp::core::Automation>> observed;
+        proxy->gp::core::AutomationContainerProxy::getAutomations(observed);
+        if (observed.size() > 4096)
+            return {{"error", "Native automation readback exceeds safety bound; inspect the score before retrying"}, {"track", trackIndex}};
+        const auto after = std::find_if(observed.begin(), observed.end(), [&](const auto &point) {
+            return point && point->type() == type && point->gp::core::Automation::barIndex() == unsigned(bar) && point->position() == float(position);
+        });
+        const bool pointMatches = operation == "remove" ? after == observed.end() :
+            after != observed.end() && automationPointMatches(*after, type, unsigned(bar), float(position),
+                float(requestedValue), requestedLinear, requestedText, int(type));
+        bool preserved = pointMatches;
+        for (const auto &beforePoint : beforePoints) {
+            if (!beforePoint || (beforePoint->type() == type && beforePoint->gp::core::Automation::barIndex() == unsigned(bar) &&
+                beforePoint->position() == float(position))) continue;
+            const auto replacementPoint = std::find_if(observed.begin(), observed.end(), [&](const auto &candidate) {
+                return candidate && candidate->type() == beforePoint->type() &&
+                    candidate->gp::core::Automation::barIndex() == beforePoint->gp::core::Automation::barIndex() &&
+                    candidate->position() == beforePoint->position();
+            });
+            if (replacementPoint == observed.end() || !automationPointEquivalent(beforePoint, *replacementPoint)) {
+                preserved = false; break;
+            }
+        }
+        std::map<gp::core::Automation::Type, bool> observedBypass;
+        proxy->gp::core::AutomationContainerProxy::forEachBypass([&](gp::core::Automation::Type bypassType, bool value) {
+            observedBypass.emplace(bypassType, value);
+        });
+        for (const auto &entry : bypass) {
+            const auto observedEntry = observedBypass.find(entry.first);
+            if (observedEntry == observedBypass.end()) {
+                // The host may discard the edited type's bypass entry when
+                // its final point is removed. Other types must be untouched.
+                const bool removedType = operation == "remove" && entry.first == type &&
+                    std::none_of(observed.begin(), observed.end(), [&](const auto &point) { return point && point->type() == type; });
+                if (!removedType) preserved = false;
+            } else if (observedEntry->second != entry.second) preserved = false;
+        }
+        for (const auto &entry : observedBypass)
+            if (bypass.find(entry.first) == bypass.end() && (entry.first != type || entry.second)) preserved = false;
+        if (!preserved)
+            return {{"error", "Native track automation readback differs; inspect the score before retrying"}, {"track", trackIndex}, {"parameter", parameter}};
+        QJsonObject result{{"document", document.id()}, {"track", trackIndex}, {"parameter", parameter},
+            {"operation", operation}, {"changed", changed},
+            {"dirty", document.object->property("isDirty").toBool()}, {"undo_available", document.score->undoAvailable()}};
+        result["state"] = automationState(QJsonObject{{"document", document.id()}, {"track", trackIndex}, {"operation", "state"}});
+        return result;
+    }
+    QJsonArray tracks;
+    const auto readContainer = [&](const gp::core::AutomationContainerProxy *container, const QString &label) {
+        if (!container) return;
+        std::vector<std::shared_ptr<gp::core::Automation>> points;
+        container->gp::core::AutomationContainerProxy::getAutomations(points);
+        if (points.size() > 4096) throw std::runtime_error("Native automation count exceeds safety bound");
+        std::map<int, QJsonArray> grouped;
+        for (const auto &point : points) {
+            if (!point) continue;
+            grouped[int(point->type())].append(automationPointState(point));
+        }
+        QJsonArray byType;
+        for (const auto &entry : grouped) {
+            const auto type = static_cast<gp::core::Automation::Type>(entry.first);
+            byType.append(QJsonObject{{"type", entry.first}, {"name", QString::fromStdString(gp::core::Automation::typeToString(type))}, {"points", entry.second}});
+        }
+        QJsonObject containerState{{"track", label}, {"automations", byType}};
+        QJsonObject bypass;
+        container->gp::core::AutomationContainerProxy::forEachBypass([&](gp::core::Automation::Type type, bool value) {
+            bypass[QString::number(int(type))] = value;
+        });
+        containerState["bypass"] = bypass;
+        tracks.append(containerState);
+    };
+    if (trackIndex < 0) {
+        const auto master = document.score->masterTrack();
+        if (!master) return {{"error", "Native master track unavailable"}};
+        readContainer(master.get(), "master");
+    } else {
+        if (size_t(trackIndex) >= document.score->tracks().size() || !document.score->tracks()[size_t(trackIndex)])
+            return {{"error", "Existing track index required"}};
+        const auto &track = document.score->tracks()[size_t(trackIndex)];
+        const quintptr address = reinterpret_cast<quintptr>(track.get()) + 0x10;
+        if (discovery::type(address) != ".?AVTrack@core@gp@@")
+            return {{"error", "Track automation ABI is unavailable on this host build"}, {"track", trackIndex}};
+        readContainer(reinterpret_cast<const gp::core::AutomationContainerProxy *>(address), QString::number(trackIndex));
+    }
+        return {{"document", document.id()}, {"tracks", tracks}, {"types", automationTypeChoices()}, {"verified", supportedBuild()}, {"write_status", supportedBuild() ? "实验性" : "宿主受限"}};
+}
+
 inline QJsonObject editTempo(const QJsonObject &args) {
     const Document document = choose(args);
     if (!document.score) return {{"error", "Native score unavailable"}};
@@ -466,8 +735,8 @@ inline QJsonObject editTempo(const QJsonObject &args) {
     return {{"document", document.id()}, {"tempo", tempoState(document.score)},
         {"dirty", document.object->property("isDirty").toBool()}, {"undo_available", document.score->undoAvailable()}};
 }
-inline QJsonObject scoreState(const QJsonObject &args) {
-    const Document document = choose(args);
+inline QJsonObject scoreState(const QJsonObject &args, const Document &bound = {}) {
+    const Document document = bound.score ? bound : choose(args);
     if (!document.score) return {{"error", "Native score unavailable; choose a document from gp_documents on the verified build"}};
     QJsonArray tracks;
     const auto &nativeTracks = document.score->tracks();
@@ -504,6 +773,54 @@ inline QJsonObject scoreState(const QJsonObject &args) {
         {"dirty", document.object->property("isDirty").toBool()}, {"undo_available", document.score->undoAvailable()},
         {"redo_available", document.score->redoAvailable()}, {"source", "GPCore native Score API"}};
 }
+
+// P9 status is deliberately a read-only capability matrix.  A button is
+// reported as available only when the bridge has a native model path and the
+// corresponding ABI has been verified; Qt action discovery alone is not
+// treated as an editing implementation.
+inline QJsonObject p9Status() {
+    const bool core = supportedBuild();
+    const bool painting = core && verifiedHostFile("AMPainting.dll");
+    const bool rse = core && verifiedHostFile("GPRSE.dll");
+    const QJsonArray capabilities{
+        QJsonObject{{"id", "beat_text"}, {"status", core ? "已验证" : "宿主受限"}, {"tool", "gp_edit_beat"},
+            {"operation", "text"}, {"detail", "写入原生 Beat::freeText，支持光标/选区、撤销重做和保存重开"}},
+        QJsonObject{{"id", "beat_dynamic"}, {"status", core ? "已验证" : "宿主受限"}, {"tool", "gp_edit_beat"},
+            {"operation", "dynamic"}, {"detail", "写入原生 Beat::dynamic，支持 PPP..FFF、撤销重做和保存重开；清除标记未核验"}},
+        QJsonObject{{"id", "measure_clef"}, {"status", core ? "已验证" : "宿主受限"}, {"tool", "gp_edit_measure"},
+            {"operation", "clef"}, {"detail", "写入当前谱表小节的原生 Bar::clef，支持 G2、F4、C3"}},
+        QJsonObject{{"id", "chords_lyrics"}, {"status", core ? "已验证" : "宿主受限"},
+            {"tool", "gp_edit_chord/gp_edit_lyrics"}, {"detail", "沿用 P8 的定位和语义对象"}},
+        QJsonObject{{"id", "notation_view"}, {"status", core ? "已验证" : "宿主受限"},
+            {"tool", "gp_presentation/gp_edit_measure"}, {"detail", "谱表显示和视图状态；谱号写入由 measure_clef 单独核验"}},
+        QJsonObject{{"id", "page_layout"}, {"status", painting ? "已验证" : "宿主受限"},
+            {"tool", "gp_presentation"}, {"detail", "页面尺寸、边距、方向及页眉页脚"}},
+        QJsonObject{{"id", "stem_orientation"}, {"status", core ? "已验证" : "宿主受限"},
+            {"tool", "gp_edit_beat"}, {"operation", "stem"},
+            {"detail", "按光标或选区设置 Upward/Downward 符干方向，或恢复宿主自动方向；支持读回、撤销重做和保存重开"}},
+        QJsonObject{{"id", "engraving_controls"}, {"status", "宿主受限"}, {"tool", QJsonValue()},
+            {"detail", "符杠、连音括号、分组和细粒度间距没有已核验的 GPCore 写入 ABI"}},
+        QJsonObject{{"id", "arbitrary_instruments_fingering"}, {"status", "宿主受限"},
+            {"tool", "gp_insert_track/gp_edit_tuning"}, {"detail", "仅支持模板/已有音轨复用；不自动搜索指法或构造任意乐器定义"}},
+        QJsonObject{{"id", "sounds_effects"}, {"status", rse ? "已验证" : "宿主受限"},
+            {"tool", "gp_audio_track"}, {"detail", "已有音色、效果旁路/参数/交换/删除及 PCM 探针；不构造任意新音源"}},
+        QJsonObject{{"id", "tempo_automation"}, {"status", core ? "已验证" : "宿主受限"},
+            {"tool", "gp_tempo"}, {"detail", "速度点、单位、标签和线性渐变"}},
+        QJsonObject{{"id", "track_automation"}, {"status", core ? "实验性" : "宿主受限"},
+            {"tool", "gp_automation"}, {"detail", "可读全部音轨自动化；DSPParam_00..DSPParam_31 写入会保留同轨道其他点和旁路状态，但参数语义及声音影响尚未核验"}},
+        QJsonObject{{"id", "dynamics_automation"}, {"status", "宿主受限"}, {"tool", QJsonValue()},
+            {"detail", "力度/表情曲线的原生 Automation 类型和写入入口尚未核验"}},
+        QJsonObject{{"id", "system_clipboard"}, {"status", "实验性"}, {"tool", "gp_clipboard"},
+            {"detail", "native_* 仅在 GPMCP_DEVELOPMENT=1 开放；隔离窗口站验证未完成，默认拒绝"}},
+        QJsonObject{{"id", "remaining_combinations"}, {"status", "实验性"}, {"tool", "gp_edit_note_effect/gp_edit_beat_effect"},
+            {"detail", "逐项已验证技法可用；全部组合及跨引擎声音结果不作推断"}}
+    };
+    return {{"phase", "P9"}, {"host_build_verified", core}, {"page_abi_verified", painting},
+        {"audio_abi_verified", rse}, {"capabilities", capabilities},
+        {"status_values", QJsonArray{"已实现", "已验证", "实验性", "未实现", "宿主受限"}},
+        {"source", "GuitarProMCP native capability matrix"}};
+}
+
 inline QJsonObject editMetadata(const QJsonObject &args) {
     const Document document = choose(args);
     if (!document.score) return {{"error", "Native score unavailable"}};
@@ -581,8 +898,8 @@ inline QJsonObject editTrack(const QJsonObject &args) {
     result["undoable"] = property != "playback_state";
     return result;
 }
-inline QJsonObject editTuning(const QJsonObject &args) {
-    const Document document = choose(args);
+inline QJsonObject editTuning(const QJsonObject &args, const Document &bound = {}) {
+    const Document document = bound.score ? bound : choose(args);
     if (!document.score) return {{"error", "Native score unavailable"}};
     const int index = args.value("track").toInt(-1), staffIndex = args.value("staff").toInt(0);
     const auto &tracks = document.score->tracks();
@@ -639,7 +956,7 @@ inline QJsonObject editTuning(const QJsonObject &args) {
     if (changed) document.score->setGuitarFullTuning(*staff, tuning, capo, partialCapo, partial, args.value("preserve_pitch").toBool(true));
     if (staff->tuning().midiNumbers() != tuning.midiNumbers() || staff->capoFret() != capo || staff->partialCapoFret() != partialCapo || staff->partialCapoStringFlags() != partial)
         return {{"error", "Native tuning readback differs; inspect track before retrying"}};
-    return scoreState(args);
+    return scoreState(args, document);
 }
 inline QJsonObject editTracks(const QJsonObject &args) {
     const Document document = choose(args);
@@ -1031,10 +1348,21 @@ inline QJsonObject tupletState(const gp::core::RhythmValue &rhythm) {
     }
     return result;
 }
+inline QJsonObject stemState(const gp::core::Beat &beat) {
+    const auto text = [](gp::core::StemOrientation orientation) {
+        return QString::fromStdString(gp::core::stemOrientationToString(orientation));
+    };
+    return { {"drawing", text(beat.drawingUserStemOrientation())},
+        {"concert", text(beat.userConcertPitchStemOrientation())},
+        {"transposed", text(beat.userTransposedPitchStemOrientation())},
+        {"has_user_concert", beat.hasUserConcertPitchStemOrientation()},
+        {"has_user_transposed", beat.hasUserTransposedPitchStemOrientation()} };
+}
 inline QJsonObject readBarsForScore(const gp::core::Score *score, const QJsonObject &args) {
     if (!score) return {{"error", "Native score unavailable"}};
     const int trackIndex = args.value("track").toInt(0), staffIndex = args.value("staff").toInt(0);
     const int from = args.value("bar").toInt(0), count = args.value("count").toInt(1);
+    const bool includeStem = args.value("include_stem").toBool();
     if (trackIndex < 0 || staffIndex < 0 || from < 0 || count < 1 || count > 16) return {{"error", "Indices must be nonnegative; count must be 1..16"}};
     const auto &tracks = score->tracks();
     if (size_t(trackIndex) >= tracks.size() || !tracks[trackIndex]) return {{"error", "Track does not exist"}};
@@ -1042,6 +1370,8 @@ inline QJsonObject readBarsForScore(const gp::core::Score *score, const QJsonObj
     if (size_t(staffIndex) >= staves.size() || !staves[staffIndex]) return {{"error", "Staff does not exist"}};
     const auto &bars = staves[staffIndex]->bars();
     if (size_t(from) >= bars.size() || size_t(from) + count > bars.size()) return {{"error", "Requested bar range does not exist"}};
+    const bool includeDynamic = args.value("include_dynamic").toBool();
+    const bool includeClef = args.value("include_clef").toBool();
     QJsonArray output;
     int inspected = 0;
     for (int b = from; b < from + count; ++b) {
@@ -1060,14 +1390,22 @@ inline QJsonObject readBarsForScore(const gp::core::Score *score, const QJsonObj
                     if (!note || ++inspected > 20000) return {{"error", "Read bound reached; request fewer bars"}};
                     notes.append(noteState(*note));
                 }
-                beats.append(QJsonObject{{"index", int(k)}, {"rest", beat.isRest()}, {"placeholder", beat.isPlaceholder()}, {"rhythm", beat.rhythm().toQString()},
+                QJsonObject beatOutput{{"index", int(k)}, {"rest", beat.isRest()}, {"placeholder", beat.isPlaceholder()}, {"rhythm", beat.rhythm().toQString()},
                     {"native_note_value", int(beat.rhythm().getNoteValue())}, {"dots", int(beat.rhythm().getAugmentationDot())},
                     {"tuplets", tupletState(beat.rhythm())}, {"effects", beatEffects(beat)}, {"text", QString::fromStdString(beat.freeText())},
-                    {"legato", QJsonObject{{"origin", beat.isLegatoOrigin()}, {"destination", beat.isLegatoDestination()}}}, {"notes", notes}});
+                    {"legato", QJsonObject{{"origin", beat.isLegatoOrigin()}, {"destination", beat.isLegatoDestination()}}}, {"notes", notes}};
+                if (includeDynamic) {
+                    beatOutput["dynamic"] = QString::fromStdString(beat.dynamic().toString());
+                    beatOutput["dynamic_value"] = int(beat.dynamic().value());
+                }
+                if (includeStem) beatOutput["stem"] = stemState(beat);
+                beats.append(beatOutput);
             }
             voices.append(QJsonObject{{"index", int(v)}, {"beats", beats}});
         }
-        output.append(QJsonObject{{"index", b}, {"voices", voices}});
+        QJsonObject barOutput{{"index", b}, {"voices", voices}};
+        if (includeClef) barOutput["clef"] = QString::fromStdString(gp::core::clefToString(static_cast<const gp::core::Bar &>(*bars[b]).clef()));
+        output.append(barOutput);
     }
     return {{"track", trackIndex}, {"staff", staffIndex}, {"bars", output}, {"index_base", 0},
         {"scope", "Live notes, rhythm, tuplets, connections and supported effects. sounding_midi includes harmonics; raw string/fret fields describe physical fingering only for stringed instruments"}};
@@ -1119,13 +1457,14 @@ inline QJsonObject readMasterBars(const QJsonObject &args) {
     return {{"document", document.id()}, {"bars", bars}, {"bar_count", int(master->masterBarCount())}, {"direction_marks", directionMarks},
         {"scope", "Score-wide master bars; key signatures use concert pitch"}, {"index_base", 0}};
 }
-inline QJsonObject editMeasure(const QJsonObject &args) {
-    const Document document = choose(args);
+inline QJsonObject editMeasure(const QJsonObject &args, const Document &bound = {}) {
+    const Document document = bound.score ? bound : choose(args);
     if (!document.score) return {{"error", "Native score unavailable"}};
     const QString operation = args.value("operation").toString();
     QSet<QString> allowed{"document", "operation"};
     if (operation == "time_signature") allowed.unite({"numerator", "denominator"});
     else if (operation == "key_signature") allowed.unite({"accidentals", "major"});
+    else if (operation == "clef") allowed.insert("clef");
     else if (operation == "repeat_end") allowed.unite({"enabled", "repeat_count"});
     else if (operation == "alternate_endings") allowed.insert("endings");
     else if (operation == "direction") allowed.unite({"enabled", "direction"});
@@ -1152,6 +1491,9 @@ inline QJsonObject editMeasure(const QJsonObject &args) {
         return {{"error", "Time signature requires numerator 1..64 and denominator 1,2,4,8,16,32,64,128"}};
     if (operation == "key_signature" && (accidentals < -7 || accidentals > 7 || !args.value("major").isBool()))
         return {{"error", "Key signature requires accidentals -7..7 (negative means flats) and major boolean"}};
+    const QString requestedClef = args.value("clef").toString();
+    if (operation == "clef" && !QStringList{"G2", "F4", "C3"}.contains(requestedClef))
+        return {{"error", "clef must be one of G2, F4 or C3"}};
     if (allowed.contains("enabled") && !args.value("enabled").isBool()) return {{"error", "enabled boolean required"}};
     if (operation == "repeat_end" && ((enabled && (repeats < 2 || repeats > 100)) || (!enabled && args.contains("repeat_count"))))
         return {{"error", "Enabled repeat end accepts repeat_count 2..100 (default 2); disabled repeat end accepts no count"}};
@@ -1160,6 +1502,9 @@ inline QJsonObject editMeasure(const QJsonObject &args) {
     if (index < 0) return {{"error", "Cursor must point to a master bar"}};
     const auto before = masterBarState(document.score, unsigned(index));
     if (before.contains("error")) return before;
+    const auto staff = cursor.staff();
+    if (operation == "clef" && (!staff || unsigned(index) >= staff->bars().size() || !staff->bars()[size_t(index)]))
+        return {{"error", "Cursor must point to an existing staff bar for clef editing"}};
     gp::core::ScoreModelRange range(cursor.modelIndex(), 0, static_cast<gp::core::ScoreModelRange::SortingPolicy>(0));
     // Explicit selection prevents the host from extending signatures to later bars.
     range.setMultiSelection(true);
@@ -1197,6 +1542,12 @@ inline QJsonObject editMeasure(const QJsonObject &args) {
         const gp::core::KeySignature key(accidentals, args.value("major").toBool());
         expected["key_signature"] = QJsonObject{{"accidentals", accidentals}, {"major", args.value("major").toBool()}, {"native_label", key.toQString()}};
         if (expected != before) document.score->setMasterBarKeySignature(range, true, key, true);
+    } else if (operation == "clef") {
+        const auto requested = gp::core::clefFromString(requestedClef.toStdString());
+        if (QString::fromStdString(gp::core::clefToString(requested)) != requestedClef)
+            return {{"error", "Native host rejected the requested clef"}};
+        if (QString::fromStdString(gp::core::clefToString(staff->bars()[size_t(index)]->clef())) != requestedClef)
+            document.score->setClef(range, requested, static_cast<gp::core::Ottavia>(0), false);
     } else {
         expected[operation] = enabled;
         if (operation == "repeat_end" && enabled) expected["repeat_count"] = repeats;
@@ -1207,8 +1558,13 @@ inline QJsonObject editMeasure(const QJsonObject &args) {
             else document.score->setMasterBarFreeTime(range, enabled);
         }
     }
-    const auto after = masterBarState(document.score, unsigned(index));
-    if (after != expected) return {{"error", "Native measure readback differs; inspect master bars before retrying"}, {"observed", after}};
+    auto after = masterBarState(document.score, unsigned(index));
+    if (operation == "clef") {
+        const QString observedClef = QString::fromStdString(gp::core::clefToString(staff->bars()[size_t(index)]->clef()));
+        if (observedClef != requestedClef)
+            return {{"error", "Native clef readback differs; inspect the score before retrying"}, {"observed_clef", observedClef}};
+        after["clef"] = observedClef;
+    } else if (after != expected) return {{"error", "Native measure readback differs; inspect master bars before retrying"}, {"observed", after}};
     return {{"document", document.id()}, {"bar", after}, {"dirty", document.object->property("isDirty").toBool()},
         {"undo_available", document.score->undoAvailable()}};
 }
@@ -1239,13 +1595,13 @@ inline bool singleBeatRange(const gp::core::ScoreModelRange &range, gp::core::Sc
         ((range.beatCount() == 1 && !range.isPlaceholder()) || (allowEmpty && range.beatCount() <= 1)) &&
         range.baseModelIndex().beat() == cursor.beat();
 }
-inline QJsonObject editConnection(const QJsonObject &args) {
-    const Document document = choose(args);
+inline QJsonObject editConnection(const QJsonObject &args, const Document &bound = {}) {
+    const Document document = bound.score ? bound : choose(args);
     if (!document.score) return {{"error", "Native score unavailable"}};
     const QString kind = args.value("kind").toString(), scope = args.value("scope").toString("cursor");
     if ((kind != "legato" && kind != "tie") || (scope != "cursor" && scope != "selection") || !args.value("enabled").isBool())
         return {{"error", "kind must be legato or tie; scope must be cursor or selection; enabled must be boolean"}};
-    if (args.contains("string") && (kind != "tie" || scope != "cursor")) return {{"error", "string is supported only for a cursor tie"}};
+    if ((args.contains("string") || args.contains("note_index")) && (kind != "tie" || scope != "cursor" || (args.contains("string") && args.contains("note_index")))) return {{"error", "Choose string or note_index only for a cursor tie"}};
     auto &cursor = document.score->cursor();
     gp::core::ScoreModelRange single(cursor.modelIndex(), 0, static_cast<gp::core::ScoreModelRange::SortingPolicy>(0));
     const auto &range = scope == "selection" ? cursor.selectionRange() : single;
@@ -1261,7 +1617,12 @@ inline QJsonObject editConnection(const QJsonObject &args) {
             {"bar", cursor.barIndex()}, {"voice", int(cursor.voiceIndex())}, {"beat", cursor.beatIndex()}});
     }
     std::shared_ptr<gp::core::Note> selected;
-    if (args.contains("string")) {
+    if (args.contains("string") || args.contains("note_index")) {
+        if (args.contains("note_index")) {
+            const auto value = args.value("note_index"); const int n = value.toInt(-1);
+            if (!value.isDouble() || n < 0 || value.toDouble() != n || size_t(n) >= cursor.beat()->notes().size()) return {{"error", "note_index must identify an existing note"}};
+            selected = cursor.beat()->notes()[size_t(n)];
+        } else {
         const auto value = args.value("string");
         const int string = value.toInt(-1);
         if (!value.isDouble() || string < 0 || string > 15 || value.toDouble() != string)
@@ -1271,8 +1632,9 @@ inline QJsonObject editConnection(const QJsonObject &args) {
             selected = note;
         }
         if (!selected) return {{"error", "No note on that string at the cursor"}};
-        single.mutableBaseModelIndex().setNoteString(unsigned(string));
-        single.mutableExtentModelIndex().setNoteString(unsigned(string));
+        }
+        single.mutableBaseModelIndex().setNoteString(selected->string());
+        single.mutableExtentModelIndex().setNoteString(selected->string());
         single.mutableBaseModelIndex().setNoteMidi(unsigned(selected->midi()));
         single.mutableExtentModelIndex().setNoteMidi(unsigned(selected->midi()));
         if (single.baseModelIndex().note() != selected) return {{"error", "Cannot construct native single-note range"}};
@@ -1330,8 +1692,8 @@ inline QJsonObject editConnection(const QJsonObject &args) {
         {"cursor", cursorState(document.score)}, {"cursor_preserved", beforeCursor == cursorState(document.score)},
         {"dirty", document.object->property("isDirty").toBool()}, {"undo_available", document.score->undoAvailable()}};
 }
-inline QJsonObject editNoteEffect(const QJsonObject &args) {
-    const Document document = choose(args);
+inline QJsonObject editNoteEffect(const QJsonObject &args, const Document &bound = {}) {
+    const Document document = bound.score ? bound : choose(args);
     if (!document.score) return {{"error", "Native score unavailable"}};
     const QString property = args.value("property").toString();
     QJsonValue value = args.value("value");
@@ -1542,8 +1904,8 @@ inline QJsonObject transpose(const QJsonObject &args) {
     if (!matched) result["error"] = "Native transpose readback differs; inspect score before retrying";
     return result;
 }
-inline QJsonObject editBeatEffect(const QJsonObject &args) {
-    const Document document = choose(args);
+inline QJsonObject editBeatEffect(const QJsonObject &args, const Document &bound = {}) {
+    const Document document = bound.score ? bound : choose(args);
     if (!document.score) return {{"error", "Native score unavailable"}};
     const QString property = args.value("property").toString();
     auto value = args.value("value");
@@ -1806,6 +2168,143 @@ inline QJsonObject editBeat(const QJsonObject &args) {
             for (const auto &target : targets)
                 if (target->rhythm().getAugmentationDot() != unsigned(dots)) return {{"error", "Native dots readback differs; inspect the score before retrying"}};
         }
+    } else if (operation == "dynamic") {
+        const QSet<QString> accepted{"document", "operation", "dynamic", "scope", "tracks", "staves", "voices"};
+        for (auto it = args.begin(); it != args.end(); ++it) if (!accepted.contains(it.key()))
+            return {{"error", "Dynamic changes accept only dynamic, scope and selection filters"}};
+        const QString requestedDynamic = args.value("dynamic").toString();
+        const QString dynamicName = requestedDynamic.toUpper();
+        const QStringList choices{"PPP", "PP", "P", "MP", "MF", "F", "FF", "FFF"};
+        if (!args.value("dynamic").isString() || !choices.contains(dynamicName))
+            return {{"error", "dynamic must be one of PPP, PP, P, MP, MF, F, FF or FFF (case-insensitive); clearing is not verified"}, {"choices", QJsonArray::fromStringList(choices)}};
+        const auto dynamic = static_cast<am::music::Dynamic>(gp::core::NoteDynamic::stringToInt(dynamicName.toStdString()));
+        const std::string nativeName = dynamicName.toStdString();
+        if (scope == "selection") {
+            bool changed = false;
+            for (const auto &target : targets)
+                if (target && target->dynamic().toString() != nativeName) { changed = true; break; }
+            if (changed) {
+                gp::core::MacroCommandRecorder recorder(document.score, true);
+                for (int i = 0; i < batch.positions.size(); ++i) {
+                    const auto position = batch.positions.at(i).toObject();
+                    const auto from = gp::core::ScoreModelIndex(document.score->modelPrivate().get(),
+                        position.value("track").toInt(), position.value("bar").toInt(),
+                        position.value("beat").toInt(), unsigned(position.value("voice").toInt()),
+                        unsigned(position.value("staff").toInt()));
+                    const gp::core::ScoreModelRange singleBeat(from, from, 1u,
+                        static_cast<gp::core::ScoreModelRange::SortingPolicy>(0));
+                    if (targets[size_t(i)] && targets[size_t(i)]->dynamic().toString() != nativeName)
+                        document.score->setBeatDynamic(singleBeat, dynamic, false);
+                }
+                recorder.commit();
+            }
+        } else {
+            // The dynamic command needs an explicit one-beat range.  The
+            // zero-length cursor range used by text/rhythm commands is read
+            // correctly but is treated as an insertion context for dynamics.
+            const gp::core::ScoreModelRange singleBeat(cursor.modelIndex(), cursor.modelIndex(), 1u,
+                static_cast<gp::core::ScoreModelRange::SortingPolicy>(0));
+            if (beat && beat->dynamic().toString() != nativeName)
+                document.score->setBeatDynamic(singleBeat, dynamic, false);
+        }
+        for (const auto &target : targets)
+            if (!target || target->dynamic().toString() != nativeName)
+                return {{"error", "Native beat dynamic readback differs; inspect the score before retrying"},
+                    {"requested_dynamic", dynamicName}, {"dynamic_code", gp::core::NoteDynamic::stringToInt(dynamicName.toStdString())},
+                    {"observed_dynamic", target ? QString::fromStdString(target->dynamic().toString()) : QString()}};
+        if (scope == "selection") return {{"document", document.id()}, {"dynamic", dynamicName}, {"affected_beats", int(targets.size())},
+            {"beats", batch.positions}, {"skipped_placeholders", batch.placeholders},
+            {"cursor", cursorState(document.score)}, {"dirty", document.object->property("isDirty").toBool()}};
+        QJsonObject result = readBars(QJsonObject{{"document", document.id()}, {"track", track}, {"staff", staff}, {"bar", bar}});
+        result["dynamic"] = dynamicName;
+        result["dirty"] = document.object->property("isDirty").toBool();
+        return result;
+    } else if (operation == "stem") {
+        const QSet<QString> accepted{"document", "operation", "orientation", "scope", "tracks", "staves", "voices"};
+        for (auto it = args.begin(); it != args.end(); ++it) if (!accepted.contains(it.key()))
+            return {{"error", "Stem changes accept only orientation, scope and selection filters"}};
+        if (!args.value("orientation").isString())
+            return {{"error", "orientation must be auto, Upward or Downward"}, {"choices", QJsonArray{"auto", "Upward", "Downward"}}};
+        const QString requested = args.value("orientation").toString();
+        const QString lowered = requested.toLower();
+        const bool automatic = lowered == "auto";
+        const QString canonical = automatic ? "Auto" : lowered == "upward" ? "Upward" : lowered == "downward" ? "Downward" : QString();
+        if (canonical.isEmpty())
+            return {{"error", "orientation must be auto, Upward or Downward"}, {"choices", QJsonArray{"auto", "Upward", "Downward"}}};
+        const auto orientation = automatic ? static_cast<gp::core::StemOrientation>(0) :
+            gp::core::stemOrientationFromString(canonical.toStdString());
+        if (!automatic && QString::fromStdString(gp::core::stemOrientationToString(orientation)) != canonical)
+            return {{"error", "Native host rejected the requested stem orientation"}};
+        const auto applyStem = [&](const gp::core::ScoreModelRange &part) {
+            if (automatic) document.score->setAutoStemOrientations(part);
+            else document.score->setUserStemOrientations(part, orientation);
+        };
+        if (scope == "selection") {
+            if (batch.ranges.size() == 1) applyStem(*batch.ranges.front());
+            else {
+                gp::core::MacroCommandRecorder recorder(document.score, true);
+                for (const auto &part : batch.ranges) applyStem(*part);
+                recorder.commit();
+            }
+        } else applyStem(range);
+        QJsonArray observed;
+        for (const auto &target : targets) {
+            if (!target) return {{"error", "Stem readback lost a selected beat"}};
+            const auto state = stemState(*target);
+            if (automatic) {
+                if (state.value("has_user_concert").toBool() || state.value("has_user_transposed").toBool())
+                    return {{"error", "Native automatic stem readback retained a user orientation"}, {"stem", state}};
+            } else if (state.value("drawing").toString() != canonical) {
+                return {{"error", "Native stem orientation readback differs; inspect the score before retrying"},
+                    {"requested_orientation", canonical}, {"stem", state}};
+            }
+            observed.append(state);
+        }
+        if (scope == "selection") return {{"document", document.id()}, {"orientation", canonical},
+            {"affected_beats", int(targets.size())}, {"beats", batch.positions}, {"stems", observed},
+            {"skipped_placeholders", batch.placeholders}, {"cursor", cursorState(document.score)},
+            {"dirty", document.object->property("isDirty").toBool()}, {"undo_available", document.score->undoAvailable()}};
+        QJsonObject result = readBars(QJsonObject{{"document", document.id()}, {"track", track}, {"staff", staff},
+            {"bar", bar}, {"include_stem", true}});
+        result["orientation"] = canonical;
+        result["dirty"] = document.object->property("isDirty").toBool();
+        return result;
+    } else if (operation == "text") {
+        if (args.contains("denominator") || args.contains("dots") || args.contains("level") ||
+            args.contains("actual") || args.contains("normal") || args.contains("enabled"))
+            return {{"error", "Text changes accept only text, scope and selection filters"}};
+        if (!args.value("text").isString() || !validHostText(args.value("text").toString()))
+            return {{"error", "text must be valid host text of at most 16384 UTF-16 units"}};
+        const std::string text = args.value("text").toString().toStdString();
+        if (scope == "selection") {
+            // The host free-text command applies only the first beat of a
+            // multi-beat range.  Submit one single-beat range per selected
+            // target while recording the whole batch as one undo entry.
+            bool changed = false;
+            for (size_t i = 0; i < targets.size(); ++i)
+                if (targets[i] && targets[i]->freeText() != text) { changed = true; break; }
+            if (changed) {
+                gp::core::MacroCommandRecorder recorder(document.score, true);
+                for (int i = 0; i < batch.positions.size(); ++i) {
+                    const auto position = batch.positions.at(i).toObject();
+                    const auto from = gp::core::ScoreModelIndex(document.score->modelPrivate().get(),
+                        position.value("track").toInt(), position.value("bar").toInt(),
+                        position.value("beat").toInt(), unsigned(position.value("voice").toInt()),
+                        unsigned(position.value("staff").toInt()));
+                    const gp::core::ScoreModelRange singleBeat(from, from, 1u,
+                        static_cast<gp::core::ScoreModelRange::SortingPolicy>(0));
+                    if (targets[size_t(i)] && targets[size_t(i)]->freeText() != text)
+                        document.score->setBeatFreeText(singleBeat, text, false);
+                }
+                recorder.commit();
+            }
+        } else {
+            applyToRanges([&](const gp::core::Beat *target) { return target && target->freeText() != text; },
+                [&](const gp::core::ScoreModelRange &part) { document.score->setBeatFreeText(part, text, false); });
+        }
+        for (const auto &target : targets)
+            if (!target || target->freeText() != text)
+                return {{"error", "Native beat text readback differs; inspect the score before retrying"}};
     } else {
         if (args.contains("denominator") || args.contains("dots")) return {{"error", "Rhythm parameters require operation rhythm"}};
         if (operation == "clear") {
@@ -1819,7 +2318,7 @@ inline QJsonObject editBeat(const QJsonObject &args) {
                 [&](const gp::core::ScoreModelRange &part) { document.score->removeBeatRange(part); });
             else document.score->removeBeat(cursor.modelIndex());
         }
-        else return {{"error", "operation must be insert, rhythm, dots, tuplet, clear or remove"}};
+        else return {{"error", "operation must be insert, rhythm, dots, tuplet, text, dynamic, stem, clear or remove"}};
     }
     if (scope == "selection") return {{"document", document.id()}, {"affected_beats", int(targets.size())},
         {"beats", batch.positions}, {"skipped_placeholders", batch.placeholders},
