@@ -1,5 +1,6 @@
 #pragma once
 #include "guitarpro_api.h"
+#include <QtCore/QMetaEnum>
 
 namespace guitarpro {
 inline gp::rse::ConductorController *audioController(const Document &document, const QList<QPointer<QObject>> &objects) {
@@ -34,7 +35,21 @@ inline QJsonObject audioDevice(const QJsonObject &args, const QList<QPointer<QOb
         for (const auto &device : layer.inputDevices()) inputs.append(device.name);
         for (int buffer : layer.buffersSize()) buffers.append(buffer);
         if (layer.hasAsio()) backends.append("ASIO");
-        return QJsonObject{{"audioDevice", backends}, {"audioOutput", outputs}, {"audioInput", inputs}, {"audioBuffersSize", buffers}};
+        QJsonObject choices{{"audioDevice", backends}, {"audioOutput", outputs}, {"audioInput", inputs}, {"audioBuffersSize", buffers}};
+        const int channelsIndex = model->metaObject()->indexOfProperty("audioOutputChannels");
+        if (channelsIndex >= 0) {
+            const auto property = model->metaObject()->property(channelsIndex);
+            const auto current = property.read(model);
+            if (property.isEnumType()) {
+                QJsonArray values;
+                const auto enumeration = property.enumerator();
+                for (int i = 0; i < enumeration.keyCount(); ++i) values.append(enumeration.value(i));
+                choices["audioOutputChannels"] = values;
+            } else if (current.type() == QVariant::StringList) choices["audioOutputChannels"] = QJsonArray::fromStringList(current.toStringList());
+            else if (current.type() == QVariant::List) choices["audioOutputChannels"] = QJsonValue::fromVariant(current);
+            else if (current.isValid()) choices["audioOutputChannels"] = QJsonArray{QJsonValue::fromVariant(current)};
+        }
+        return choices;
     };
     const auto operation = args.value("operation").toString("state");
     QString error;
@@ -47,21 +62,33 @@ inline QJsonObject audioDevice(const QJsonObject &args, const QList<QPointer<QOb
         const auto value = args.value("value");
         const auto choices = deviceChoices();
         if (!choices.contains(name) || !choices.value(name).toArray().contains(value)) return {{"error", "Choose a property and an exact value from the returned choices"}};
-        const auto property = model->metaObject()->property(model->metaObject()->indexOfProperty(name.toLatin1().constData()));
-        if (!property.isWritable()) return {{"error", "Native audio property is read-only"}};
+        const int propertyIndex = model->metaObject()->indexOfProperty(name.toLatin1().constData());
+        if (propertyIndex < 0) return {{"error", "Native audio property is unavailable"}};
+        const auto property = model->metaObject()->property(propertyIndex);
+        if (!property.isReadable() || !property.isWritable()) return {{"error", "Native audio property is read-only"}};
         const auto before = property.read(model);
-        if (before != value.toVariant() && (!property.write(model, value.toVariant()) || property.read(model) != value.toVariant() || !layer.isRunning())) {
+        QVariant input = value.toVariant();
+        if (property.isEnumType()) {
+            if (!value.isDouble() || std::floor(value.toDouble()) != value.toDouble()) return {{"error", "Enum audio properties require an integer choice"}};
+            input = QVariant(value.toInt());
+            if (!input.convert(property.userType())) return {{"error", "Audio property value has the wrong enum type"}};
+        }
+        if (before != input && (!property.write(model, input) || property.read(model) != input || !layer.isRunning())) {
             const bool restored = property.write(model, before) && property.read(model) == before;
             error = restored ? "Native device change failed; previous setting restored" : "Native device change failed; inspect configuration before retrying";
         }
     } else if (operation != "state") return {{"error", "operation must be state or set"}};
-    QJsonObject state;
+    QJsonObject state, propertyTypes;
     for (const char *name : {"audioDevice", "audioInput", "audioOutput", "audioOutputChannels", "audioBuffersSize"}) {
-        const auto property = model->metaObject()->property(model->metaObject()->indexOfProperty(name));
+        const int index = model->metaObject()->indexOfProperty(name);
+        if (index < 0) continue;
+        const auto property = model->metaObject()->property(index);
+        if (!property.isReadable()) continue;
         state[name] = QJsonValue::fromVariant(property.read(model));
+        propertyTypes[name] = property.typeName();
     }
     QJsonObject result{{"scope", "application"}, {"configuration", state}, {"running", layer.isRunning()}, {"undoable", false},
-        {"choices", deviceChoices()}};
+        {"property_types", propertyTypes}, {"choices", deviceChoices()}};
     if (!error.isEmpty()) result["error"] = error;
     return result;
 }

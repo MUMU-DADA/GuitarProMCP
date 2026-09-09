@@ -17,6 +17,7 @@
 #include <QtCore/QJsonArray>
 #include <QtCore/QJsonDocument>
 #include <QtCore/QJsonObject>
+#include <QtCore/QMetaEnum>
 #include <QtCore/QMetaProperty>
 #include <QtCore/QMetaMethod>
 #include <QtCore/QThread>
@@ -43,6 +44,73 @@
 
 static QString nonce() { return QUuid::createUuid().toString(QUuid::WithoutBraces); }
 static const QStringList writableNames = {"checked", "value", "currentIndex", "currentText", "text", "plainText"};
+
+static QJsonValue preferenceJsonValue(const QMetaProperty &property, const QVariant &value) {
+    if (property.isEnumType()) return value.isValid() ? QJsonValue(value.toInt()) : QJsonValue();
+    if (value.type() == QVariant::StringList) return QJsonArray::fromStringList(value.toStringList());
+    if (value.type() == QVariant::List) return QJsonValue::fromVariant(value);
+    return QJsonValue::fromVariant(value);
+}
+
+static QJsonArray preferenceEnumChoices(const QMetaProperty &property) {
+    QJsonArray choices;
+    if (!property.isEnumType()) return choices;
+    const QMetaEnum enumeration = property.enumerator();
+    for (int i = 0; i < enumeration.keyCount(); ++i) choices.append(QString::fromLatin1(enumeration.key(i)));
+    return choices;
+}
+
+static bool preferenceValue(const QMetaProperty &property, const QJsonValue &input, QVariant *result, QString *error) {
+    if (property.isEnumType()) {
+        int enumValue = 0;
+        if (input.isString()) {
+            bool found = false;
+            enumValue = property.enumerator().keyToValue(input.toString().toLatin1().constData(), &found);
+            if (!found) { if (error) *error = "Choose an enum key from property_info"; return false; }
+        } else if (input.isDouble() && std::isfinite(input.toDouble()) && std::floor(input.toDouble()) == input.toDouble() && input.toDouble() >= -2147483648.0 && input.toDouble() <= 2147483647.0) {
+            enumValue = input.toInt();
+            if (property.enumerator().valueToKey(enumValue) == nullptr) { if (error) *error = "Choose an enum value from property_info"; return false; }
+        } else { if (error) *error = "Enum preferences require a key or integer value"; return false; }
+        QVariant converted(enumValue);
+        if (!converted.convert(property.userType())) converted = QVariant(enumValue);
+        *result = converted;
+        return true;
+    }
+    const int type = property.userType();
+    if (type == QMetaType::Bool) {
+        if (!input.isBool()) { if (error) *error = "Preference requires a boolean"; return false; }
+    } else if (type == QMetaType::QString) {
+        if (!input.isString() || !guitarpro::validHostText(input.toString())) { if (error) *error = "Preference requires valid host text"; return false; }
+    } else if (type == QMetaType::QStringList) {
+        if (!input.isArray()) { if (error) *error = "Preference requires an array of strings"; return false; }
+        QStringList values;
+        for (const auto &item : input.toArray()) {
+            if (!item.isString() || !guitarpro::validHostText(item.toString())) { if (error) *error = "Preference requires an array of valid host strings"; return false; }
+            values.append(item.toString());
+        }
+        *result = values;
+        return true;
+    } else if (type == QMetaType::Int || type == QMetaType::UInt || type == QMetaType::LongLong || type == QMetaType::ULongLong) {
+        if (!input.isDouble() || !std::isfinite(input.toDouble()) || std::floor(input.toDouble()) != input.toDouble()) { if (error) *error = "Preference requires an integer"; return false; }
+        if ((type == QMetaType::Int && (input.toDouble() < -2147483648.0 || input.toDouble() > 2147483647.0)) ||
+            (type == QMetaType::UInt && (input.toDouble() < 0 || input.toDouble() > 4294967295.0)) ||
+            ((type == QMetaType::LongLong || type == QMetaType::ULongLong) && (std::abs(input.toDouble()) > 9007199254740991.0 || (type == QMetaType::ULongLong && input.toDouble() < 0)))) { if (error) *error = "Preference integer is outside the supported range"; return false; }
+    } else if (type == QMetaType::Double) {
+        if (!input.isDouble() || !std::isfinite(input.toDouble())) { if (error) *error = "Preference requires a finite number"; return false; }
+    } else {
+        if (error) *error = "Native preference type is not supported";
+        return false;
+    }
+    QVariant converted = input.toVariant();
+    if (!converted.convert(type)) { if (error) *error = "Preference value has the wrong type"; return false; }
+    *result = converted;
+    return true;
+}
+
+static bool samePreferenceValue(const QMetaProperty &property, const QVariant &left, const QVariant &right) {
+    if (property.isEnumType()) return left.toInt() == right.toInt();
+    return left == right;
+}
 
 class Bridge : public QObject {
     McpServer server{this};
@@ -503,8 +571,10 @@ class Bridge : public QObject {
     }
 
     QList<QPointer<QObject>> services() const {
-        QList<QPointer<QObject>> result = registry.objects();
-        for (const auto &object : nativeObjects) if (object) result.append(object);
+        QList<QPointer<QObject>> result;
+        QSet<QObject *> seen;
+        for (const auto &object : registry.objects()) if (object && !seen.contains(object.data())) { seen.insert(object.data()); result.append(object); }
+        for (const auto &object : nativeObjects) if (object && !seen.contains(object.data())) { seen.insert(object.data()); result.append(object); }
         return result; // native operations may destroy objects in this snapshot
     }
 
@@ -512,51 +582,71 @@ class Bridge : public QObject {
         const QString scope = args.value("scope").toString("application");
         const QString operation = args.value("operation").toString("state");
         if (scope != "application") return {{"error", "scope must be application; use gp_presentation for document settings"}};
-        QObject *object = nullptr;
-        QStringList allowed;
-        {
-            const QString model = args.value("model").toString();
-            const QHash<QString, QStringList> models{
-                {"general", {"embedAudioFiles", "restoreOpenFile", "zoom"}},
-                {"gui", {"autoOpenFxPopup", "highlightBar", "includeChordsInCopyPaste", "playSoundWhileEditing", "useMediaKeys"}},
-                {"score", {"barLengthError", "hoPoError", "outOfRangeError", "tupletError", "unreachableBarError"}}
-            };
-            if (!models.contains(model)) return {{"error", "model must be general, gui or score"}};
-            allowed = models.value(model);
-            const QString className = model == "general" ? "gp::base::GeneralPreferencesModel" : model == "gui" ? "gp::base::GUIPreferencesModel" : "gp::base::ScorePreferencesModel";
-            for (const auto &candidate : services()) if (candidate && QByteArray(candidate->metaObject()->className()) == className) {
-                if (object) return {{"error", "Ambiguous native preference model"}};
-                object = candidate;
-            }
-            if (!object) return {{"error", "Native preference model unavailable"}};
+        if (!guitarpro::supportedBuild()) return {{"error", "Preferences are disabled on an unverified host build"}};
+        const QString model = args.value("model").toString();
+        const QHash<QString, QStringList> models{
+            {"general", {"defaultTemplate", "defaultStylesheet", "pageMode", "zoom", "forceStylesheet", "forcePageMode", "forceZoom", "forceNotation", "forcePlayback", "restoreOpenFile", "embedAudioFiles"}},
+            {"gui", {"autoOpenFxPopup", "highlightBar", "includeChordsInCopyPaste", "playSoundWhileEditing", "useMediaKeys", "showFretlightButton", "uiLanguage", "cursorStyle", "plusMinusKeyBehavior", "showMSB", "showExamples"}},
+            {"score", {"barLengthError", "hoPoError", "outOfRangeError", "tupletError", "unreachableBarError"}},
+            {"user_info", {"artist", "lyrics", "music", "copyright", "instructions", "tab"}},
+            {"midi", {"midiInput", "selectedMidiOutputs", "midiCaptureSensitivity"}}
+        };
+        const QHash<QString, QStringList> classes{
+            {"general", {"gp::base::GeneralPreferencesModel"}},
+            {"gui", {"gp::base::GUIPreferencesModel"}},
+            {"score", {"gp::base::ScorePreferencesModel"}},
+            {"user_info", {"gp::base::UserInfoPreferencesModel"}},
+            {"midi", {"gp::base::MidiPreferencesModel", "gp::base::MidiConfigurationWidgetModel", "gp::base::AudioConfigurationWidgetModel"}}
+        };
+        if (!models.contains(model)) return {{"error", "model must be general, gui, score, user_info or midi"}};
+        const QStringList allowed = models.value(model);
+        QPointer<QObject> object;
+        for (const auto &candidate : services()) if (candidate && classes.value(model).contains(QString::fromLatin1(candidate->metaObject()->className()))) {
+            if (model == "midi" && candidate->metaObject()->indexOfProperty("midiInput") < 0) continue;
+            if (object && object != candidate) return {{"error", "Ambiguous native preference model"}};
+            object = candidate;
         }
-        QJsonObject values;
+        if (!object) return {{"error", "Native preference model unavailable"}, {"model", model}, {"status", "host_limited"}};
+        QJsonObject values, propertyInfo;
         for (const auto &name : allowed) {
             const int index = object->metaObject()->indexOfProperty(name.toLatin1().constData());
-            if (index < 0) continue;
+            if (index < 0) { propertyInfo[name] = QJsonObject{{"available", false}}; continue; }
             const auto property = object->metaObject()->property(index);
-            if (property.isReadable()) values[name] = QJsonValue::fromVariant(property.read(object));
+            QJsonObject details{{"available", true}, {"type", property.typeName()}, {"readable", property.isReadable()}, {"writable", property.isWritable()}};
+            const auto enumChoices = preferenceEnumChoices(property);
+            if (!enumChoices.isEmpty()) details["choices"] = enumChoices;
+            if (name == "zoom") { details["minimum"] = 0.25; details["maximum"] = 4; }
+            if (name == "defaultTemplate") {
+                QJsonArray templates;
+                const QDir directory(":/GPBase/MainWindow/Templates");
+                for (const auto &file : directory.entryList({"*.gpt"}, QDir::Files, QDir::Name)) templates.append(QFileInfo(file).completeBaseName());
+                details["choices"] = templates;
+            }
+            if (property.isReadable()) values[name] = preferenceJsonValue(property, property.read(object));
+            propertyInfo[name] = details;
         }
-        if (operation == "state") return {{"scope", scope}, {"model", args.value("model")}, {"values", values}, {"undoable", false}};
+        const auto state = [&]() { return QJsonObject{{"scope", scope}, {"model", model}, {"native_model", object ? object->metaObject()->className() : ""}, {"values", values}, {"property_info", propertyInfo}, {"undoable", false}}; };
+        if (operation == "state") return state();
         if (operation != "set") return {{"error", "operation must be state or set"}};
         const QString name = args.value("property").toString();
         if (!allowed.contains(name)) return {{"error", "property is not in the explicit preference allowlist"}};
         const int index = object->metaObject()->indexOfProperty(name.toLatin1().constData());
-        if (index < 0 || !object->metaObject()->property(index).isWritable()) return {{"error", "Native preference property is unavailable or read-only"}};
+        if (index < 0 || !object->metaObject()->property(index).isReadable() || !object->metaObject()->property(index).isWritable()) return {{"error", "Native preference property is unavailable or read-only"}};
         const auto property = object->metaObject()->property(index);
         const auto input = args.value("value");
-        if ((property.userType() == QMetaType::Bool && !input.isBool()) ||
-            (name == "zoom" && (!input.isDouble() || !std::isfinite(input.toDouble()) || input.toDouble() < 0.25 || input.toDouble() > 4)))
-            return {{"error", "Use a boolean for flags or a zoom from 0.25 to 4"}};
-        QVariant value = args.value("value").toVariant();
-        if (!value.convert(property.userType())) return {{"error", "Preference value has the wrong type"}};
+        if (name == "zoom" && (!input.isDouble() || !std::isfinite(input.toDouble()) || input.toDouble() < 0.25 || input.toDouble() > 4)) return {{"error", "Use a zoom from 0.25 to 4"}};
         const QVariant before = property.read(object);
-        if (!property.write(object, value) || property.read(object) != value) {
-            const bool restored = property.write(object, before) && property.read(object) == before;
-            return {{"error", restored ? "Preference change failed; previous value restored" : "Preference change failed; inspect native preferences"}, {"scope", scope}};
+        if (name == "defaultTemplate" && property.userType() == QMetaType::QString && input != preferenceJsonValue(property, before) && !propertyInfo.value(name).toObject().value("choices").toArray().contains(input)) return {{"error", "Choose a defaultTemplate from property_info or gp_templates"}};
+        QVariant value;
+        QString error;
+        if (!preferenceValue(property, input, &value, &error)) return {{"error", error}};
+        if (!samePreferenceValue(property, before, value) && (!property.write(object, value) || !object || !samePreferenceValue(property, property.read(object), value))) {
+            const bool restored = object && property.write(object, before) && samePreferenceValue(property, property.read(object), before);
+            return {{"error", restored ? "Preference change failed; previous value restored" : "Preference change failed; inspect native preferences"}, {"scope", scope}, {"restored", restored}};
         }
-        values[name] = QJsonValue::fromVariant(property.read(object));
-        return {{"scope", scope}, {"model", args.value("model")}, {"values", values}, {"undoable", false}};
+        if (!object) return {{"error", "Native preference model was destroyed; reacquire state"}, {"scope", scope}};
+        values[name] = preferenceJsonValue(property, property.read(object));
+        return state();
     }
 
     QJsonObject midiImport(const QJsonObject &args) {
@@ -779,9 +869,9 @@ class Bridge : public QObject {
         };
         if (qEnvironmentVariableIsSet("GPMCP_DEVELOPMENT")) add("gp_debug_objects", "开发用：从已知 Qt 对象读取关联的 C++ RTTI，定位原生模型。", {});
         if (qEnvironmentVariableIsSet("GPMCP_DEVELOPMENT")) add("gp_audio_probe", "开发验收：原生渲染最多 30 秒测试曲谱，返回 PCM 帧数、能量和哈希。", {{"document", str}});
-        add("gp_audio_device", "原生全局音频设备：state/set。property/value 必须来自返回的 choices；修改前停止播放，不加入曲谱撤销栈。", {{"operation", str}, {"property", str}, {"value", QJsonObject{{"anyOf", QJsonArray{str, integer}}}}});
+        add("gp_audio_device", "原生全局音频设备：state/set。property/value 必须来自返回的 choices；修改前停止播放，不加入曲谱撤销栈。", {{"operation", str}, {"property", str}, {"value", QJsonObject{{"anyOf", QJsonArray{str, integer, anyObject}}}}});
         add("gp_p9_status", "读取 P9 编辑面板能力矩阵。每项明确返回已实现、已验证、实验性、未实现或宿主受限；只读，不改变曲谱。", {});
-        add("gp_preferences", "读取或设置明确允许的全局原生偏好。scope 为 application，model 为 general/gui/score。文档设置使用 gp_presentation。设置失败会恢复旧值。", {{"scope", str}, {"model", str}, {"operation", str}, {"property", str}, {"value", QJsonObject{{"anyOf", QJsonArray{boolean, QJsonObject{{"type", "number"}}}}}}});
+        add("gp_preferences", "读取或设置明确允许的全局原生偏好。scope 为 application，model 为 general/gui/score/user_info/midi。返回实际值、类型和宿主 choices；设置失败会恢复旧值。文档设置使用 gp_presentation。", {{"scope", str}, {"model", str}, {"operation", str}, {"property", str}, {"value", QJsonObject{{"anyOf", QJsonArray{boolean, str, QJsonObject{{"type", "number"}}, QJsonObject{{"type", "array"}}}}}}});
         add("gp_presentation", "读取或设置文档页面、页面元数据、缩放、编辑显示和谱表可见性。页面尺寸/边距使用毫米；一次只设置页面、page_metadata、视图或谱表一组。page_metadata 异步写入 title/author/composer/copyright，以及 even_header/odd_header、first_footer/even_footer/odd_footer、first_page_number/even_page_number/odd_page_number（对象含 text、visibility=0 可见/1 隐藏/2 折叠）。使用 gp_operation 查询终态，整组一次撤销。", {{"document", str}, {"operation", str}, {"width", QJsonObject{{"type", "number"}}}, {"height", QJsonObject{{"type", "number"}}}, {"left", QJsonObject{{"type", "number"}}}, {"top", QJsonObject{{"type", "number"}}}, {"right", QJsonObject{{"type", "number"}}}, {"bottom", QJsonObject{{"type", "number"}}}, {"orientation", str}, {"page_metadata", anyObject}, {"zoom", QJsonObject{{"type", "number"}}}, {"design_mode", boolean}, {"multivoice_edition", boolean}, {"track", integer}, {"standard_notation", boolean}, {"tablature", boolean}});
         if (qEnvironmentVariableIsSet("GPMCP_DEVELOPMENT")) add("gp_debug_resources", "开发用：只读枚举宿主嵌入的 Qt 资源路径。", {{"query", str}});
         add("gp_templates", "枚举宿主内置曲谱模板，供 gp_new 使用。", {});
@@ -1288,7 +1378,7 @@ protected:
             }
         }
         // Observe real Qt event recipients to discover non-parented host services.
-        if (name.startsWith("gp::") && (name.contains("Manager") || name.startsWith("gp::rse::") || name == "gp::gui::IAudioDocument") &&
+        if (name.startsWith("gp::") && (name.contains("Manager") || name.contains("PreferencesModel") || name.contains("ConfigurationWidgetModel") || name.startsWith("gp::rse::") || name == "gp::gui::IAudioDocument") &&
             nativeObjects.size() < 1024 && !nativeObjects.contains(object)) {
             nativeObjects.insert(object, QPointer<QObject>(object));
             connect(object, &QObject::destroyed, this, [this, object]() { nativeObjects.remove(object); });

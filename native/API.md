@@ -417,7 +417,7 @@ GPIF 预检使用宿主 `Qt5Gui.dll` 的 `QZipReader` 和 Qt XML 流解析器，
 
 除 `select` 外，修改独立的原生 `Sound` 副本后通过 `Score::setTrackSound` 提交，支持撤销重做及保存重开。音色复制保留目标音轨的 MIDI/RSE 引擎选择；RSE 音轨可从模板创建或通过 `gp_insert_track` 复用，不增加引擎或乐器定义系统。效果参数沿用宿主索引，不引入参数名称数据库、任意新效果构造或自动化曲线编辑。音量、声像、独奏和静音继续使用 `gp_edit_track`。
 
-`gp_audio_device state` 返回 `scope=application`、`configuration`、当前 `choices` 和 `running`。`set property=... value=...` 只接受 `choices` 中的输入设备、输出设备、后端和缓冲区值；通过宿主配置模型的 Qt 属性提交，原生配置负责持久化，不进入曲谱撤销。播放中拒绝设备修改；未知选项在修改前拒绝，原生设置失败尝试恢复旧值。Standard、Studio 2 PRO 输出与 512/1024 缓冲区已验证；ASIO、热拔插、厂商控制面板及驱动故障未验收，不声明自动恢复所有设备错误。
+`gp_audio_device state` 返回 `scope=application`、`configuration`、`property_types`、当前宿主 `choices` 和 `running`。`set property=... value=...` 只接受返回 choices 中的精确值；`audioOutputChannels` 只有在宿主模型可读时才会列出当前合法值，不猜测声道数量。通过宿主配置模型的 Qt 属性提交，原生配置负责持久化，不进入曲谱撤销。播放中拒绝设备修改；未知选项在修改前拒绝，原生设置失败尝试恢复旧值。Standard、Studio 2 PRO 输出与 512/1024 缓冲区已验证；ASIO、热拔插、厂商控制面板及驱动故障未验收，不声明自动恢复所有设备错误。
 
 `GPMCP_DEVELOPMENT=1` 时提供 `gp_audio_probe`，通过宿主 `AudioExportManager` 渲染最多 30 秒的测试曲谱，返回双声道浮点 PCM 的帧数、RMS、峰值及哈希。仅用于验收，不作为 P6 文件导出接口，不采集系统或麦克风声音。`test-audio.ps1 -Render` 验证速度、渐变、反复、音量/声像、效果和音色变化；默认最小夹具是 MIDI 音轨，测试副本改为 RSE 并复用 Steel Guitar / Acoustic Piano 模板。验收使用 `C:/ProgramData/Arobas Music/Soundbanks/com.arobas-music.soundbank.standard`，不能用接近静音的 MIDI 渲染证明 RSE 发声正确。
 
@@ -447,6 +447,8 @@ PDF 复用宿主原生排版和 QPrinter 打印流程，受控打印目标就是
 
 `gp_open` 异步导入 GP5、GPX、MusicXML 和 MIDI。MIDI 请求停在原生参数对话框时，用 `gp_midi_import request=<id>` 读回选项，`operation=set` 设置 `dot/is2ChannelsPerTrack/live/multivoice/staccato/triplet` 布尔值或 `quantization` 2..8（全音符至六十四分音符），`operation=accept` 导入为新曲谱；继续轮询原打开请求，取消使用 `gp_cancel`。不向当前曲谱合并。GP3/GP4、MXL 等宿主可打开的扩展仍需各自样本验收。GP5/GPX 可能丢失新版本记谱及音色信息；MusicXML 保留记谱而非完整 RSE，五线谱和六线谱可分别成为输出谱表；MIDI 保留演奏事件，不保留原始排版和完整技法语义。
 
-`gp_preferences` 只操作整个软件，`scope=application`，`model=general/gui/score`；允许属性由 `values` 列出，设置失败会尝试恢复旧值。`gp_presentation` 只操作返回 ID 对应的文档，一次修改页面尺寸、页面元数据、视图或谱表一组。页面边长 50..1000 毫米，边距须留下至少 20 毫米内容区域；尺寸、边距、方向和谱表显示可保存重开。缩放 0.25..4 及编辑视图属于会话状态，返回 `requested` 时应再次读取 `state` 确认。P6 的页面尺寸及显示设置不进入宿主撤销栈，同值页面设置不制造脏状态；P8 的 `page_metadata` 使用异步原生提交，整组可以一次撤销，见 [页面元数据](P8.md#页面元数据)。声音和设备参数复用 P5 的 `gp_audio_track`/`gp_audio_device`。
+`gp_preferences` 只操作整个软件，`scope=application`，`model=general/gui/score/user_info/midi`；允许属性由 `property_info` 的显式 allowlist 列出，`values` 只返回宿主实际存在且可读的字段。枚举返回 `choices`，一般偏好覆盖默认模板/样式、页面模式、缩放和强制选项，界面偏好覆盖语言、播放游标及已确认的编辑选项，`user_info` 覆盖 `artist`、`lyrics`、`music`、`copyright`、`instructions`、`tab`，`midi` 覆盖可读的 `midiInput`、`selectedMidiOutputs`、`midiCaptureSensitivity`。设置失败会尝试恢复旧值；没有匹配的宿主模型明确返回 `status=host_limited`。偏好不进入曲谱撤销栈。`gp_presentation` 只操作返回 ID 对应的文档，一次修改页面尺寸、页面元数据、视图或谱表一组。页面边长 50..1000 毫米，边距须留下至少 20 毫米内容区域；尺寸、边距、方向和谱表显示可保存重开。缩放 0.25..4 及编辑视图属于会话状态，返回 `requested` 时应再次读取 `state` 确认。P6 的页面尺寸及显示设置不进入宿主撤销栈，同值页面设置不制造脏状态；P8 的 `page_metadata` 使用异步原生提交，整组可以一次撤销，见 [页面元数据](P8.md#页面元数据)。声音和设备参数复用 P5 的 `gp_audio_track`/`gp_audio_device`。
 
 专项：`./native/test-p6.ps1 -SessionFile <session.json>`，使用 Windows 自带的 PowerShell/.NET 核验交换格式、PNG、PCM、设置恢复和临时文档隔离。`test-exchange.ps1` 仅解析本项目简单验收夹具，不是通用转换器。开发者可显式加 `-RenderPdf` 使用已准备的 Poppler 独立复核 PDF；该选项不是普通测试、插件安装或运行的前提，测试脚本不进入安装包。当前证据见 [P6 验收](../docs/COVERAGE.md#p6-验收)。
+
+P10 专项：`./native/test-p10.ps1 -SessionFile <session.json> -VerifyRestart`，读取五类偏好和音频/MIDI 模型，核对 allowlist、错误输入拒绝、同值写入读回、choices、重启持久化与新建曲谱默认资讯继承。底层 setter 失败时实现会尝试恢复旧值；跨重启分支只用于隔离开发宿主，宿主未退出时按 `host_limited` 记录，不强制结束用户实例。当前证据见 [P10 验收](../docs/COVERAGE.md#p10-验收)。

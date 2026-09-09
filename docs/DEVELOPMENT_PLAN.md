@@ -1,6 +1,6 @@
 # GuitarProMCP 阶段计划与当前验收
 
-更新日期：2026-09-09。本文件记录 P0-P9 阶段计划、当前验收标准和 P9 实施边界。当前协作规范、开发目标、产品要求、范围决策和质量门槛统一见 [AGENTS.md](../AGENTS.md)；历史执行记录见文末归档。
+更新日期：2026-09-09。本文件记录 P0-P10 阶段计划、当前验收标准、P9 实施边界和 P10 实施范围。当前协作规范、开发目标、产品要求、范围决策和质量门槛统一见 [AGENTS.md](../AGENTS.md)；历史执行记录见文末归档。
 
 > 文档分工遵循 [AGENTS.md](../AGENTS.md#文档分工)：阶段记录见本文件，当前能力及具名证据见 [COVERAGE.md](COVERAGE.md)，接口细节见 [native/API.md](../native/API.md) 和 [native/P8.md](../native/P8.md)。
 
@@ -20,6 +20,7 @@
 | P7 发布验收 | 已完成，按 2026-09-08 用户确认的一小时持续运行范围验收 | 最终候选包完整回归、双客户端长测、资源回落、恢复、退出和真实安装生命周期；AMNetwork 快速退出按厂商限制保留 |
 | P8 高层编曲与曲谱语义 | 已完成，按本次最小必要范围验收 | 批量建谱、JSON 往返、文本六线谱、结构摘要、和弦/歌词/段落及页面元数据；含 PDF 专项 207 项、完整原生回归 23 组 4375 项通过 |
 | P9 编辑面板剩余能力 | 已完成可核验范围，剩余项按宿主受限或实验性保留 | 节拍文本、`PPP`–`FFF` 力度标记、`Upward`/`Downward`/`auto` 符干方向、`G2/F4/C3` 谱号写入及读回、撤销重做、保存重开；沿用 P8 和弦/歌词/页面元数据及 P5 已有音色效果和速度自动化；能力矩阵与边界见下文 |
+| P10 偏好设置与基础音频/MIDI 控制 | 已完成最小可核验范围，剩余项按宿主受限或待调查保留 | 一般/界面偏好、我的资讯默认值、音频输出通道 choices、MIDI 设备/输出列表/采集灵敏度及乐谱错误开关；更新/Beta、每路 MIDI 延迟、通道检测及驱动控制面板另行调查 |
 
 P0、P1、P2 为 P3–P6 提供基础，随后由 P7 对完整安装包进行发布验收。P1 已完成真实安装集成验收；可靠性检查继续贯穿后续阶段。
 
@@ -78,6 +79,45 @@ P9 用于归拢当前截图及实际用户编辑流程中尚未覆盖的按钮�
 
 能力矩阵还记录了沿用 P5/P8 能力及明确边界：音轨自动化只提供实验性 DSP 参数曲线，力度/表情/音量自动化、力度清除、细粒度符杠分组及排版、任意乐器/指法为宿主受限；系统剪贴板为实验性且默认关闭；剩余技法组合不作穷举。矩阵通过 `gp_p9_status` 和 `gp_capabilities.p9` 提供，未核验的宿主 ABI 不会因菜单可枚举或 DLL 加载而被标为完成。
 
+## P10：偏好设置与基础音频/MIDI 控制
+
+状态：已完成最小可核验范围（2026-09-09）。P10 面向截图中的全局偏好设置，复用现有 Qt 偏好模型和 `gp_audio_device` 路径。所有字段通过明确 allowlist 和可读回的宿主 `QMetaProperty` 提交；控件属性变化、菜单状态或按钮点击本身不计为能力完成。宿主没有创建相应模型时返回 `status=host_limited`，不把菜单可见或属性名猜测成已实现。
+
+### P10.1 一般偏好
+
+扩展 `gp_preferences` 的 `general` 模型，覆盖 `defaultTemplate`、`defaultStylesheet`、`pageMode`、`zoom`、`forceStylesheet`、`forcePageMode`、`forceZoom`、`forceNotation`、`forcePlayback`、`restoreOpenFile` 和 `embedAudioFiles`。返回 `property_info`、实际类型和宿主枚举 choices；默认模板复用 `gp_templates` 的宿主模板枚举；样式、布局、谱表、音源和缩放使用宿主实际枚举或数值，不把中文界面文字作为协议值。专项已验证强制选项读回和 `forceNotation` 跨宿主重启持久化。
+
+更新检查、检查频率、Beta 渠道以及会触发更新器、重启或界面重建的操作不纳入本小节的稳定写入范围；若后续确认有稳定模型 setter，另设专项验证。
+
+### P10.2 界面偏好
+
+扩展 `gp_preferences` 的 `gui` 模型，覆盖已确认的 `showFretlightButton`、`uiLanguage` 和播放游标样式属性，并在同一 allowlist 中调查 `cursorStyle`、`plusMinusKeyBehavior`、`showMSB`、`showExamples` 是否为可写 `Q_PROPERTY`。已存在的 `autoOpenFxPopup`、`highlightBar`、`includeChordsInCopyPaste`、`playSoundWhileEditing` 和 `useMediaKeys` 保持回归覆盖；语言切换后的对象快照需重新获取。
+
+语言切换可能触发界面重翻译并使 Qt 对象快照失效；验收必须读回最终状态，并允许重新建立 MCP 会话或重新获取快照。不能用 `gp_set_property` 直接改控件来代替模型提交。
+
+### P10.3 我的资讯默认值
+
+新增 `UserInfoPreferencesModel` 的显式 `model=user_info` 入口，覆盖 `artist`、`lyrics`、`music`、`copyright`、`instructions` 和 `tab` 六个字段。专项已区分默认资讯与当前文档的 `gp_edit_metadata`，用 Unicode/空白安全的文本值核对 `gp_new` 新曲谱继承、读回和恢复；设置失败会恢复旧值。
+
+### P10.4 音频与 MIDI 基础设置
+
+沿用 `gp_audio_device` 的应用级无撤销语义，补齐 `audioOutputChannels` 的宿主 choices 和设置后的读回。状态同时返回 `property_types`；保留播放中拒绝、设备变更失败恢复和音频层运行状态检查。设备 choices 必须来自当前宿主，无法读出合法声道时不提供猜测值。
+
+在同一 Qt 模型路径上调查并加入 `gp_preferences model=midi` 的 `midiInput`、`selectedMidiOutputs` 和 `midiCaptureSensitivity`。协议支持 `QStringList` 输出列表，灵敏度只有在宿主提供可读写属性时才开放；模型不可见时返回 `host_limited`，不增加独立转接服务或猜测设备列表。
+
+每路 MIDI 输出延迟、通道检测单选项、音频装置齿轮以及“检查/测试”按钮目前没有稳定的模型字段或终态路径，不属于 P10 基础写入范围；在确认宿主 setter、读回和持久化前标记为宿主受限或待调查。
+
+### P10.5 API、回归与完成门槛
+
+- `gp_preferences` 继续使用显式模型和属性 allowlist，state 返回实际值及 `property_info` 的 choices/type 信息；枚举、数值、布尔、字符串和字符串列表分别校验，错误输入不得改变设置。
+- 应用偏好不进入曲谱撤销栈，但必须验证设置失败恢复、Qt 主线程顺序、多个文档不受错误目标影响，以及配置不写入源码目录。
+- `native/test-p10.ps1` 覆盖一般/界面/我的资讯/音频/MIDI 的读取、allowlist 拒绝、同值设置和读回、音频 choices、乐谱错误五项、跨宿主重启持久化和新建曲谱默认资讯继承；缺失模型仍按 `host_limited` 记录。
+- 只在 `native/supported-host.json` 已核验的 Guitar Pro 8.1.1.17 上启用；新宿主构建必须单独记录模型属性、枚举、行为和回归证据。没有实际模型读回和持久化证据时，P10 保持“计划中”或按项标记为“宿主受限”。
+
+### P10.6 当前实现证据
+
+`native/test-p10.ps1 -SessionFile <session.json> -VerifyRestart` 在 Guitar Pro 8.1.1.17 上通过 98 项：五类模型均可访问，实际可写字段完成同值读回，显式 allowlist 和错误输入拒绝、音频输出通道 choices、MIDI 输出列表/采集灵敏度、五项乐谱错误开关、`forceNotation` 跨宿主重启持久化，以及 `user_info.tab` 到新建曲谱 `Tabber` 的默认继承。具名证据为 `artifacts/native-p10-89b706d861a941659cc7b1806098b3c5/verification.json`，其中 `complete=true`；同一构建插件 SHA-256 为 `B5DB3991C4BCA16F5C76134F1F730D23310B5DE6FBA541B8C44FDCCE7EF85FA7`。更新/Beta、每路 MIDI 延迟、通道检测和驱动控制面板仍按宿主受限或待调查保留。
+
 ## 历史记录
 
-旧版阶段快照、历史验收口径和逐次执行日志已移至 [开发计划历史归档](archive/DEVELOPMENT_HISTORY.md)。归档中的状态和数字只用于追溯，不能覆盖本文件的阶段总览或当前 P9 结论。
+旧版阶段快照、历史验收口径和逐次执行日志已移至 [开发计划历史归档](archive/DEVELOPMENT_HISTORY.md)。归档中的状态和数字只用于追溯，不能覆盖本文件的阶段总览或当前 P9/P10 结论。

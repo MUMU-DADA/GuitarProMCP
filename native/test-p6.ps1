@@ -197,9 +197,16 @@ try {
     ExportScore $audioId 'recovered.gp5' | Out-Null
     Invoke-McpTool $s gp_save_current @{document=$audioId} | Out-Null
     foreach ($doc in @($owned)) { CloseScore $doc }
+    $p6PreferenceFields=@{
+        general=@('embedAudioFiles','restoreOpenFile','zoom')
+        gui=@('autoOpenFxPopup','highlightBar','includeChordsInCopyPaste','playSoundWhileEditing','useMediaKeys')
+        score=@('barLengthError','hoPoError','outOfRangeError','tupletError','unreachableBarError')
+    }
     foreach ($model in @('general','gui','score')) {
         $preferences[$model]=(Invoke-McpTool $s gp_preferences @{model=$model}).values
-        foreach ($property in $preferences[$model].PSObject.Properties) {
+        foreach ($name in $p6PreferenceFields[$model]) {
+            $property=$preferences[$model].PSObject.Properties | Where-Object Name -EQ $name
+            if (-not $property) { continue }
             $value=if ($property.Name -eq 'zoom') { if ($property.Value -eq 1.25) {1.5} else {1.25} } else {-not $property.Value}
             $changed=Invoke-McpTool $s gp_preferences @{model=$model;operation='set';property=$property.Name;value=$value}
             Check ($changed.scope -eq 'application' -and $changed.values.($property.Name) -eq $value) 'Preference did not read back'
@@ -220,7 +227,9 @@ try {
         Invoke-McpTool $s gp_cancel @{request=$midiRequest} -AllowError | Out-Null
         Start-Sleep -Milliseconds 100
     }
-    foreach ($model in $preferences.Keys) { foreach ($property in $preferences[$model].PSObject.Properties) {
+    foreach ($model in $preferences.Keys) { foreach ($name in $p6PreferenceFields[$model]) {
+        $property=$preferences[$model].PSObject.Properties | Where-Object Name -EQ $name
+        if (-not $property) { continue }
         $restored=Invoke-McpTool $s gp_preferences @{model=$model;operation='set';property=$property.Name;value=$property.Value}
         Check ($restored.values.($property.Name) -eq $property.Value) 'Preference restore failed'
     } }

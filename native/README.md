@@ -127,6 +127,9 @@ IDocumentsManager + 0x10 → 管理器实现对象
 
 # P9 节拍文本、力度/符干/谱号和能力矩阵
 ./native/test-p9.ps1 -SessionFile <session.json>
+
+# P10 偏好、音频 choices 和 MIDI 模型可用性
+./native/test-p10.ps1 -SessionFile <session.json> -VerifyRestart
 ```
 
 失败时保留宿主和 `artifacts/` 证据；不要把 `scheduled`、菜单枚举或 DLL 加载成功当作原生能力已验证。真实宿主回归需要 Guitar Pro 8.1.1.17 及匹配的宿主文件哈希。

@@ -55,7 +55,7 @@ MCP 客户端 -> 本机 HTTP /mcp -> GuitarPro.exe 内的 C++ 插件 -> Qt/GPCor
 | 协议和工具参数 | [native/API.md](native/API.md) |
 | P8 JSON 与编曲接口 | [native/P8.md](native/P8.md) |
 | Qt 自动加载 | [native/AUTOLOAD.md](native/AUTOLOAD.md) |
-| 阶段计划与 P9 验收 | [docs/DEVELOPMENT_PLAN.md](docs/DEVELOPMENT_PLAN.md) |
+| 阶段计划与 P10 验收 | [docs/DEVELOPMENT_PLAN.md](docs/DEVELOPMENT_PLAN.md) |
 | 完整文档索引 | [docs/README.md](docs/README.md) |
 
 ## 支持边界

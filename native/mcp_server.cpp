@@ -229,7 +229,7 @@ void McpServer::accept() {
                 const QString version = Versions.contains(params.value("protocolVersion").toString()) ? params.value("protocolVersion").toString() : Version;
                 const QString key = randomId();
                 sessions.insert(key, {version, false, QDateTime::currentMSecsSinceEpoch()});
-                reply(socket, 200, rpcResult(id, {{"protocolVersion", version}, {"serverInfo", QJsonObject{{"name", "GuitarProMCP"}, {"version", "0.4.0"}}},
+                reply(socket, 200, rpcResult(id, {{"protocolVersion", version}, {"serverInfo", QJsonObject{{"name", "GuitarProMCP"}, {"version", "0.5.0"}}},
                       {"_meta", QJsonObject{{"instance_id", instanceIdentity}, {"pid", QCoreApplication::applicationPid()}}},
                       {"capabilities", QJsonObject{{"tools", QJsonObject{{"listChanged", false}}}}},
                       {"instructions", "Native C++ plugin. No Python, simulated input or foreground window is required. Inspect capabilities and observed state; verify mutations."}}),
