@@ -57,7 +57,7 @@
 
 ### P10 验收
 
-源码已通过 `native/build.ps1` 的 C++/Qt 构建检查。`native/test-p10.ps1 -VerifyRestart` 在 Guitar Pro 8.1.1.17 上通过 98 项，五类偏好模型和音频/MIDI 模型无 `host_limited`，并核对了 allowlist、类型/choices、同值写入读回、五项乐谱错误开关、跨宿主重启持久化和新建曲谱默认资讯继承。证据：`artifacts/native-p10-89b706d861a941659cc7b1806098b3c5/verification.json`，其中 `complete=true`；插件 SHA-256 为 `B5DB3991C4BCA16F5C76134F1F730D23310B5DE6FBA541B8C44FDCCE7EF85FA7`。
+源码已通过 `native/build.ps1` 的 C++/Qt 构建检查。`test/test-p10.ps1 -VerifyRestart` 在 Guitar Pro 8.1.1.17 上通过 98 项，五类偏好模型和音频/MIDI 模型无 `host_limited`，并核对了 allowlist、类型/choices、同值写入读回、五项乐谱错误开关、跨宿主重启持久化和新建曲谱默认资讯继承。证据：`artifacts/native-p10-89b706d861a941659cc7b1806098b3c5/verification.json`，其中 `complete=true`；插件 SHA-256 为 `B5DB3991C4BCA16F5C76134F1F730D23310B5DE6FBA541B8C44FDCCE7EF85FA7`。
 
 ### P8 验收
 

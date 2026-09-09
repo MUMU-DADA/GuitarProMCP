@@ -156,7 +156,7 @@ Windows 文件关联同时使用进程启动和注册的 DDE 命令。隔离 DDE
 
 验收标准：不存在未解决的插件引起的崩溃、损坏、错误文档写入、静默数据丢失或强制功能缺口。可复现的厂商限制按版本保留，必须有已验证的受支持缓解方式或明确的发布范围决定。已观察到的快速启动后退出死锁仍未解决，等待五秒不能使该用例通过。
 
-本次按用户“不要过度设计，能不做就不做”的要求执行最小发布验收：复用已有原生功能与检查，只增加 `native/test-p7.ps1` 持续运行入口和发布诊断说明。持续运行期间用户进一步确认“一个小时足够了”，因此将时间门槛从两小时调整为一小时，保留双客户端、十份文档及至少 100 次循环；不扩展其他宿主版本、驱动故障注入、系统剪贴板隔离环境或此前已排除的功能。AMNetwork 启动期间退出挂起作为本版本明确的发布限制保留，不修改厂商线程、不增加强制退出机制；普通退出另行验证并记录启动等待。
+本次按用户“不要过度设计，能不做就不做”的要求执行最小发布验收：复用已有原生功能与检查，只增加 `test/test-p7.ps1` 持续运行入口和发布诊断说明。持续运行期间用户进一步确认“一个小时足够了”，因此将时间门槛从两小时调整为一小时，保留双客户端、十份文档及至少 100 次循环；不扩展其他宿主版本、驱动故障注入、系统剪贴板隔离环境或此前已排除的功能。AMNetwork 启动期间退出挂起作为本版本明确的发布限制保留，不修改厂商线程、不增加强制退出机制；普通退出另行验证并记录启动等待。
 
 当前候选包已通过 22 组、4153 项完整回归，宿主退出码为 0；进程实际加载的两个 DLL 路径和哈希均与安装包一致。一小时长测、设置跨重启、实例/入口、恢复、八路径普通退出及真实安装生命周期均已完成。P6 的旧权限阻塞已解除，本轮文件保存和 P6 专项均通过。AMNetwork 启动期间快速退出仍按厂商限制发布，不修改厂商线程或增加强制退出逻辑。准确证据见 [P7 验收](../COVERAGE.md#p7-验收)。
 
@@ -170,7 +170,7 @@ Windows 文件关联同时使用进程启动和注册的 DDE 命令。隔离 DDE
 
 每项强制要求必须有具名覆盖记录、目标与参数约定、观察结果及验证产物。“宿主受限”“实验性”“未验证”均不等于完成。宿主限制必须提供复现方式和发布影响，调整已接受范围必须明确处理；存在强制缺口时不得宣布完整项目完成。
 
-复用现有 PowerShell 验证脚本及 `native/test-all.ps1`，新行为需要时补充针对性检查。阶段验收后更新覆盖清单、文档及相关安装包证据，再提交阶段完成记录。中间提交标记为检查点，文档提交或阶段完成提交不得混入未完成代码。运行令牌、临时宿主和生成的验证产物不提交 Git。
+复用现有 PowerShell 验证脚本及 `test/test-all.ps1`，新行为需要时补充针对性检查。阶段验收后更新覆盖清单、文档及相关安装包证据，再提交阶段完成记录。中间提交标记为检查点，文档提交或阶段完成提交不得混入未完成代码。运行令牌、临时宿主和生成的验证产物不提交 Git。
 
 ## 历史后续维护与扩展计划
 
@@ -204,7 +204,7 @@ Windows 文件关联同时使用进程启动和注册的 DDE 命令。隔离 DDE
 ### P0 与 P1
 
 - 基线已保存在 `codex/full-development` 分支的 `2b97686` 提交。
-- P0：`native/test-autoload-probe.ps1` 通过直接 EXE、Windows 快捷方式、打开曲谱和卸载场景。证据：`artifacts/autoload-probe-724964da0f7740f991172f092da7b43f/verification.json`。完成提交为 `c945e42`。
+- P0：`test/test-autoload-probe.ps1` 通过直接 EXE、Windows 快捷方式、打开曲谱和卸载场景。证据：`artifacts/autoload-probe-724964da0f7740f991172f092da7b43f/verification.json`。完成提交为 `c945e42`。
 - P1：已实现生产加载器、可见/后台启动、持久数据、状态对话框、安装/更新/停用/卸载和独立安装包。安装 35 项及协议 26 项通过：`artifacts/installation-716ffefd35114ea3b57b55abe6d5f53d/verification.json`。安装包也通过 Windows PowerShell 5.1 安装。真实宿主已有安装器管理的插件，更新包及最终真实入口验收仍未完成。
 - P1 验证暴露了空 `GPMCP_PORT` 处理和请求超时问题，已分别修复和补充。受限文件系统还导致测试宿主的原生自动保存失败，因此完整软件测试需要宿主自身用户配置及自动备份目录的访问权限。实际观察到的错误框为 `am::gui::MessageDialog`，标题为本地化的 `Save error`，不能仅从超时推断。已加入 `gp_dialogs` 与统一模态保护，阻止错误框存在期间的原生写入，同时保留对话框内控件操作。
 - P1：十三组共 2195 项通过，但退出时发生 Qt5Gui 访问异常：`artifacts/regression-f4364a58c78f42b1ac85cff266581cf6/regression.json`。该轮不是通过的发布回归；当时开始验证在 `aboutToQuit` 中、宿主/Qt 销毁前清理资源，P1 未完成。
@@ -219,12 +219,12 @@ Windows 文件关联同时使用进程启动和注册的 DDE 命令。隔离 DDE
 ### P2：身份、连接与基础保存
 
 - P2 初始实现：实例 UUID/启动时间描述、按归属清理配置、默认端口回退、请求绑定实例及显式重连。编译和单宿主握手通过，当时完整验证尚未完成，没有 P2 完成提交。
-- 独立进程调查：`native/test-instances.ps1` 最初要求第二个独立 GUI 宿主，但第二次启动正常退出，从另一个隔离安装目录启动也相同。宿主继承 QtSingleApplication，尚未确认受支持的独立实例模式。该边界持续保留，双客户端和连接隔离单独验证。
+- 独立进程调查：`test/test-instances.ps1` 最初要求第二个独立 GUI 宿主，但第二次启动正常退出，从另一个隔离安装目录启动也相同。宿主继承 QtSingleApplication，尚未确认受支持的独立实例模式。该边界持续保留，双客户端和连接隔离单独验证。
 - 文档 ID 改为保存在原生文档上的 UUID，替代可复用的视图名称。所有文档工具、剪贴板元数据和跨文档操作共用该身份；重启和关闭重开后拒绝旧 ID。
 - 实现 `gp_save_current`，副本/另存为覆盖必须明确 `overwrite=true`。原生写入前备份已有目标内容，失败时尝试恢复文件和路径，文件恢复失败则保留备份。30 项检查覆盖当前路径保存、覆盖、保护已打开文档、被锁定/缺少的目标、原生状态、GPIF 和重开；该检查点尚未注入原生写入过程中的故障。
 - 当时十四组回归通过 2225 项，退出码为 0，连接描述已清理：`artifacts/regression-a5bf1961faf441cfa42eabf4782296e9/regression.json`。安装 43 项及协议 26 项通过：`artifacts/installation-8253afa705c0458bad1fe25ea708b534/verification.json`。这两轮均早于后续已退出进程身份修复。
 - 保留已终止进程句柄后，Windows 仍返回创建时间，复现了过期别名被错误视为仍有归属的问题。身份检查补充退出时间后，53 项连接检查通过：`artifacts/instances-d32b829a0032440a86a001624a5d01df/verification.json`。
-- 旧版 `test-instances.ps1 -CheckLaunchForwarding` 是单独保留的失败流程，不计入已通过连接检查。第二进程退出码为 0，但曲谱未出现在已有宿主中，同类夹具通过原生 `gp_open` 可以打开。可见模式证据：`artifacts/instances-fa5b0650158348838bc0f681a3f46daa/verification.json`。此前转发成功的说法缺少文件读回支持，后续 DDE 调查修正了测试解释。
+- 旧版 `test/test-instances.ps1 -CheckLaunchForwarding` 是单独保留的失败流程，不计入已通过连接检查。第二进程退出码为 0，但曲谱未出现在已有宿主中，同类夹具通过原生 `gp_open` 可以打开。可见模式证据：`artifacts/instances-fa5b0650158348838bc0f681a3f46daa/verification.json`。此前转发成功的说法缺少文件读回支持，后续 DDE 调查修正了测试解释。
 - 修复已退出进程身份后，十四组、2225 项回归通过，退出码为 0，连接描述已删除：`artifacts/regression-dd6830958c334f7cb5ad42add6e4bd4d/regression.json`。核心 SHA-256：`00470B0D0F90015EF32076A37002BFC865DF0F43989FA954BF4585CB830F356C`。同一核心在 Windows PowerShell 5.1 通过 53 项连接检查：`artifacts/instances-5524513fd40d4b2b988926b4abf5fd92/verification.json`。这是 P2 中间检查点，P1 真实安装及剩余 P2–P7 要求仍开放。
 
 ### P2：操作跟踪与关闭策略
@@ -251,7 +251,7 @@ Windows 文件关联同时使用进程启动和注册的 DDE 命令。隔离 DDE
 
 - 文件关联调查发现 Windows 注册表中被旧测试遗漏的原生 DDE 约定：服务 `Guitar Pro 8`、主题 `system`、执行命令 `[open("%1")]`。普通第二进程收到正确命令行路径，却发送空的 Qt 单实例消息。在没有加载 MCP 核心的探针宿主中，随后发送 DDE 才产生文件打开事件并打开正确的第二份文档。基线、事件及探针源码：`artifacts/forwarding-probe-7e502806f8224290bbf07076d1299123/`。
 - 上述发现修正了仅用命令行测试的解释，没有为宿主新增命令行文件转发功能。真实安装目录的资源管理器验收仍属 P1。
-- `test-instances.ps1 -CheckLaunchForwarding` 现在核对注册的 DDE 配置、第二进程退出、接收 PID、中文及空格路径、重复打开身份、后台焦点和原有连接检查。测试客户端发送前拒绝错误接收进程，构建产物位于生产插件目录之外。失败测试现在保留仍运行的宿主及其已安装文件供检查，不再直接终止它们。
+- `test/test-instances.ps1 -CheckLaunchForwarding` 现在核对注册的 DDE 配置、第二进程退出、接收 PID、中文及空格路径、重复打开身份、后台焦点和原有连接检查。测试客户端发送前拒绝错误接收进程，构建产物位于生产插件目录之外。失败测试现在保留仍运行的宿主及其已安装文件供检查，不再直接终止它们。
 - HTTP 响应未声明 UTF-8 时，Windows PowerShell 5.1 用旧版默认编码解析 JSON。DDE 打开的中文路径在宿主和 PowerShell 7 中正确，在 5.1 客户端乱码：`artifacts/instances-dc1ac592ad984e23965e111b8f4f3e3e/inspection.json`。新增的原始 UTF-8 与 HTTP 客户端解码对照断言在修复前失败；共享响应改为声明 `charset=utf-8`，两个连接描述读取入口均显式使用 UTF-8。中文会话目录检查覆盖发现、归属、过期身份及重启，并使用有效 JSON 夹具。
 - 完整回归入口适配 Windows PowerShell 5.1：加载标准压缩程序集，为四份中文测试脚本保留 UTF-8 BOM，使用可用的以二为底对数，通过对象属性保留 JSON 数组，按 JSON 错误码而非空白格式匹配错误。保留原有断言和音乐功能范围。未完成轮次仍算失败；保留的未保存夹具已另存供检查，所有保留宿主关闭后才重新完整回归。
 - `09185ab` 检查点核心 SHA-256：`A22ECD07B9C48776CF25CA1E9FA4A8C650CF9E93841F511380FF97FE7F73227F`。十五组、2276 项在 Windows PowerShell 5.1.19041.6456 与 PowerShell 7.6.5 分别完整通过，退出码为 0，连接描述均删除：`artifacts/regression-9e09be6fb7784486bc7423a8a50cd9f5/regression.json`、`artifacts/regression-b7fb07a5f6c14bd5abe4811a36c14159/regression.json`。原生源码哈希已与最终工作区核对。
@@ -276,7 +276,7 @@ Windows 文件关联同时使用进程启动和注册的 DDE 命令。隔离 DDE
 - 修复另存后仅改变 `saveFilePath` 的问题。输出保存并校验成功后，按原生 `IDocument::saveAs` 顺序更新 `openedFilePath`，发出 `openedFilePathChanged` 与 `filePathChanged`，同步标签、提示、窗口标题和对应文档菜单名称。保存副本保留两种路径；失败恢复分别返回 `opened_path_restored` 与 `save_path_restored`。
 - 只读调查确认两个路径设置方法本身不发出通知。证据在 `artifacts/save-label-native/` 的 `debug.json`、`path-setters.txt` 和 `save-as.txt`；生产实现使用 Qt 元对象调用，未采用调查地址执行写入。
 - 保存专项从 30 项增加到 47 项，验证已有文档和未命名模板的另存、中文文件名、两种路径与界面名称、旧路径独立打开、新路径复用、UUID 及撤销重做/再次保存。故障专项仍为 167 项，增加打开路径恢复读回要求。
-- 修正整套回归对旧打开路径行为的依赖：每组结束核对夹具字节和干净状态，按同一 UUID 识别采用新路径的测试文档，关闭后重开原始夹具；核对其他文档未变并记录 `fixture_restorations`。根目录与原生 README 改用 `test-all.ps1`，单项脚本仍需满足自己的夹具前提。
+- 修正整套回归对旧打开路径行为的依赖：每组结束核对夹具字节和干净状态，按同一 UUID 识别采用新路径的测试文档，关闭后重开原始夹具；核对其他文档未变并记录 `fixture_restorations`。根目录与原生 README 改用 `test/test-all.ps1`，单项脚本仍需满足自己的夹具前提。
 - 首次整套回归因已关闭文档仍留有勾选菜单动作而误判当前名称，失败证据保留在 `artifacts/regression-a58ec49485ff46788c1621e7b8397559/regression.json`。保存测试改为核对当前 `Tab_N` 对应的 `OpenedDocumentAction_N`；未修改宿主菜单启用状态，菜单可用性仍由独立专项验证。
 - 当前核心 SHA-256 为 `7775931BBE25D049D095887C017F73DE44894416AD8ADC858E3FA45B14814971`，自动加载器为 `1E27325EBC9E3D83BF9B7E09224C9E7244A83ED82FDB1A882CA7B373E04CEC5F`，宿主为 `B233B0F1C87DEB3AECE693D51E8D3C3A841C88FEE78828607B20034737C4C6DF`。PowerShell 7.6.5 与 Windows PowerShell 5.1.19041.6456 各完整通过十六组、2486 项并正常退出：`artifacts/regression-03bca8639e8a447b994d56f49deba77f/regression.json`、`artifacts/regression-b1474eed170c4298bc6d9526fad40170/regression.json`。
 - 同一核心的 Windows PowerShell 5.1 保存故障专项通过 167 项并正常退出：`artifacts/save-recovery-a706bcc394a04f8bb2bf2eef4b11427a/verification.json`。新宿主原生菜单专项通过 221 项，`menu_verified=true`：`artifacts/document-tabs-3a21e86f47334806a28be46a4afec6f7/verification.json`；采用 15000 ms 启动等待，退出及三次恢复/隐藏观察保存在 `artifacts/save-label-menu-bed7e9d147bf47ef91701d7cc2cd1e85/`。
@@ -286,7 +286,7 @@ Windows 文件关联同时使用进程启动和注册的 DDE 命令。隔离 DDE
 
 - 复现第二次恢复主窗口后文档菜单禁用。只读 Qt 事件和动作变化探针定位到宿主的原生焦点窗口通知处理路径：通知到达时，宿主重新检查活动主窗口并更新动作。仅显示窗口无法触发这条更新路径，单独设置 Qt 逻辑活动窗口的试验也未通过。
 - `gp_window restore` 在 `showNormal()` 后调用公开的 `activateWindow()`，显示并请求激活窗口，可将窗口带到前台。`hide` 恢复不抢焦点的后台模式；普通后台文档工具不依赖 `restore`。没有新增私有 ABI 调用或直接设置菜单启用状态。工具说明和 README 已明确窗口激活行为。
-- 标签专项扩展到 281 项，实际触发三次隐藏/恢复后的五个文档菜单并逐项核对 UUID，验证后台焦点隔离，以及存在原生关闭确认框时恢复后仍保持模态保护并可取消。基础分支为 196 项；完整入口 `test-all.ps1` 默认启用原生菜单分支，不能跳过失败的菜单检查。
+- 标签专项扩展到 281 项，实际触发三次隐藏/恢复后的五个文档菜单并逐项核对 UUID，验证后台焦点隔离，以及存在原生关闭确认框时恢复后仍保持模态保护并可取消。基础分支为 196 项；完整入口 `test/test-all.ps1` 默认启用原生菜单分支，不能跳过失败的菜单检查。
 - 原始复现状态在 `artifacts/menu-context-2fba4bab4e3445aba4c2cef9a6ad93a5/cycles.json`。只读调用栈和反汇编在 `artifacts/menu-probe-553f7e6f35784b4ea8984a42be527797/`，包括 `menu-events.jsonl`、`update-actions.txt`、`check-active-window.txt` 和 `focus-notification.txt`。调查探针仅位于开发目录，不进入安装包。
 - 最终核心 SHA-256 为 `58A49CDD43C6829C03C4E4E60252A693380769628304EE4EC46BCFB6EC6C567F`，自动加载器为 `DC1FF8ED97731585D950E4548745930636448135B264F2BC677865F9AB5AE40D`，宿主为 `B233B0F1C87DEB3AECE693D51E8D3C3A841C88FEE78828607B20034737C4C6DF`。PowerShell 7.6.5 和 Windows PowerShell 5.1.19041.6456 各完整通过十六组、2574 项并正常退出，连接描述已清理：`artifacts/regression-89d802af6b7048c1af5ca9b5b6f98e2a/regression.json`、`artifacts/regression-a9757085257743968b98fd9ffede8d9b/regression.json`。
 - 两轮 281 项标签专项均记录 `menu_verified=true`：`artifacts/document-tabs-a757a290bb3f4346bb3c155d66030314/verification.json`、`artifacts/document-tabs-93b5e00541df4318baea186a998b9811/verification.json`。相同核心的 Windows PowerShell 5.1 保存故障恢复另通过 167 项并正常退出：`artifacts/save-recovery-bfe0efd62a504dcba05ff2e49774f1db/verification.json`。

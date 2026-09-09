@@ -10,7 +10,7 @@ P0 已于 2026-09-07 在 Guitar Pro 8.1.1.17 x64 / Qt 5.15.3 上通过验收。
 
 ## 可复现的探针验证
 
-先运行 `native/build-autoload-probe.ps1`，再运行 `native/test-autoload-probe.ps1`。测试把已安装运行文件复制到唯一的 `.tools/autoload-host-*` 目录，只修改该副本。探针仅向副本目录记录 PID、EXE 路径、Qt 版本和通用插件环境，不修改曲谱。观察结束后停止测试创建的进程。
+先运行 `test/build-autoload-probe.ps1`，再运行 `test/test-autoload-probe.ps1`。测试把已安装运行文件复制到唯一的 `.tools/autoload-host-*` 目录，只修改该副本。探针仅向副本目录记录 PID、EXE 路径、Qt 版本和通用插件环境，不修改曲谱。观察结束后停止测试创建的进程。
 
 在未设置 `QT_PLUGIN_PATH`、`QT_QPA_GENERIC_PLUGINS` 或 `GPMCP_SESSION_FILE` 的条件下，已验证：
 
