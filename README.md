@@ -40,7 +40,7 @@ MCP 客户端 -> 本机 HTTP /mcp -> GuitarPro.exe 内的 C++ 插件 -> Qt/GPCor
 关闭测试宿主后运行完整原生回归：
 
 ```powershell
-./native/test-all.ps1
+./test/test-all.ps1
 ```
 
 可使用 `-Exe` 指定隔离宿主。真实宿主回归需要 Guitar Pro 8.1.1.17 及匹配的宿主文件哈希。

@@ -48,7 +48,7 @@
 | 保存与标签故障恢复 | 保存恢复 380 项；标签恢复 405 项；关闭干净文档并在恢复期间新增文档分支 397 项，均正常退出 | `artifacts/save-recovery-2718d30fff4147539f75c507e6af7c3e/verification.json`、`artifacts/tab-recovery-a87c5d2abe37489f850dee9d0522b725/verification.json`、`artifacts/tab-recovery-9fc4d2d306c94615a28e07ff150a1f3a/verification.json` |
 | 真实安装生命周期与入口 | 真实 `Program Files` 目录 52 项；更新、安装、停用/启用、卸载、重装、设置凭据保留通过。普通用户 EXE、快捷方式、文件关联和后台入口 68 项通过 | `artifacts/installed-lifecycle-88b4e0a3be3440c8af820ab3bc16a2c5/verification.json`、`artifacts/installed-entrypoints-a52fae8a2a47432181b345aaa1cf8c41/verification.json` |
 
-持续运行期间资源有约 126 MiB 的混合阶段增长，但关闭十份文档后回落约 76 MiB，句柄、线程、文档及音频文档对象均回落；这支持“未观察到文档生命周期泄漏”的结论，不把宿主缓存误称为零增长。候选包的 `native/test-audio.ps1 -Render` 本次生成了 89 项 PCM 证据但结束时留下未保存对话框，`complete=false`，因此不计为完整通过；P6 生产 WAV 证据仍有效。
+持续运行期间资源有约 126 MiB 的混合阶段增长，但关闭十份文档后回落约 76 MiB，句柄、线程、文档及音频文档对象均回落；这支持“未观察到文档生命周期泄漏”的结论，不把宿主缓存误称为零增长。候选包的 `test/test-audio.ps1 -Render` 本次生成了 89 项 PCM 证据但结束时留下未保存对话框，`complete=false`，因此不计为完整通过；P6 生产 WAV 证据仍有效。
 
 持续运行夹具由原生模板、剪贴板和保存生成，含吉他、钢琴双谱表、打击乐、多声部及速度自动化，共 514 小节。GPIF 会复用相同的节拍和音符节点，因此按实际引用次数统计规模，不能仅数唯一 XML 节点。嵌套连音、长连接链、移调乐器和复杂反复跳转由上述完整回归覆盖。
 
@@ -73,7 +73,7 @@ AMNetwork 快速退出继续作为明确的最小发布范围限制，不计为�
 
 按本次最小必要范围完成。完整边界和 API 说明见 [原生 API 参考](../../native/API.md#播放与音频)。最终构建在 PowerShell 7.6.5 通过 21 组、4056 项回归，`complete=true`，宿主退出码 0，会话描述已清理：`artifacts/regression-bb637050ad1448b4bce39929131450f3/regression.json`。
 
-新增 `native/test-audio.ps1 -Render` 在最终回归通过 100 项：`artifacts/native-audio-970f775bf5504ff29275f5ffd4f57ac3/verification.json`。同一最终构建的独立专项也通过 100 项：`artifacts/native-audio-690410935e1f426a91f093b31b5bbf55/verification.json`。测试包括速度点增删/渐变/边界/撤销重做/GPIF/重开，效果旁路/参数/顺序/删除、音色选择、MIDI program、设备枚举/更换/恢复/无效值/播放中拒绝，反复和房子逐小节序列、D.C. al Fine、分页定位、循环真实回跳、立即播放停止、待播放时切换文档和其他文档不变。
+新增 `test/test-audio.ps1 -Render` 在最终回归通过 100 项：`artifacts/native-audio-970f775bf5504ff29275f5ffd4f57ac3/verification.json`。同一最终构建的独立专项也通过 100 项：`artifacts/native-audio-690410935e1f426a91f093b31b5bbf55/verification.json`。测试包括速度点增删/渐变/边界/撤销重做/GPIF/重开，效果旁路/参数/顺序/删除、音色选择、MIDI program、设备枚举/更换/恢复/无效值/播放中拒绝，反复和房子逐小节序列、D.C. al Fine、分页定位、循环真实回跳、立即播放停止、待播放时切换文档和其他文档不变。
 
 原生 44100 帧/秒双声道浮点 PCM：两小节 90 BPM 为 235200 帧；第二小节改 180 BPM 为 176400；首点向第二点渐变为 137200；整段反复 3 次为 705600。逐次核对渲染帧数与原生时长，并验证非静音、音量归零衰减、左右声像、混响参数和钢琴音色替换的能量差异。探针只在 `GPMCP_DEVELOPMENT=1` 开放，最大 30 秒，不是 P6 文件导出接口。未穷举全部技法或每种音源输出。
 
@@ -87,7 +87,7 @@ AMNetwork 快速退出继续作为明确的最小发布范围限制，不计为�
 
 按本次最小必要范围完成。范围和 API 说明见 [原生 API 参考](../../native/API.md#原生选区)。最终构建在 PowerShell 7.6.5 通过 20 组、3956 项回归，`complete=true`、退出码为 0，连接描述已清理：`artifacts/regression-1204f8c47bd54f778f5c17ab010e7dd9/regression.json`。
 
-新增 `native/test-transfer.ps1` 通过 224 项，证据为 `artifacts/native-transfer-71beb2b2ef594e82b2537a510ca1514a/verification.json`。覆盖单拍/小节重复、100 次及 128 小节边界、51 轨片段重复后的 20000 拍拒绝、文本保留与过滤、跨小节剪切/整小节替换、多轨清空/删除、部分音轨/声部与钢琴下谱表隔离、键盘/打击乐单音、不同调弦/变调夹/记谱移调、乐器和原弦可演奏性拒绝、一次撤销/重做和原生保存重开。旧选区 980 项、剪贴板 112 项均在最终构建重新通过。
+新增 `test/test-transfer.ps1` 通过 224 项，证据为 `artifacts/native-transfer-71beb2b2ef594e82b2537a510ca1514a/verification.json`。覆盖单拍/小节重复、100 次及 128 小节边界、51 轨片段重复后的 20000 拍拒绝、文本保留与过滤、跨小节剪切/整小节替换、多轨清空/删除、部分音轨/声部与钢琴下谱表隔离、键盘/打击乐单音、不同调弦/变调夹/记谱移调、乐器和原弦可演奏性拒绝、一次撤销/重做和原生保存重开。旧选区 980 项、剪贴板 112 项均在最终构建重新通过。
 
 核心 SHA-256：`1CC3F53C596DBDA772A47C4AD5774E561E4D5F535C5858AD1710253C359EDE0F`；自动加载器：`16A588466C6C3199A55B8DC499C8630B8E9F8FFD0E11685583C5BCC4950C6519`。候选包：`artifacts/GuitarProMCP-0.3.0-9597dd29fefa4766baba900518efa781.zip`，SHA-256：`E2A6999843CF2A43B1E9C74430AED20B888C971A819300EE43B9E435E031D10D`；包内 DLL 与回归构建一致。该段记录的是 P4 阶段候选包，后续真实安装和发布状态以 P7 验收为准。
 
@@ -119,7 +119,7 @@ P3 核心 SHA-256 为 `2AFEC99F536990E0A7C2506A444B152D355D4799F09B73A7F743217D0
 
 ### P2 已验收基线
 
-P2 必要范围在 2026-09-07 按用户决定排除三项宿主限制：独立 GUI 多开、原生标签拖动和原生保存进度取消。单实例、多文档、标准客户端、可确认的取消及失败恢复的完整入口为 `native/test-p2.ps1`。最终双版本证据在 `artifacts/p2-6716e7c27dd14c0599dc4c568de4cbcd/verification.json`，全部 14 个构建/执行步骤退出码为 0。
+P2 必要范围在 2026-09-07 按用户决定排除三项宿主限制：独立 GUI 多开、原生标签拖动和原生保存进度取消。单实例、多文档、标准客户端、可确认的取消及失败恢复的完整入口为 `test/test-p2.ps1`。最终双版本证据在 `artifacts/p2-6716e7c27dd14c0599dc4c568de4cbcd/verification.json`，全部 14 个构建/执行步骤退出码为 0。
 
 P2 验收核心 SHA-256：`9A6FC7D11C4C87B98838D556DDEE0B9D928B09D6E2831C5F040D1525949C6ACC`；自动加载器：`3F706CE5E0B73515F1766473A682C09F852EBC61183086B54111E8FA30BE3F05`。PowerShell 7 与 Windows PowerShell 5.1 各通过完整功能回归 2588 项、保存恢复 380 项、标签及原生异常恢复 405 项、文档集合变化 397 项、连接/Inspector/DDE 72 项，每个版本 3842 项，合计执行 7684 项。完整功能回归为 `artifacts/regression-64a332ab0d5b43cdbc3e39fde52334db/regression.json` 和 `artifacts/regression-3eb4aa4f71444e1185d08d3578674920/regression.json`；所有测试宿主正常退出并清理连接描述。
 
@@ -201,7 +201,7 @@ P2 上一检查点十四组回归共 2225 项通过，退出码为 0，连接描
 
 同一构建的连接专项为 53 项通过，包括保留已退出进程句柄时重新接管旧连接描述。PowerShell 7 证据为 `artifacts/instances-d32b829a0032440a86a001624a5d01df/verification.json`，Windows PowerShell 5.1 证据为 `artifacts/instances-5524513fd40d4b2b988926b4abf5fd92/verification.json`。两轮均未将二次启动打开文件或独立 GUI 多进程计入通过范围。
 
-连接专项 52 项通过：`artifacts/instances-019140371f2f41f882a28657709dbe21/verification.json`，覆盖发现去重、两个客户端同时编辑同一或不同文档、错误实例拒绝、重连、重启后旧文档 ID 失效、端口回退和退出清理。此记录对应保存功能加入前的构建。旧版 `test-instances.ps1 -CheckLaunchForwarding` 仅重复执行命令行，在后台和可见模式均未打开第二份曲谱，可见模式失败证据为 `artifacts/instances-fa5b0650158348838bc0f681a3f46daa/verification.json`。该失败记录保留；新版专项按实际注册协议加入 DDE，并核对接收进程与文档内容。
+连接专项 52 项通过：`artifacts/instances-019140371f2f41f882a28657709dbe21/verification.json`，覆盖发现去重、两个客户端同时编辑同一或不同文档、错误实例拒绝、重连、重启后旧文档 ID 失效、端口回退和退出清理。此记录对应保存功能加入前的构建。旧版 `test/test-instances.ps1 -CheckLaunchForwarding` 仅重复执行命令行，在后台和可见模式均未打开第二份曲谱，可见模式失败证据为 `artifacts/instances-fa5b0650158348838bc0f681a3f46daa/verification.json`。该失败记录保留；新版专项按实际注册协议加入 DDE，并核对接收进程与文档内容。
 
 P1 候选检查点 DLL 的十三组回归共 2195 项通过，进程退出码为 0 且连接文件已清理，证据为 `artifacts/regression-f1463f227d554ba0b74060538e9ff651/regression.json`。安装检查 43 项及协议 26 项、安装文件归属和配置检查 23 项通过。阶段状态和安装包见 [开发计划](../DEVELOPMENT_PLAN.md)。实际安装目录仍为旧版，最终真实启动入口验收尚未完成。
 
@@ -215,25 +215,25 @@ P1 候选检查点 DLL 的十三组回归共 2195 项通过，进程退出码为
 
 2026-09-07 在默认配置重新运行协议 26 项、原生后台 26 项、插件独立剪贴板 112 项，共 164 项通过。另确认三项实验性 `native_*` 操作在默认模式下拒绝执行，且插件缓冲区不变。该轮原生证据为 `artifacts/native-verification-19374c9022ec416ea4d36317884fd6f6/verification.json` 和 `artifacts/native-clipboard-6dd5d970ccb34e99b7028e3131c22f67/verification.json`；没有将未完成的宿主剪贴板验证加入历史累计数。
 
-- `native/test-mcp.ps1`：27 项协议、会话、鉴权、消息分帧、参数边界和 HTTP 客户端 UTF-8 解码检查。
-- `native/test-native.ps1`：26 项真实宿主后台检查，读取保存文件内部的 `Content/score.gpif` 验证标题和音符变化。
-- `native/test-editing.ps1`：58 项单拍音符/节拍编辑、无效参数、撤销重做、GPIF 音符引用和附点时值检查。
-- `native/test-tracks.ps1`：90 项音轨新增/复制/删除/交换、零轨恢复、跨文档配置复用、名称/颜色/混音/播放状态、无效输入、撤销及 GPIF 持久化检查。
-- `native/test-measures.ps1`：118 项拍号/实音调号边界、小节隔离、音高与拼写、反复/小节线/自由拍号、撤销和 GPIF；反复 3/100 次时的时间线、绝对 tick 定位和小节偏移越界检查。
-- `native/test-effects.ps1`：254 项音符技法检查，覆盖 21 种非默认取值、清除、重复设置、单音/声部/音轨隔离、光标不变、撤销重做、逐项 GPIF 和组合技法的原生保存/重开。
-- `native/test-selection.ps1`：980 项原生选区和批量时值检查，覆盖方向、端点、全选、模式复位、和弦/第二声部/其他音轨单音、无效输入、实际目标位置、四声部音乐时间映射、跨轨整曲和单小节、钢琴双谱表、128 小节限制、临时占位拍清理及重建、宏命令一次撤销、重做、重复写入和原生保存/重开。
-- `native/test-saving.ps1`：47 项当前路径保存、显式覆盖、目标保护、写入前拒绝后的状态保留、两种路径及标签/提示/窗口/对应菜单名称更新、中文文件名、旧路径独立打开、新路径复用及保存重开检查。
-- `native/test-save-recovery.ps1`：独立隔离宿主中的 264 项原生部分写入失败、损坏输出、保存后校验失败、原生保存/路径通知异常、恢复再次异常时保留备份与写入阻塞、错误提示控制、保存后关闭失败、撤销重做、再次保存重开及正常退出检查。使用单独构建的测试探针，不包含于常规回归或生产安装包。
-- `native/test-tab-recovery.ps1`：独立隔离宿主中的 330 项完整顺序、故障回滚、显式恢复重试、过期及重复请求、模态保护、内容/撤销隔离、恢复后编辑保存重开及请求历史检查；`-CloseCleanDocuments` 分支为 327 项，另核验宿主关闭干净文档后取消确认、剩余文档状态及原关闭结果保留。独立构建探针不进入生产包。
-- `native/test-document-operations.ps1`：50 项请求状态、保存/丢弃/取消关闭、原生确认与取消、过期请求隔离、64 条历史淘汰及损坏 ZIP/GPIF 拒绝检查。
-- `native/test-document-tabs.ps1`：基础 196 项插件重排、同名及未命名文档、四份未保存曲谱、稳定身份、活动文档保持、撤销重做、可见标签坐标、模态恢复/拒绝/取消、保存重开与关闭隔离检查。`-VerifyDocumentMenu` 扩展至 281 项，逐项触发三次隐藏/恢复后的原生菜单并核对目标和后台焦点；`test-all.ps1` 默认启用此分支，失败不计通过。
-- `native/test-lifecycle.ps1`：40 项定向关闭、未保存修改保护、旧 ID、无文档时继续服务、重开和窗口恢复/隐藏检查。
-- `native/test-session.ps1`：103 项原生打开、重复打开、反复切换、声部导航与编辑隔离、播放控制器关联、定位及播放/停止、初始速度与单位修改、撤销和保存、后续变速点保留检查。
-- `native/test-structure.ps1`：60 项模板新建、占位拍首音、跨文档未保存标记、节拍插入、小节管理、多音轨及钢琴上下谱表编辑隔离检查。
-- `native/test-clipboard.ps1`：112 项快照独立性、源文档关闭、单小节插入/替换、单/多声部及多轨剪切、多轨/跨小节插入与原内容顺移、空白目标、钢琴谱表隔离、兼容性拒绝、撤销重做和原生保存重开检查。
-- `native/test-tuplets.ps1`：175 项比例与参数边界、两层独立编辑/清除、嵌套、跨小节/声部/音轨、钢琴谱表、选区外隔离、时值/附点保留、重复写入、一次撤销/重做、GPIF、原生保存重开及插件内复制粘贴检查。
-- `native/test-connections.ps1`：153 项连奏与延音线检查，证据在 `artifacts/native-connections-*/verification.json`；包括原生重复命令的无模型变化及撤销记录行为。
-- `native/testdata/minimal.gp`：项目生成的简单夹具，1 条音轨、2 小节、8 个音符。
+- `test/test-mcp.ps1`：27 项协议、会话、鉴权、消息分帧、参数边界和 HTTP 客户端 UTF-8 解码检查。
+- `test/test-native.ps1`：26 项真实宿主后台检查，读取保存文件内部的 `Content/score.gpif` 验证标题和音符变化。
+- `test/test-editing.ps1`：58 项单拍音符/节拍编辑、无效参数、撤销重做、GPIF 音符引用和附点时值检查。
+- `test/test-tracks.ps1`：90 项音轨新增/复制/删除/交换、零轨恢复、跨文档配置复用、名称/颜色/混音/播放状态、无效输入、撤销及 GPIF 持久化检查。
+- `test/test-measures.ps1`：118 项拍号/实音调号边界、小节隔离、音高与拼写、反复/小节线/自由拍号、撤销和 GPIF；反复 3/100 次时的时间线、绝对 tick 定位和小节偏移越界检查。
+- `test/test-effects.ps1`：254 项音符技法检查，覆盖 21 种非默认取值、清除、重复设置、单音/声部/音轨隔离、光标不变、撤销重做、逐项 GPIF 和组合技法的原生保存/重开。
+- `test/test-selection.ps1`：980 项原生选区和批量时值检查，覆盖方向、端点、全选、模式复位、和弦/第二声部/其他音轨单音、无效输入、实际目标位置、四声部音乐时间映射、跨轨整曲和单小节、钢琴双谱表、128 小节限制、临时占位拍清理及重建、宏命令一次撤销、重做、重复写入和原生保存/重开。
+- `test/test-saving.ps1`：47 项当前路径保存、显式覆盖、目标保护、写入前拒绝后的状态保留、两种路径及标签/提示/窗口/对应菜单名称更新、中文文件名、旧路径独立打开、新路径复用及保存重开检查。
+- `test/test-save-recovery.ps1`：独立隔离宿主中的 264 项原生部分写入失败、损坏输出、保存后校验失败、原生保存/路径通知异常、恢复再次异常时保留备份与写入阻塞、错误提示控制、保存后关闭失败、撤销重做、再次保存重开及正常退出检查。使用单独构建的测试探针，不包含于常规回归或生产安装包。
+- `test/test-tab-recovery.ps1`：独立隔离宿主中的 330 项完整顺序、故障回滚、显式恢复重试、过期及重复请求、模态保护、内容/撤销隔离、恢复后编辑保存重开及请求历史检查；`-CloseCleanDocuments` 分支为 327 项，另核验宿主关闭干净文档后取消确认、剩余文档状态及原关闭结果保留。独立构建探针不进入生产包。
+- `test/test-document-operations.ps1`：50 项请求状态、保存/丢弃/取消关闭、原生确认与取消、过期请求隔离、64 条历史淘汰及损坏 ZIP/GPIF 拒绝检查。
+- `test/test-document-tabs.ps1`：基础 196 项插件重排、同名及未命名文档、四份未保存曲谱、稳定身份、活动文档保持、撤销重做、可见标签坐标、模态恢复/拒绝/取消、保存重开与关闭隔离检查。`-VerifyDocumentMenu` 扩展至 281 项，逐项触发三次隐藏/恢复后的原生菜单并核对目标和后台焦点；`test/test-all.ps1` 默认启用此分支，失败不计通过。
+- `test/test-lifecycle.ps1`：40 项定向关闭、未保存修改保护、旧 ID、无文档时继续服务、重开和窗口恢复/隐藏检查。
+- `test/test-session.ps1`：103 项原生打开、重复打开、反复切换、声部导航与编辑隔离、播放控制器关联、定位及播放/停止、初始速度与单位修改、撤销和保存、后续变速点保留检查。
+- `test/test-structure.ps1`：60 项模板新建、占位拍首音、跨文档未保存标记、节拍插入、小节管理、多音轨及钢琴上下谱表编辑隔离检查。
+- `test/test-clipboard.ps1`：112 项快照独立性、源文档关闭、单小节插入/替换、单/多声部及多轨剪切、多轨/跨小节插入与原内容顺移、空白目标、钢琴谱表隔离、兼容性拒绝、撤销重做和原生保存重开检查。
+- `test/test-tuplets.ps1`：175 项比例与参数边界、两层独立编辑/清除、嵌套、跨小节/声部/音轨、钢琴谱表、选区外隔离、时值/附点保留、重复写入、一次撤销/重做、GPIF、原生保存重开及插件内复制粘贴检查。
+- `test/test-connections.ps1`：153 项连奏与延音线检查，证据在 `artifacts/native-connections-*/verification.json`；包括原生重复命令的无模型变化及撤销记录行为。
+- `test/testdata/minimal.gp`：项目生成的简单夹具，1 条音轨、2 小节、8 个音符。
 - `artifacts/native-verification-*/verification.json`：每次运行记录宿主 PID、前台 PID、修改前后模型、保存结果和源文件哈希，不记录访问令牌。
 - 同目录的 `edited-copy.gp`、`edited.gp`、`restored.gp`：可在 Guitar Pro 中检查的输出。
 - `artifacts/native-editing-*/verification.json`、`artifacts/native-tracks-*/verification.json`、`artifacts/native-measures-*/verification.json`、`artifacts/native-effects-*/verification.json`、`artifacts/native-selection-*/verification.json`、`artifacts/native-lifecycle-*/verification.json`、`artifacts/native-session-*/verification.json`、`artifacts/native-structure-*/verification.json`、`artifacts/native-clipboard-*/verification.json`、`artifacts/native-tuplets-*/verification.json`、`artifacts/native-connections-*/verification.json`：各原生功能检查的模型与保存证据；包括协议检查在内，十三组累计 2195 项通过。

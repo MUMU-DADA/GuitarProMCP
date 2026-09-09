@@ -75,7 +75,7 @@ P9 用于归拢当前截图及实际用户编辑流程中尚未覆盖的按钮�
 
 状态：完成可核验范围并新增符干方向和实验性音轨自动化保留路径（2026-09-09）。使用 Windows x64 Guitar Pro 8.1.1.17 隔离开发宿主，实际加载当前构建的 `guitarpro_mcp.dll`，SHA-256 以专项证据 `verification.json` 为准。
 
-`native/test-p9.ps1` 通过 65 项：读取 P9 能力矩阵、检查 `gp_capabilities` 公共矩阵、检查节拍文本/力度/符干/谱号工具映射、读取音轨自动化并验证严格拒绝参数、保留 `Sound` 点的实验性 DSP 参数写入/不变写入/撤销重做/删除、打开真实 `.gp` 夹具、写入 Unicode 文本、选区批量写入、清除、`PPP`–`FFF` 力度标记光标/选区写入、`Upward`/`Downward`/`auto` 符干方向光标/选区写入、`G2/F4/C3` 谱号写入、dirty、撤销/重做、保存、独立重开读回和关闭清理。具名证据为最新 `artifacts/native-p9-1666ae49cb204e44a9c18183b6440c9c/verification.json`，其中 `complete=true`。随后完整 `test-all.ps1` 通过 24 组、4406 项，证据为 `artifacts/regression-6b51102da11049a0b4fcfb39902da538/regression.json`，退出码 0 且连接描述已清理；PowerShell 语法检查和 `git diff --check` 通过。
+`test/test-p9.ps1` 通过 65 项：读取 P9 能力矩阵、检查 `gp_capabilities` 公共矩阵、检查节拍文本/力度/符干/谱号工具映射、读取音轨自动化并验证严格拒绝参数、保留 `Sound` 点的实验性 DSP 参数写入/不变写入/撤销重做/删除、打开真实 `.gp` 夹具、写入 Unicode 文本、选区批量写入、清除、`PPP`–`FFF` 力度标记光标/选区写入、`Upward`/`Downward`/`auto` 符干方向光标/选区写入、`G2/F4/C3` 谱号写入、dirty、撤销/重做、保存、独立重开读回和关闭清理。具名证据为最新 `artifacts/native-p9-1666ae49cb204e44a9c18183b6440c9c/verification.json`，其中 `complete=true`。随后完整 `test/test-all.ps1` 通过 24 组、4406 项，证据为 `artifacts/regression-6b51102da11049a0b4fcfb39902da538/regression.json`，退出码 0 且连接描述已清理；PowerShell 语法检查和 `git diff --check` 通过。
 
 能力矩阵还记录了沿用 P5/P8 能力及明确边界：音轨自动化只提供实验性 DSP 参数曲线，力度/表情/音量自动化、力度清除、细粒度符杠分组及排版、任意乐器/指法为宿主受限；系统剪贴板为实验性且默认关闭；剩余技法组合不作穷举。矩阵通过 `gp_p9_status` 和 `gp_capabilities.p9` 提供，未核验的宿主 ABI 不会因菜单可枚举或 DLL 加载而被标为完成。
 
@@ -111,12 +111,12 @@ P9 用于归拢当前截图及实际用户编辑流程中尚未覆盖的按钮�
 
 - `gp_preferences` 继续使用显式模型和属性 allowlist，state 返回实际值及 `property_info` 的 choices/type 信息；枚举、数值、布尔、字符串和字符串列表分别校验，错误输入不得改变设置。
 - 应用偏好不进入曲谱撤销栈，但必须验证设置失败恢复、Qt 主线程顺序、多个文档不受错误目标影响，以及配置不写入源码目录。
-- `native/test-p10.ps1` 覆盖一般/界面/我的资讯/音频/MIDI 的读取、allowlist 拒绝、同值设置和读回、音频 choices、乐谱错误五项、跨宿主重启持久化和新建曲谱默认资讯继承；缺失模型仍按 `host_limited` 记录。
+- `test/test-p10.ps1` 覆盖一般/界面/我的资讯/音频/MIDI 的读取、allowlist 拒绝、同值设置和读回、音频 choices、乐谱错误五项、跨宿主重启持久化和新建曲谱默认资讯继承；缺失模型仍按 `host_limited` 记录。
 - 只在 `native/supported-host.json` 已核验的 Guitar Pro 8.1.1.17 上启用；新宿主构建必须单独记录模型属性、枚举、行为和回归证据。没有实际模型读回和持久化证据时，P10 保持“计划中”或按项标记为“宿主受限”。
 
 ### P10.6 当前实现证据
 
-`native/test-p10.ps1 -SessionFile <session.json> -VerifyRestart` 在 Guitar Pro 8.1.1.17 上通过 98 项：五类模型均可访问，实际可写字段完成同值读回，显式 allowlist 和错误输入拒绝、音频输出通道 choices、MIDI 输出列表/采集灵敏度、五项乐谱错误开关、`forceNotation` 跨宿主重启持久化，以及 `user_info.tab` 到新建曲谱 `Tabber` 的默认继承。具名证据为 `artifacts/native-p10-89b706d861a941659cc7b1806098b3c5/verification.json`，其中 `complete=true`；同一构建插件 SHA-256 为 `B5DB3991C4BCA16F5C76134F1F730D23310B5DE6FBA541B8C44FDCCE7EF85FA7`。更新/Beta、每路 MIDI 延迟、通道检测和驱动控制面板仍按宿主受限或待调查保留。
+`test/test-p10.ps1 -SessionFile <session.json> -VerifyRestart` 在 Guitar Pro 8.1.1.17 上通过 98 项：五类模型均可访问，实际可写字段完成同值读回，显式 allowlist 和错误输入拒绝、音频输出通道 choices、MIDI 输出列表/采集灵敏度、五项乐谱错误开关、`forceNotation` 跨宿主重启持久化，以及 `user_info.tab` 到新建曲谱 `Tabber` 的默认继承。具名证据为 `artifacts/native-p10-89b706d861a941659cc7b1806098b3c5/verification.json`，其中 `complete=true`；同一构建插件 SHA-256 为 `B5DB3991C4BCA16F5C76134F1F730D23310B5DE6FBA541B8C44FDCCE7EF85FA7`。更新/Beta、每路 MIDI 延迟、通道检测和驱动控制面板仍按宿主受限或待调查保留。
 
 ## 历史记录
 

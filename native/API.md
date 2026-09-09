@@ -113,16 +113,16 @@ PowerShell 的 `Invoke-McpTool` 默认等待三个保存工具的结果，保持
 
 `opened_path` 对应宿主当前 `openedFilePath`，不是不可变的来源记录。另存成功后它和 `save_path` 一同采用新文件，文档 UUID 与撤销历史保持不变；原路径重新打开为独立文档，新路径重复打开返回已有文档。保存副本不改变两种路径。实现沿用宿主 `saveAs` 的顺序：原生保存并校验输出后调用 `setOpenedFilePath`，再发出 `openedFilePathChanged` 和 `filePathChanged`，让宿主更新标签、提示、窗口标题和文档菜单名称。两个路径设置方法本身不会发出这些通知，生产代码通过 Qt 元对象调用，不使用调查时的私有地址。
 
-`test-saving.ps1` 的 47 项检查覆盖当前路径保存、显式覆盖、复制和另存为、跨文档保护、锁定目标和缺失目录、GPIF 与原生重开、未命名文档拒绝及临时文件清理，并检查中文文件名、两种路径、标签/提示/窗口/对应菜单名称、旧路径独立打开和新路径复用。菜单名称检查按当前 `Tab_N` 对应的 `OpenedDocumentAction_N` 定位，因为宿主会保留已关闭文档的动作对象；此检查不证明菜单可用性。锁定文件的拒绝发生在原生写入之前，不能代替写入中途失败后的恢复验证。保存后撤销再重做恢复内容，当前宿主仍可能报告未保存；再次保存会恢复其原生已保存状态。
+`test/test-saving.ps1` 的 47 项检查覆盖当前路径保存、显式覆盖、复制和另存为、跨文档保护、锁定目标和缺失目录、GPIF 与原生重开、未命名文档拒绝及临时文件清理，并检查中文文件名、两种路径、标签/提示/窗口/对应菜单名称、旧路径独立打开和新路径复用。菜单名称检查按当前 `Tab_N` 对应的 `OpenedDocumentAction_N` 定位，因为宿主会保留已关闭文档的动作对象；此检查不证明菜单可用性。锁定文件的拒绝发生在原生写入之前，不能代替写入中途失败后的恢复验证。保存后撤销再重做恢复内容，当前宿主仍可能报告未保存；再次保存会恢复其原生已保存状态。
 
-`test-save-recovery.ps1` 向独立测试进程加载 `save-fault-probe`，只对随机命名的目标及其宿主备份注入 Windows 部分写入错误、输出损坏、恢复锁定和原生通知 C++ 异常。宿主会先重试备份写入，再尝试直接写目标，因此写入故障持续到当前请求结束。保存后校验测试在观察到原生 `isDirtyChanged(false)` 后破坏输出，验证原文件、路径和未保存标记恢复，以及撤销、重做和再次保存重开。恢复再次异常时保留备份、未保存内容和写入阻塞；`gp_recover` 只重试保留的路径及未保存状态通知，不重新写文件。测试也锁定已恢复的输出文件，确认状态恢复不依赖再次覆盖文件。探针通过独立构建生成，生产安装包不包含它；测试只接受 `.tools` 下的隔离宿主。
+`test/test-save-recovery.ps1` 向独立测试进程加载 `save-fault-probe`，只对随机命名的目标及其宿主备份注入 Windows 部分写入错误、输出损坏、恢复锁定和原生通知 C++ 异常。宿主会先重试备份写入，再尝试直接写目标，因此写入故障持续到当前请求结束。保存后校验测试在观察到原生 `isDirtyChanged(false)` 后破坏输出，验证原文件、路径和未保存标记恢复，以及撤销、重做和再次保存重开。恢复再次异常时保留备份、未保存内容和写入阻塞；`gp_recover` 只重试保留的路径及未保存状态通知，不重新写文件。测试也锁定已恢复的输出文件，确认状态恢复不依赖再次覆盖文件。探针通过独立构建生成，生产安装包不包含它；测试只接受 `.tools` 下的隔离宿主。
 
 ```powershell
-./native/build-save-fault-probe.ps1
-./native/test-save-recovery.ps1 -Exe '<isolated .tools host>/GuitarPro.exe'
+./test/build-save-fault-probe.ps1
+./test/test-save-recovery.ps1 -Exe '<isolated .tools host>/GuitarPro.exe'
 ```
 
-完整 P2 回归入口为 `native/test-p2.ps1 -HostDirectory '<isolated .tools host>'`，依次构建核心及测试探针，在 PowerShell 7 和 Windows PowerShell 5.1 下执行完整功能回归、保存恢复、晚到的新建/打开结果、标签恢复及文档集合变化、连接身份和 DDE 流程。标准客户端检查使用官方 MCP Inspector 2.5.0 和 Node 22，可用 `-NodeExe C:/path/to/node.exe` 指定测试运行时；测试前可运行 `npm install --prefix .tools/mcp-client --ignore-scripts --no-audit --no-fund @modelcontextprotocol/inspector@2.5.0`。Inspector 只属于开发测试环境，不进入插件或安装包。测试宿主需要正常写入 Guitar Pro 自己的自动备份目录，运行时不能用文件沙箱拒绝该目录的写入。
+完整 P2 回归入口为 `test/test-p2.ps1 -HostDirectory '<isolated .tools host>'`，依次构建核心及测试探针，在 PowerShell 7 和 Windows PowerShell 5.1 下执行完整功能回归、保存恢复、晚到的新建/打开结果、标签恢复及文档集合变化、连接身份和 DDE 流程。标准客户端检查使用官方 MCP Inspector 2.5.0 和 Node 22，可用 `-NodeExe C:/path/to/node.exe` 指定测试运行时；测试前可运行 `npm install --prefix .tools/mcp-client --ignore-scripts --no-audit --no-fund @modelcontextprotocol/inspector@2.5.0`。Inspector 只属于开发测试环境，不进入插件或安装包。测试宿主需要正常写入 Guitar Pro 自己的自动备份目录，运行时不能用文件沙箱拒绝该目录的写入。
 
 新建/打开超时表示结果尚未确认；插件继续观察，不自动重放。晚到的原生文档被识别后更新原请求并解除阻塞。`recovery_available=false` 时不能用 `gp_recover` 强制清除未知结果。取消只适用于尚未执行的请求或当前可取消的原生对话框；同步原生调用未处理事件时无法被抢占，实际保存完成优先于取消请求。原生保存进度流程仍需独立证据，不能用取消错误提示框的测试代替。
 
@@ -206,7 +206,7 @@ Invoke-McpTool $connection gp_edit_beat @{operation='tuplet';scope='selection';l
 
 `gp_read_bars` 每拍新增 `tuplets.primary` 和 `tuplets.secondary`，每层包含 `enabled/actual/normal`。没有连音时通常为 `false/0/0`；字段来自宿主 getter，保留原始比例。原有 `rhythm` 字符串继续提供，但客户端无需解析它来读取连音。
 
-`test-tuplets.ps1` 的 175 项检查验证十种比例（含 `255:254`、`255:1`、`1:255`）、非法参数、光标与选区隔离、另一层及基础时值/附点保持、重复设置、一次撤销/重做、反向跨小节、跨声部/音轨、钢琴谱表及 GPIF。嵌套与单独次层已保存重开，嵌套连音还通过插件独立缓冲区复制粘贴验证。尚未验证任意比例组合的实际发声、所有分组/括号排版和极端时长的播放行为。
+`test/test-tuplets.ps1` 的 175 项检查验证十种比例（含 `255:254`、`255:1`、`1:255`）、非法参数、光标与选区隔离、另一层及基础时值/附点保持、重复设置、一次撤销/重做、反向跨小节、跨声部/音轨、钢琴谱表及 GPIF。嵌套与单独次层已保存重开，嵌套连音还通过插件独立缓冲区复制粘贴验证。尚未验证任意比例组合的实际发声、所有分组/括号排版和极端时长的播放行为。
 
 ## 连奏与延音线
 
@@ -285,7 +285,7 @@ Invoke-McpTool $connection gp_undo_redo @{operation='undo';document=$target}
 
 初步运行已观察到原生复制和快照导入，但隐藏窗口下的菜单复制/粘贴不可用，不能将其视为菜单互通已验证。完整的保存重开、对象替换和跨进程标记拒绝测试仍待完成。
 
-`test-system-clipboard.ps1` 仅允许在 `GuitarProMCP-Test-*` 独立 Windows 窗口站执行，并核对宿主的 `gp_capabilities.window_station` 与测试进程一致；普通桌面入口会在接入 MCP 前拒绝运行。项目内隔离启动探针位于 `.tools/run-isolated-clipboard.ps1`，本机 `CreateWindowStation` 返回访问被拒绝，因此尚无该组通过记录。
+`test/test-system-clipboard.ps1` 仅允许在 `GuitarProMCP-Test-*` 独立 Windows 窗口站执行，并核对宿主的 `gp_capabilities.window_station` 与测试进程一致；普通桌面入口会在接入 MCP 前拒绝运行。项目内隔离启动探针位于 `.tools/run-isolated-clipboard.ps1`，本机 `CreateWindowStation` 返回访问被拒绝，因此尚无该组通过记录。
 
 早期真实桌面测试的剪贴板恢复代码发生过栈溢出，原剪贴板未能确认恢复；后续真实剪贴板测试被自动审批拒绝。该恢复代码已移除，当前测试不再尝试备份或恢复用户桌面剪贴板。失败证据保留在 `artifacts/native-system-clipboard-*/failure.json`，不计入通过数。
 
@@ -313,7 +313,7 @@ Invoke-McpTool $connection gp_undo_redo @{operation='undo';document=$target}
 
 单音范围从当前拍构造，选择模式为 0，同时设置两个端点的弦号与 MIDI 音高，再通过原生 `ScoreModelIndex::note()` 核对目标对象。只设置弦号不足以定位，音高尚未指定时宿主会返回空对象。局部范围不会改动界面光标或选区；编辑使用宿主可撤销命令，读回目标属性、音高、品位和同拍其他音符。相同值不会重复加入撤销记录。掌根闷音和延音命令关闭了连续命令合并，使每次实际变化可独立撤销。
 
-原有 21 种取值由 `test-effects.ps1` 验证，新增技法由 `test-notation.ps1` 验证。GPIF 通过主小节、音轨小节、声部、节拍和音符引用定位检查对象，不能把 XML 音符定义数量当作实际发声次数。曲谱状态和持久化检查不代替 P5 的各音源声音效果验收。
+原有 21 种取值由 `test/test-effects.ps1` 验证，新增技法由 `test/test-notation.ps1` 验证。GPIF 通过主小节、音轨小节、声部、节拍和音符引用定位检查对象，不能把 XML 音符定义数量当作实际发声次数。曲谱状态和持久化检查不代替 P5 的各音源声音效果验收。
 
 `gp_edit_beat_effect` 使用 `grace`、`pick_stroke`、`fade`、`hairpin`、`golpe`、`ottavia`、`rasgueado`、`bar_vibrato`、`bass_attack`、`arpeggio`、`brush` 的原生名称；无效值返回 `choices`。通常以 `None` 清除，`hairpin` 以 `NoHairpin` 清除。琶音和扫弦采用宿主默认演奏时序；不另设时序编辑器。`whammy` 与上表 `bend` 使用相同七点格式，三个音高值范围为 -12..12 半音。`dead_slap` 使用布尔值，`tremolo` 使用 8/16/32/64，0 清除。装饰音转换会改写时值，清除装饰音保留转换后的时值；死拍会清空原音符，清除死拍保留休止。原生撤销可恢复这些内容。
 
@@ -363,15 +363,15 @@ Invoke-McpTool $connection gp_undo_redo @{operation='undo';document=$target}
 
 `resolution=rolled_back` 表示完整原顺序和活动文档已恢复。宿主关闭主窗口时会先关闭干净文档，再询问未保存文档，因此取消确认框后可能只剩部分文档。原对象已销毁且剩余标签、页面、相对顺序、文档数量和原生活动文档均可验证时，恢复返回 `resolution=documents_closed`、`closed_documents` 和 `rolled_back=false`；全部原文档关闭也可核验。存在新增文档时返回 `resolution=documents_changed` 和 `added_documents`，不重新打开已关闭的文件。剩余状态无法核验时继续阻塞。保存失败保留的恢复步骤也通过 `gp_recover` 重试，见保存章节。
 
-独立 `test-tab-recovery.ps1` 的标准分支执行 391 项检查，覆盖迟到的新建/打开结果、原生新建/打开/关闭完成后的异常、标签回滚及显式恢复、模态拒绝、普通原生动作和属性写入阻塞、过期/重复请求、全部原文档关闭及随后重开。`-CloseCleanDocuments -AddDocumentDuringRecovery` 另覆盖部分原文档关闭后新增文档的核验。保留原有身份、内容、撤销、保存副本、再次移动和历史记录检查。探针只绑定标记测试目录中的文档，不进入生产包。
+独立 `test/test-tab-recovery.ps1` 的标准分支执行 391 项检查，覆盖迟到的新建/打开结果、原生新建/打开/关闭完成后的异常、标签回滚及显式恢复、模态拒绝、普通原生动作和属性写入阻塞、过期/重复请求、全部原文档关闭及随后重开。`-CloseCleanDocuments -AddDocumentDuringRecovery` 另覆盖部分原文档关闭后新增文档的核验。保留原有身份、内容、撤销、保存副本、再次移动和历史记录检查。探针只绑定标记测试目录中的文档，不进入生产包。
 
 ```powershell
-./native/build-tab-fault-probe.ps1
-./native/test-tab-recovery.ps1 -Exe '<isolated .tools host>/GuitarPro.exe'
-./native/test-tab-recovery.ps1 -Exe '<isolated .tools host>/GuitarPro.exe' -CloseCleanDocuments
+./test/build-tab-fault-probe.ps1
+./test/test-tab-recovery.ps1 -Exe '<isolated .tools host>/GuitarPro.exe'
+./test/test-tab-recovery.ps1 -Exe '<isolated .tools host>/GuitarPro.exe' -CloseCleanDocuments
 ```
 
-`native/test-document-tabs.ps1` 的基础 196 项覆盖同名路径、两份同模板未命名文档、四份未保存文档、边界及错误参数、活动文档与 UUID、撤销重做、标签坐标、模态拒绝、保存重开、错位关闭，以及原生关闭确认框存在时恢复窗口后仍可取消。`-VerifyDocumentMenu` 扩展到 281 项，实际触发重排前后及三次隐藏/恢复后的五个文档菜单，逐项核对目标并验证重新隐藏后不占前台。`test-all.ps1` 默认启用这一分支，动作未启用或目标不符均失败。
+`test/test-document-tabs.ps1` 的基础 196 项覆盖同名路径、两份同模板未命名文档、四份未保存文档、边界及错误参数、活动文档与 UUID、撤销重做、标签坐标、模态拒绝、保存重开、错位关闭，以及原生关闭确认框存在时恢复窗口后仍可取消。`-VerifyDocumentMenu` 扩展到 281 项，实际触发重排前后及三次隐藏/恢复后的五个文档菜单，逐项核对目标并验证重新隐藏后不占前台。`test/test-all.ps1` 默认启用这一分支，动作未启用或目标不符均失败。
 
 用户确认直接拖动标签后顺序不变。插件重排不视为原生拖动验收；未命名文档另存后的标签和提示由保存路径通知更新，其验证见保存专项。
 
@@ -419,7 +419,7 @@ GPIF 预检使用宿主 `Qt5Gui.dll` 的 `QZipReader` 和 Qt XML 流解析器，
 
 `gp_audio_device state` 返回 `scope=application`、`configuration`、`property_types`、当前宿主 `choices` 和 `running`。`set property=... value=...` 只接受返回 choices 中的精确值；`audioOutputChannels` 只有在宿主模型可读时才会列出当前合法值，不猜测声道数量。通过宿主配置模型的 Qt 属性提交，原生配置负责持久化，不进入曲谱撤销。播放中拒绝设备修改；未知选项在修改前拒绝，原生设置失败尝试恢复旧值。Standard、Studio 2 PRO 输出与 512/1024 缓冲区已验证；ASIO、热拔插、厂商控制面板及驱动故障未验收，不声明自动恢复所有设备错误。
 
-`GPMCP_DEVELOPMENT=1` 时提供 `gp_audio_probe`，通过宿主 `AudioExportManager` 渲染最多 30 秒的测试曲谱，返回双声道浮点 PCM 的帧数、RMS、峰值及哈希。仅用于验收，不作为 P6 文件导出接口，不采集系统或麦克风声音。`test-audio.ps1 -Render` 验证速度、渐变、反复、音量/声像、效果和音色变化；默认最小夹具是 MIDI 音轨，测试副本改为 RSE 并复用 Steel Guitar / Acoustic Piano 模板。验收使用 `C:/ProgramData/Arobas Music/Soundbanks/com.arobas-music.soundbank.standard`，不能用接近静音的 MIDI 渲染证明 RSE 发声正确。
+`GPMCP_DEVELOPMENT=1` 时提供 `gp_audio_probe`，通过宿主 `AudioExportManager` 渲染最多 30 秒的测试曲谱，返回双声道浮点 PCM 的帧数、RMS、峰值及哈希。仅用于验收，不作为 P6 文件导出接口，不采集系统或麦克风声音。`test/test-audio.ps1 -Render` 验证速度、渐变、反复、音量/声像、效果和音色变化；默认最小夹具是 MIDI 音轨，测试副本改为 RSE 并复用 Steel Guitar / Acoustic Piano 模板。验收使用 `C:/ProgramData/Arobas Music/Soundbanks/com.arobas-music.soundbank.standard`，不能用接近静音的 MIDI 渲染证明 RSE 发声正确。
 
 ## Qt 对象工具
 
@@ -449,6 +449,6 @@ PDF 复用宿主原生排版和 QPrinter 打印流程，受控打印目标就是
 
 `gp_preferences` 只操作整个软件，`scope=application`，`model=general/gui/score/user_info/midi`；允许属性由 `property_info` 的显式 allowlist 列出，`values` 只返回宿主实际存在且可读的字段。枚举返回 `choices`，一般偏好覆盖默认模板/样式、页面模式、缩放和强制选项，界面偏好覆盖语言、播放游标及已确认的编辑选项，`user_info` 覆盖 `artist`、`lyrics`、`music`、`copyright`、`instructions`、`tab`，`midi` 覆盖可读的 `midiInput`、`selectedMidiOutputs`、`midiCaptureSensitivity`。设置失败会尝试恢复旧值；没有匹配的宿主模型明确返回 `status=host_limited`。偏好不进入曲谱撤销栈。`gp_presentation` 只操作返回 ID 对应的文档，一次修改页面尺寸、页面元数据、视图或谱表一组。页面边长 50..1000 毫米，边距须留下至少 20 毫米内容区域；尺寸、边距、方向和谱表显示可保存重开。缩放 0.25..4 及编辑视图属于会话状态，返回 `requested` 时应再次读取 `state` 确认。P6 的页面尺寸及显示设置不进入宿主撤销栈，同值页面设置不制造脏状态；P8 的 `page_metadata` 使用异步原生提交，整组可以一次撤销，见 [页面元数据](P8.md#页面元数据)。声音和设备参数复用 P5 的 `gp_audio_track`/`gp_audio_device`。
 
-专项：`./native/test-p6.ps1 -SessionFile <session.json>`，使用 Windows 自带的 PowerShell/.NET 核验交换格式、PNG、PCM、设置恢复和临时文档隔离。`test-exchange.ps1` 仅解析本项目简单验收夹具，不是通用转换器。开发者可显式加 `-RenderPdf` 使用已准备的 Poppler 独立复核 PDF；该选项不是普通测试、插件安装或运行的前提，测试脚本不进入安装包。当前证据见 [P6 验收](../docs/COVERAGE.md#p6-验收)。
+专项：`./test/test-p6.ps1 -SessionFile <session.json>`，使用 Windows 自带的 PowerShell/.NET 核验交换格式、PNG、PCM、设置恢复和临时文档隔离。`test/test-exchange.ps1` 仅解析本项目简单验收夹具，不是通用转换器。开发者可显式加 `-RenderPdf` 使用已准备的 Poppler 独立复核 PDF；该选项不是普通测试、插件安装或运行的前提，测试脚本不进入安装包。当前证据见 [P6 验收](../docs/COVERAGE.md#p6-验收)。
 
-P10 专项：`./native/test-p10.ps1 -SessionFile <session.json> -VerifyRestart`，读取五类偏好和音频/MIDI 模型，核对 allowlist、错误输入拒绝、同值写入读回、choices、重启持久化与新建曲谱默认资讯继承。底层 setter 失败时实现会尝试恢复旧值；跨重启分支只用于隔离开发宿主，宿主未退出时按 `host_limited` 记录，不强制结束用户实例。当前证据见 [P10 验收](../docs/COVERAGE.md#p10-验收)。
+P10 专项：`./test/test-p10.ps1 -SessionFile <session.json> -VerifyRestart`，读取五类偏好和音频/MIDI 模型，核对 allowlist、错误输入拒绝、同值写入读回、choices、重启持久化与新建曲谱默认资讯继承。底层 setter 失败时实现会尝试恢复旧值；跨重启分支只用于隔离开发宿主，宿主未退出时按 `host_limited` 记录，不强制结束用户实例。当前证据见 [P10 验收](../docs/COVERAGE.md#p10-验收)。

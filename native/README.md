@@ -22,7 +22,7 @@
 | `discovery.h` | 只读指针与 RTTI 校验；开发模式下的对象关系探索 |
 | `build.ps1` | 使用项目内 Qt SDK 和已安装的 Visual Studio 构建 DLL |
 | `mcp-client.ps1` | 供开发验证使用的 PowerShell HTTP MCP 客户端 |
-| `test-*.ps1` | 协议、后台曲谱及音轨编辑、音符技法、小节记谱与反复定位、文档生命周期、多文档播放、结构和模板检查 |
+| `../test/` | 测试脚本、测试夹具、故障探针及其构建脚本 |
 
 ABI 约束只保留已核验的最小范围：
 
@@ -53,11 +53,11 @@ ABI 约束只保留已核验的最小范围：
 完整实例、UTF-8、DDE 文件关联和安装生命周期验证见 [覆盖清单](../docs/COVERAGE.md) 与 [安装说明](../docs/INSTALL.md)。开发者需要运行 DDE 专项时使用：
 
 ```powershell
-./native/build-dde-client.ps1
-./native/test-instances.ps1 -HostDirectory '<isolated .tools host>' -CheckLaunchForwarding -StartupSettlingMs 15000
+./test/build-dde-client.ps1
+./test/test-instances.ps1 -HostDirectory '<isolated .tools host>' -CheckLaunchForwarding -StartupSettlingMs 15000
 ```
 
-`-Visible` 验证正常可见模式；`-StartupSettlingMs` 记录实际等待值。DDE 客户端构建在 `.tools/dde-client`，不进入生产包。完整回归入口为 `test-all.ps1`。
+`-Visible` 验证正常可见模式；`-StartupSettlingMs` 记录实际等待值。DDE 客户端构建在 `.tools/dde-client`，不进入生产包。完整回归入口为 `test/test-all.ps1`。
 
 `Get-McpInstances` 发现实例，`New-McpSession` 选择实例，`Reconnect-McpSession` 默认只重连原进程。实例绑定头为 `GuitarProMCP-Instance-Id`，不匹配时返回 HTTP 409；传输失败不会自动重放编辑。
 
@@ -108,28 +108,28 @@ IDocumentsManager + 0x10 → 管理器实现对象
 
 ```powershell
 # 完整原生回归；-Exe 可指定隔离宿主
-./native/test-all.ps1
+./test/test-all.ps1
 
 # 协议和 HTTP 边界
-./native/test-mcp.ps1
+./test/test-mcp.ps1
 
 # 安装包文件归属、生命周期和入口
-./native/test-installer-files.ps1 -HostDirectory <host> -PackageDirectory <package>
-./native/test-installation.ps1 -HostDirectory <host> -PackageDirectory <package>
-./native/test-installed-lifecycle.ps1 -PackageDirectory <package> -StartupSettleMs 30000 -Elevate
-./native/test-installed-entrypoints.ps1 -PackageDirectory <package> -StartupSettleMs 30000
+./test/test-installer-files.ps1 -HostDirectory <host> -PackageDirectory <package>
+./test/test-installation.ps1 -HostDirectory <host> -PackageDirectory <package>
+./test/test-installed-lifecycle.ps1 -PackageDirectory <package> -StartupSettleMs 30000 -Elevate
+./test/test-installed-entrypoints.ps1 -PackageDirectory <package> -StartupSettleMs 30000
 
 # 文件交换和工作区
-./native/test-p6.ps1 -SessionFile <session.json>
+./test/test-p6.ps1 -SessionFile <session.json>
 
 # P8 批量编曲、语义对象、异常恢复；PDF 复核依赖见 P8.md
-./native/test-p8.ps1 -SessionFile <session.json> -RenderPdf
+./test/test-p8.ps1 -SessionFile <session.json> -RenderPdf
 
 # P9 节拍文本、力度/符干/谱号和能力矩阵
-./native/test-p9.ps1 -SessionFile <session.json>
+./test/test-p9.ps1 -SessionFile <session.json>
 
 # P10 偏好、音频 choices 和 MIDI 模型可用性
-./native/test-p10.ps1 -SessionFile <session.json> -VerifyRestart
+./test/test-p10.ps1 -SessionFile <session.json> -VerifyRestart
 ```
 
 失败时保留宿主和 `artifacts/` 证据；不要把 `scheduled`、菜单枚举或 DLL 加载成功当作原生能力已验证。真实宿主回归需要 Guitar Pro 8.1.1.17 及匹配的宿主文件哈希。
