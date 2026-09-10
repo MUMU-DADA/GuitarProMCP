@@ -201,6 +201,10 @@ try {
     $second = New-McpSession -DataDirectory $data
     $connections.Add($second)
     Assert ($second.InstanceId -eq $first.connection.InstanceId -and $second.Headers['Mcp-Session-Id'] -ne $first.connection.Headers['Mcp-Session-Id']) 'Clients did not receive distinct sessions for the same host.'
+    $firstWindows = Invoke-McpTool $first.connection gp_windows
+    $secondWindows = Invoke-McpTool $second gp_windows
+    $firstWindowId = @($firstWindows.windows | Where-Object kind -EQ 'main')[0].window_id
+    Assert ($firstWindowId -and $firstWindowId -in $secondWindows.windows.window_id) 'Clients did not share the same stable main window ID.'
     $before = Invoke-McpTool $first.connection gp_score @{document=$first.document}
     Concurrent-Edits $first.connection $second @{document=$first.document;property='Title';value='First document only'} @{document=$forwarded[0].id;property='Title';value='Forwarded document only'}
     Assert ((Invoke-McpTool $second gp_score @{document=$first.document}).metadata.Title -eq 'First document only') 'First document mutation was redirected.'
@@ -220,6 +224,7 @@ try {
     $connections.Add($first.connection)
     Assert ($first.connection.Headers['Mcp-Session-Id'] -ne $oldSessionId -and $first.connection.InstanceId -eq $first.descriptor.instance_id) 'Reconnect did not replace only the protocol session.'
     Assert ((Invoke-McpTool $first.connection gp_score @{document=$first.document}).metadata.Title -eq 'First document only') 'Reconnect lost the existing score.'
+    Assert ((Invoke-McpTool $first.connection gp_windows).windows.window_id -contains $firstWindowId) 'Client reconnect changed the window ID.'
     $fake = $first.descriptor | ConvertTo-Json -Depth 8 | ConvertFrom-Json
     $fake.instance_id = [guid]::NewGuid().ToString()
     $fake.session_file = Join-Path $data ('native-session-' + $fake.instance_id + '.json')
@@ -234,12 +239,21 @@ try {
     Remove-Item -LiteralPath $fake.session_file
     Invoke-McpTool $first.connection gp_save_as @{document=$first.document;path=(Join-Path $run 'first.gp')} | Out-Null
     Invoke-McpTool $first.connection gp_save_as @{document=$forwarded[0].id;path=(Join-Path $run 'second.gp')} | Out-Null
+    $renamedWindow = @((Invoke-McpTool $first.connection gp_windows).windows | Where-Object window_id -EQ $firstWindowId)[0]
+    Assert ($renamedWindow.window_id -eq $firstWindowId -and $renamedWindow.title -ne @($firstWindows.windows | Where-Object kind -EQ 'main')[0].title) 'Save As/title change lost the main window identity.'
+    $observations += @{p12_before_title=@($firstWindows.windows | Where-Object kind -EQ 'main')[0].title;p12_after_title=$renamedWindow.title;p12_window_id=$firstWindowId}
     $stale = $first.connection
     Stop-Host $first
     Assert (@(Get-McpInstances -DataDirectory $data).Count -eq 0) 'Closing the host left a live discovery record.'
     Reject { Reconnect-McpSession $stale } 'Target instance stopped*'
     $first.descriptor | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $alias -Encoding UTF8
     $restarted = Start-Host
+    $newWindows = Invoke-McpTool $restarted.connection gp_windows
+    Assert ($newWindows.windows.window_id -notcontains $firstWindowId) 'Host restart reused a window ID.'
+    $windowBody = @{jsonrpc='2.0';id=30;method='tools/call';params=@{name='gp_screenshot';arguments=@{window_id=$firstWindowId}}} | ConvertTo-Json -Depth 8 -Compress
+    $windowRejection = (Invoke-RestMethod -Uri $restarted.connection.Url -Method Post -Headers $restarted.connection.Headers -ContentType 'application/json' -Body $windowBody).result
+    Assert ($windowRejection.isError -and $windowRejection.structuredContent.reason -eq 'foreign_instance' -and @($windowRejection.content | Where-Object type -EQ 'image').Count -eq 0) 'Restarted host did not reject the previous window without an image.'
+    $observations += @{p12_old_window_id=$firstWindowId;p12_new_main=@($newWindows.windows | Where-Object kind -EQ 'main')[0];p12_restart_rejection=$windowRejection.structuredContent}
     Assert ((Get-Content -LiteralPath $alias -Raw | ConvertFrom-Json).instance_id -eq $restarted.descriptor.instance_id) 'Restart did not reclaim an exited process alias while its handle was retained.'
     Assert ($restarted.descriptor.port -eq 18432 -and $restarted.descriptor.instance_id -ne $first.descriptor.instance_id) 'Restart did not acquire a fresh identity on the default port.'
     Assert ((Http-Status $stale $stale.InstanceId $mutation) -eq 409) 'Stale connection reached the restarted host.'
