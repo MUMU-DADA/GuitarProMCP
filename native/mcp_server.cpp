@@ -229,7 +229,7 @@ void McpServer::accept() {
                 const QString version = Versions.contains(params.value("protocolVersion").toString()) ? params.value("protocolVersion").toString() : Version;
                 const QString key = randomId();
                 sessions.insert(key, {version, false, QDateTime::currentMSecsSinceEpoch()});
-                reply(socket, 200, rpcResult(id, {{"protocolVersion", version}, {"serverInfo", QJsonObject{{"name", "GuitarProMCP"}, {"version", "0.5.0"}}},
+                reply(socket, 200, rpcResult(id, {{"protocolVersion", version}, {"serverInfo", QJsonObject{{"name", "GuitarProMCP"}, {"version", "0.6.0"}}},
                       {"_meta", QJsonObject{{"instance_id", instanceIdentity}, {"pid", QCoreApplication::applicationPid()}}},
                       {"capabilities", QJsonObject{{"tools", QJsonObject{{"listChanged", false}}}}},
                       {"instructions", "Native C++ plugin. No Python, simulated input or foreground window is required. Inspect capabilities and observed state; verify mutations."}}),
@@ -273,8 +273,17 @@ void McpServer::accept() {
             QJsonObject result;
             try { result = invoke(name, arguments); }
             catch (const std::exception &exception) { result = {{"error", QString::fromUtf8(exception.what())}}; }
-            const QString text = QString::fromUtf8(QJsonDocument(result).toJson(QJsonDocument::Compact));
-            reply(socket, 200, rpcResult(id, {{"content", QJsonArray{QJsonObject{{"type", "text"}, {"text", text}}}},
+            // Native tools normally return one structured object.  A tool may add
+            // the private __mcp_image object when the response also needs standard
+            // MCP image content; strip it before exposing structuredContent.
+            const QJsonObject image = result.take("__mcp_image").toObject();
+            QJsonArray content{QJsonObject{{"type", "text"},
+                {"text", QString::fromUtf8(QJsonDocument(result).toJson(QJsonDocument::Compact))}}};
+            if (!image.isEmpty() && image.value("data").isString() && image.value("mimeType").isString()) {
+                content.append(QJsonObject{{"type", "image"}, {"data", image.value("data")},
+                                           {"mimeType", image.value("mimeType")}});
+            }
+            reply(socket, 200, rpcResult(id, {{"content", content},
                   {"structuredContent", result}, {"isError", result.contains("error")}}));
         });
     }

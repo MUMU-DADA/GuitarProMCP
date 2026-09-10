@@ -35,6 +35,8 @@ MCP 客户端 -> 本机 HTTP /mcp -> GuitarPro.exe 内的 C++ 插件 -> Qt/GPCor
 
 完整工具目录、参数和原生行为只维护在 [原生 MCP API 参考](native/API.md)；P8 批量编曲和语义 JSON 见 [P8 原生编曲与语义 JSON](native/P8.md)。
 
+当前还提供实验性的 `gp_screenshot`：在 Qt 主线程离屏渲染 Guitar Pro 主窗口或活动模态对话框，以标准 MCP PNG image content 返回，不激活窗口、不抢焦点、不发送输入。窗口状态无法可靠渲染时会返回 `status=host_limited`；调用和边界见 [原生 MCP API 参考](native/API.md#窗口截图)。
+
 ## 验证
 
 关闭测试宿主后运行完整原生回归：

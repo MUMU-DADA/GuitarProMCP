@@ -6,7 +6,7 @@
 | --- | --- |
 | 连接与调用 | [协议边界](#协议边界)、[工具目录与调用示例](#使用原生曲谱工具) |
 | 曲谱编辑 | [选区](#原生选区)、[连音](#原生连音)、[连奏与延音线](#连奏与延音线)、[剪贴板](#原生剪贴板)、[音符技法](#音符技法)、[小节记谱](#小节记谱) |
-| 文档、播放和窗口 | [文档生命周期](#原生播放与文档生命周期)、[播放与音频](#播放与音频)、[Qt 对象工具](#qt-对象工具) |
+| 文档、播放和窗口 | [文档生命周期](#原生播放与文档生命周期)、[播放与音频](#播放与音频)、[窗口截图](#窗口截图)、[Qt 对象工具](#qt-对象工具) |
 | 文件与编曲 | [文件与工作区](#p6-文件与工作区)、[P8 JSON、和弦和歌词](P8.md) |
 ## 协议边界
 
@@ -86,6 +86,7 @@ try {
 | `gp_read_sections` / `gp_edit_section` | `document?`，写入另需 `bar`, `name?`, `text?`, `operation?` | 读段落起止；异步设置或移除原生段落起点 |
 | `gp_presentation` 的页面元数据 | `document?`, `operation=set`, `page_metadata` | 标题、作者、作曲者、版权、页眉页脚和页码，异步整组提交及一次撤销 |
 | `gp_p9_status` | 无 | 读取 P9 能力矩阵及“已实现、已验证、实验性、未实现、宿主受限”状态，不改变曲谱 |
+| `gp_screenshot` | 无 | 读取当前活动模态对话框，否则读取 `gp::gui::MainWindow`；通过 Qt `QWidget::render` 编码 PNG 并以 MCP `image` content 返回，同时返回窗口状态、尺寸、DPI 和采集时间；不激活窗口、不抢焦点、不发送输入；无法渲染或超出限制时返回 `status=host_limited` |
 
 P8/P9 编辑请求通过 `gp_operation` 查询 `applied/unchanged/error`，新建为 `created`；`gp_documents.editing` 提供最近编辑状态。格式、默认值、上限、模板复用及恢复语义见 [P8 编曲与语义 JSON](P8.md)；P9 能力边界和专项证据见 [覆盖清单](../docs/COVERAGE.md#p9-验收)。PowerShell 客户端仅自动等待保存工具，P8/P9 请求需要显式查询终态。
 
@@ -420,6 +421,10 @@ GPIF 预检使用宿主 `Qt5Gui.dll` 的 `QZipReader` 和 Qt XML 流解析器，
 `gp_audio_device state` 返回 `scope=application`、`configuration`、`property_types`、当前宿主 `choices` 和 `running`。`set property=... value=...` 只接受返回 choices 中的精确值；`audioOutputChannels` 只有在宿主模型可读时才会列出当前合法值，不猜测声道数量。通过宿主配置模型的 Qt 属性提交，原生配置负责持久化，不进入曲谱撤销。播放中拒绝设备修改；未知选项在修改前拒绝，原生设置失败尝试恢复旧值。Standard、Studio 2 PRO 输出与 512/1024 缓冲区已验证；ASIO、热拔插、厂商控制面板及驱动故障未验收，不声明自动恢复所有设备错误。
 
 `GPMCP_DEVELOPMENT=1` 时提供 `gp_audio_probe`，通过宿主 `AudioExportManager` 渲染最多 30 秒的测试曲谱，返回双声道浮点 PCM 的帧数、RMS、峰值及哈希。仅用于验收，不作为 P6 文件导出接口，不采集系统或麦克风声音。`test/test-audio.ps1 -Render` 验证速度、渐变、反复、音量/声像、效果和音色变化；默认最小夹具是 MIDI 音轨，测试副本改为 RSE 并复用 Steel Guitar / Acoustic Piano 模板。验收使用 `C:/ProgramData/Arobas Music/Soundbanks/com.arobas-music.soundbank.standard`，不能用接近静音的 MIDI 渲染证明 RSE 发声正确。
+
+## 窗口截图
+
+`gp_screenshot` 在 Qt 主线程读取活动模态对话框，若没有模态对话框则读取类名为 `gp::gui::MainWindow` 的主窗口。实现使用 `QWidget::render` 离屏绘制并直接把 PNG 的 base64 数据作为标准 MCP `image` content 返回，不写入文件，也不调用激活、焦点或输入 API。结构化结果保留 `target_window`、`target_class`、`capture_mode=qt_widget_render`、`width`、`height`、`dpi`、`visible`、`minimized`、`active_modal` 和 `captured_at`。窗口不存在、尺寸超限、PNG 编码失败或响应超过 8 MiB 时返回 `status=host_limited` 及原因。当前离屏结果尚未完成真实宿主全矩阵验收，调用方应将 `status=experimental` 视为实验性能力。
 
 ## Qt 对象工具
 

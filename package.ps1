@@ -1,4 +1,4 @@
-param([string]$Version = '0.5.0', [switch]$ManualInstall)
+param([string]$Version = '0.6.0', [switch]$ManualInstall)
 $ErrorActionPreference = 'Stop'
 if ($Version -notmatch '^\d+\.\d+\.\d+([-.][A-Za-z0-9.]+)?$') { throw 'Invalid package version.' }
 New-Item -ItemType Directory -Force -Path (Join-Path $PSScriptRoot 'artifacts') | Out-Null
