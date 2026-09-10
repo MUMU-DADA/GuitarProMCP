@@ -64,11 +64,13 @@
 
 Qt 5.15 的绘制准备会递归派发待处理几何事件；本次在绘制作用域暂存并恢复 Qt 的待处理 move/resize 标志，避免影响其他隐藏窗口。`test/test-p12-windows.ps1` 在 Qt SDK 5.15.2 的离屏平台、DPR 1.0/1.5 各通过 38 项：验证这些事件仍在宿主正常 show 时到达、同地址对象重建、标题/隐藏变化、QWidget/QWindow 去重、SubWindow 按 ID 截图、嵌套模态的下层选择、QWindow/GPU 拒绝、零/超限尺寸、未布局菜单保护和 512 窗口截断。日志：同一 P12 证据目录的 `qt-fixture.log`；夹具结果不代表相同类型已在 Guitar Pro 内验收。
 
-最终核心 DLL SHA-256：`FD540740217764587B843571751E9EB0F308224C1E9026A6826F2E11EB0E420B`；宿主 SHA-256：`B233B0F1C87DEB3AECE693D51E8D3C3A841C88FEE78828607B20034737C4C6DF`。源码哈希与具体截图状态在 `verification.json`；未发布新安装包，本次交付为源码提交。
+P12 功能提交的核心 DLL SHA-256：`FD540740217764587B843571751E9EB0F308224C1E9026A6826F2E11EB0E420B`；宿主 SHA-256：`B233B0F1C87DEB3AECE693D51E8D3C3A841C88FEE78828607B20034737C4C6DF`。源码哈希与具体截图状态在 `verification.json`；版本更新后的发布构建另见下文。
 
-同一最终 DLL 的完整原生回归通过 **27 组、14747 项**，包含 P11 60 项、完整工作区下的 P12 10189 项及既有协议、会话、模态、编辑、保存和导出专项；宿主退出码 0，连接描述已清理。证据：`artifacts/regression-8d7bab86cba648f08f2f475f4e1a5f44/regression.json`（`complete=true`）及 `artifacts/native-p12-422190a82455425a80971166aefcda08/verification.json`。本次完整入口未启用额外的 P8 故障注入、PDF 渲染、PCM 渲染或 P10 重启偏好检查，不替代这些既有专项的独立证据。
+上述功能提交 DLL 的完整原生回归通过 **27 组、14747 项**，包含 P11 60 项、完整工作区下的 P12 10189 项及既有协议、会话、模态、编辑、保存和导出专项；宿主退出码 0，连接描述已清理。证据：`artifacts/regression-8d7bab86cba648f08f2f475f4e1a5f44/regression.json`（`complete=true`）及 `artifacts/native-p12-422190a82455425a80971166aefcda08/verification.json`。本次完整入口未启用额外的 P8 故障注入、PDF 渲染、PCM 渲染或 P10 重启偏好检查，不替代这些既有专项的独立证据。
 
 `test/test-instances.ps1 -StartupSettlingMs 15000` 另通过 **60 项**，核对两个客户端共用稳定窗口 ID、重新连接不失效、另存后标题变化不改 ID、真实宿主重启后旧 ID 返回 `foreign_instance` 且无图像，同时回归绑定和端口冲突行为。证据：`artifacts/instances-a7396983b6904a93863b781aad4911fc/verification.json`（`passed=true`，无保留进程）。本次未运行文件关联 DDE 和外部 MCP Inspector，独立 GUI 多进程继续按既有宿主限制保留。
+
+`0.7.0` 发布构建仅更新协议、安装器和打包脚本的版本号，核心 DLL SHA-256 为 `C55290F551E6D741C571D7E69159250A3DE62651030068FC3D86E19419AA705E`。解压后的实际安装包通过文件清单与哈希检查、33 项安装器检查、自动加载与版本读回、27 项 MCP 协议检查及 5369 项 P12 专项；保存 19 份 PNG，隔离宿主退出码 0，连接描述清理和卸载完成。发布证据：`artifacts/release-0.7.0-bec2d87632a3435d85b85874699af8fb/verification.json`；P12 明细：`artifacts/native-p12-2fe8d7810a26444a925675ae333b57cc/verification.json`。首次复测遇到外部 Firefox 前台切换，Qt 窗口及文档状态未变；保留失败记录后重跑通过。完整 27 组回归对应上述功能提交 DLL，发布 DLL 的验证范围以本段为准。
 
 剩余状态：真实宿主嵌套模态、独立 `Qt::SubWindow`、QWindow-only、纯系统/外部驱动窗口、未构造的其他弹出窗口和其他显示器/DPI 配置未验证；分配失败、PNG 编码失败、8 MiB 响应上限和阻塞绘制未注入真实宿主，不计为通过。2000 ms 仅在绘制/编码返回后判断。接口保持 `experimental`，无可靠 Qt 路径则明确 `host_limited`；本阶段的完成结论依据 [P12 交付核对](DEVELOPMENT_PLAN.md#p124-交付核对)，不宣称全窗口类型验收。
 
