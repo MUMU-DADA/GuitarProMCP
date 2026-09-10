@@ -273,8 +273,17 @@ void McpServer::accept() {
             QJsonObject result;
             try { result = invoke(name, arguments); }
             catch (const std::exception &exception) { result = {{"error", QString::fromUtf8(exception.what())}}; }
-            const QString text = QString::fromUtf8(QJsonDocument(result).toJson(QJsonDocument::Compact));
-            reply(socket, 200, rpcResult(id, {{"content", QJsonArray{QJsonObject{{"type", "text"}, {"text", text}}}},
+            // Native tools normally return one structured object.  A tool may add
+            // the private __mcp_image object when the response also needs standard
+            // MCP image content; strip it before exposing structuredContent.
+            const QJsonObject image = result.take("__mcp_image").toObject();
+            QJsonArray content{QJsonObject{{"type", "text"},
+                {"text", QString::fromUtf8(QJsonDocument(result).toJson(QJsonDocument::Compact))}}};
+            if (!image.isEmpty() && image.value("data").isString() && image.value("mimeType").isString()) {
+                content.append(QJsonObject{{"type", "image"}, {"data", image.value("data")},
+                                           {"mimeType", image.value("mimeType")}});
+            }
+            reply(socket, 200, rpcResult(id, {{"content", content},
                   {"structuredContent", result}, {"isError", result.contains("error")}}));
         });
     }

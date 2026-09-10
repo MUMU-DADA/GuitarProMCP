@@ -130,6 +130,9 @@ IDocumentsManager + 0x10 → 管理器实现对象
 
 # P10 偏好、音频 choices 和 MIDI 模型可用性
 ./test/test-p10.ps1 -SessionFile <session.json> -VerifyRestart
+
+# P11 窗口截图、PNG image content 和焦点保持
+./test/test-p11.ps1 -SessionFile <session.json> -RequireCapture
 ```
 
 失败时保留宿主和 `artifacts/` 证据；不要把 `scheduled`、菜单枚举或 DLL 加载成功当作原生能力已验证。真实宿主回归需要 Guitar Pro 8.1.1.17 及匹配的宿主文件哈希。
