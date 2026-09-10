@@ -35,17 +35,17 @@ MCP 客户端 -> 本机 HTTP /mcp -> GuitarPro.exe 内的 C++ 插件 -> Qt/GPCor
 
 完整工具目录、参数和原生行为只维护在 [原生 MCP API 参考](native/API.md)；P8 批量编曲和语义 JSON 见 [P8 原生编曲与语义 JSON](native/P8.md)。
 
-当前还提供实验性的 `gp_screenshot`：在 Qt 主线程离屏渲染 Guitar Pro 主窗口或活动模态对话框，以标准 MCP PNG image content 返回，不激活窗口、不抢焦点、不发送输入。窗口状态无法可靠渲染时会返回 `status=host_limited`；调用和边界见 [原生 MCP API 参考](native/API.md#窗口截图)。
+`gp_windows` 可查看当前实例的窗口数量、稳定 ID、父窗口和显示状态；`gp_screenshot(window_id)` 可选主窗口、浮动窗口或对话框，省略 ID 时仍优先活动模态。截图通过 Qt 离屏绘制返回标准 MCP PNG image content，不激活窗口、不抢焦点、不发送输入，当前保持实验性；无法可靠渲染时返回 `status=host_limited`。调用和边界见 [原生 MCP API 参考](native/API.md#窗口截图)。
 
 ## 验证
 
 关闭测试宿主后运行完整原生回归：
 
 ```powershell
-./test/test-all.ps1
+./test/test-all.ps1 -Exe '<.tools 中隔离宿主的 GuitarPro.exe>'
 ```
 
-可使用 `-Exe` 指定隔离宿主。真实宿主回归需要 Guitar Pro 8.1.1.17 及匹配的宿主文件哈希。
+完整入口包含 P11/P12 专项；P12 要求使用 `.tools` 中的隔离宿主和 `artifacts` 中的测试文档。真实宿主回归需要 Guitar Pro 8.1.1.17 及匹配的宿主文件哈希。
 
 ## 文档
 

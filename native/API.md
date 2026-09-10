@@ -86,7 +86,8 @@ try {
 | `gp_read_sections` / `gp_edit_section` | `document?`，写入另需 `bar`, `name?`, `text?`, `operation?` | 读段落起止；异步设置或移除原生段落起点 |
 | `gp_presentation` 的页面元数据 | `document?`, `operation=set`, `page_metadata` | 标题、作者、作曲者、版权、页眉页脚和页码，异步整组提交及一次撤销 |
 | `gp_p9_status` | 无 | 读取 P9 能力矩阵及“已实现、已验证、实验性、未实现、宿主受限”状态，不改变曲谱 |
-| `gp_screenshot` | 无 | 读取当前活动模态对话框，否则读取 `gp::gui::MainWindow`；通过 Qt `QWidget::render` 编码 PNG 并以 MCP `image` content 返回，同时返回窗口状态、尺寸、DPI 和采集时间；不激活窗口、不抢焦点、不发送输入；无法渲染或超出限制时返回 `status=host_limited` |
+| `gp_windows` | `include_hidden?` | 只读枚举当前实例 Qt 窗口，返回数量、稳定 `window_id`、父窗口关系和实际状态；默认包含隐藏窗口，过滤不改变统计总数 |
+| `gp_screenshot` | `window_id?` | 按 `gp_windows` 的 ID 读取单个窗口；省略参数仍优先活动模态，否则主窗口。通过 Qt `QWidget::render` 返回标准 MCP PNG `image` content；无效 ID 拒绝且无图像，无法可靠渲染时返回 `status=host_limited` |
 
 P8/P9 编辑请求通过 `gp_operation` 查询 `applied/unchanged/error`，新建为 `created`；`gp_documents.editing` 提供最近编辑状态。格式、默认值、上限、模板复用及恢复语义见 [P8 编曲与语义 JSON](P8.md)；P9 能力边界和专项证据见 [覆盖清单](../docs/COVERAGE.md#p9-验收)。PowerShell 客户端仅自动等待保存工具，P8/P9 请求需要显式查询终态。
 
@@ -424,7 +425,26 @@ GPIF 预检使用宿主 `Qt5Gui.dll` 的 `QZipReader` 和 Qt XML 流解析器，
 
 ## 窗口截图
 
-`gp_screenshot` 在 Qt 主线程读取活动模态对话框，若没有模态对话框则读取类名为 `gp::gui::MainWindow` 的主窗口。实现使用 `QWidget::render` 离屏绘制并直接把 PNG 的 base64 数据作为标准 MCP `image` content 返回，不写入文件，也不调用激活、焦点或输入 API。结构化结果保留 `target_window`、`target_class`、`capture_mode=qt_widget_render`、`width`、`height`、`dpi`、`visible`、`minimized`、`active_modal` 和 `captured_at`。窗口不存在、尺寸超限、PNG 编码失败或响应超过 8 MiB 时返回 `status=host_limited` 及原因。当前离屏结果尚未完成真实宿主全矩阵验收，调用方应将 `status=experimental` 视为实验性能力。
+先调用 `gp_windows({include_hidden: true})`，再把返回记录的 `window_id` 传给 `gp_screenshot`。两者在 Qt 主线程执行，模态对话框存在或原生操作等待期间仍可读取。`gp_windows` 不刷新 `gp_objects` 的快照；多客户端、重新建立 MCP 会话、标题变化及隐藏/最小化不改变窗口 ID。ID 绑定实例和 QObject 生命周期，窗口销毁或宿主重启后失效，客户端应将它作为不透明字符串使用。
+
+`gp_windows` 返回 `instance_id`、`pid`、`scope=qt_windows`、`total_count`、`visible_count`、`hidden_count`、`returned_count`、`windows`、`observed_at`。`include_hidden` 默认 `true`；设为 `false` 只过滤列表。统计来自同一次观察，不把曲谱标签数当作窗口数。发现路径为 Qt 顶层 QWidget、具有窗口语义的 QWidget（含 `Qt::SubWindow`）和已有 QWindow，QWidget 的原生 QWindow 不重复计数，不通过 `winId()` 创建原生窗口。
+
+每条记录包含 `window_id`、`parent_window_id`（无可确认父窗口时为 `null`）、`kind`、`class`、`object_name`、`title`、`source=qwidget/qwindow`、`qt_window_type`、`visible`、`minimized`、`maximized`、`fullscreen`、`active`、`modality`、`active_modal`、`geometry`、`dpi`、`device_pixel_ratio`。`kind` 按实际 Qt 类型分类为 `main/dialog/tool/popup/tooltip/subwindow/splash/window`；非模态对话框仍为 `dialog`，模态性单独使用 `non_modal/window_modal/application_modal`。`active` 是 Qt 的活动状态，不等于 Windows 前台 HWND。`geometry` 是内容区在屏幕坐标中的 Qt 逻辑像素，DPI 为逻辑 DPI。标题和对象名分别截取 1024/256 字符，发生时 `text_truncated=true`，不影响 ID。
+
+枚举最多返回 512 个窗口，QWidget/QWindow 扫描上限各为 20000；达到限制时 `truncated=true`、`count_scope=observed_subset`，`truncation_reasons` 指明限制，此时数量只覆盖已观察集合。完整 Qt 集合使用 `count_scope=complete_qt_set`，仍不包含桌面代理、外部窗口包装、普通嵌入式控件、未构造窗口、纯系统原生窗口或其他进程窗口；具体口径由 `scope_note` 返回。
+
+`gp_screenshot({})` 保留 P11 行为：优先当前活动 QWidget 模态对话框，否则选 `gp::gui::MainWindow`。显式指定 ID 时仅绘制该对象，主窗口被模态阻塞时也不会替换目标。返回窗口记录中的身份和状态，以及 `target_window=main/active_modal/window`、`target_class`、`target_object_name`、`active_modal_window_id`（不存在为 `null`）、`capture_mode=qt_widget_render`、PNG 像素 `width/height`、`capture_ms` 和 `captured_at`。`active_modal` 只表示选中对象是否为活动模态，不能用于判断宿主是否存在另一个模态。
+
+PNG 通过标准 MCP `image` content 返回，结构化元数据同时作为 `structuredContent` 和 `text` content 返回；内部 `__mcp_image` 不暴露给客户端。图像表示目标 Qt 内容区及普通子控件，不含系统标题栏、桌面或其他独立窗口。成功状态仍为 `experimental`，已核验的具体窗口类型与剩余矩阵见 [P12 验收](../docs/COVERAGE.md#p12-验收)。
+
+| 失败状态 | `reason` 与处理 |
+| --- | --- |
+| `status=error` | `invalid_window_id`：空值或格式错误；`foreign_instance`：其他实例或旧宿主；`window_not_found`：未知或已销毁；`window_not_available`：存活对象已不属于当前可观察窗口。均 `isError=true`、无图像，不回退选择其他窗口 |
+| `status=host_limited` | `no_window`、`qwindow_render_unsupported`、`special_rendering`、`embedded_subwindow`、`render_scan_limit`：不存在目标、只有 QWindow、含 GPU/原生内容、会合成其他独立 SubWindow 或子控件扫描超限 |
+| `status=host_limited` | `unprepared_hidden_window`：隐藏窗口尚未完成布局，Qt 绘制会初始化或调整其尺寸，故在绘制前拒绝；不会为截图显示、恢复或初始化窗口 |
+| `status=host_limited` | `dimensions_limit`、`allocation_failed`、`window_destroyed`、`encoding_failed`、`render_timeout`、`image_size_limit`：尺寸、分配、存活、编码、耗时或响应限制，均无图像且说明原因 |
+
+限制沿用 P11：单边不超过 4096 像素、总像素不超过 16 Mi、PNG 和 base64 各不超过 8 MiB。2000 ms 检查在绘制及编码返回后执行，不能中断阻塞中的 Qt 绘制。截图不会发送输入、激活窗口或改变文档及撤销历史；未准备好的隐藏菜单和没有可靠 QWidget 路径的窗口可以被枚举，但不代表可截图。
 
 ## Qt 对象工具
 

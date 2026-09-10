@@ -19,6 +19,7 @@
 | `guitarpro_io.h` | 文件交换、PDF/PNG/WAV 输出及工作区设置 |
 | `guitarpro_abi.h` / `gpcore.def` / `gprse.def` / `amaudio.def` | 已确认的原生导出声明及导入库定义 |
 | `object_registry.h` | Qt 对象生命周期观察和失效指针保护 |
+| `window_capture.h` | 实例内窗口身份、Qt 窗口枚举及指定目标的离屏截图 |
 | `discovery.h` | 只读指针与 RTTI 校验；开发模式下的对象关系探索 |
 | `build.ps1` | 使用项目内 Qt SDK 和已安装的 Visual Studio 构建 DLL |
 | `mcp-client.ps1` | 供开发验证使用的 PowerShell HTTP MCP 客户端 |
@@ -107,8 +108,8 @@ IDocumentsManager + 0x10 → 管理器实现对象
 先关闭加载测试 DLL 的 Guitar Pro 实例。完整入口会在各组之间核对夹具、文档状态、源码哈希和 DLL 哈希；单项脚本必须满足自己的夹具前提。
 
 ```powershell
-# 完整原生回归；-Exe 可指定隔离宿主
-./test/test-all.ps1
+# 完整原生回归（含 P12，要求 .tools 中的隔离宿主）
+./test/test-all.ps1 -Exe '<isolated .tools host>/GuitarPro.exe'
 
 # 协议和 HTTP 边界
 ./test/test-mcp.ps1
@@ -133,6 +134,13 @@ IDocumentsManager + 0x10 → 管理器实现对象
 
 # P11 窗口截图、PNG image content 和焦点保持
 ./test/test-p11.ps1 -SessionFile <session.json> -RequireCapture
+
+# P12 真实窗口、模态下指定目标、隐藏菜单保护和只读性
+./test/test-p12.ps1 -SessionFile <isolated-session.json>
+# Qt 机制夹具：生命周期/地址复用、SubWindow、QWindow、限制及两种缩放
+./test/test-p12-windows.ps1
+# P12 跨客户端、重连与宿主重启后的 ID 拒绝（同时回归既有实例行为）
+./test/test-instances.ps1 -HostDirectory '<isolated .tools host>' -StartupSettlingMs 15000
 ```
 
 失败时保留宿主和 `artifacts/` 证据；不要把 `scheduled`、菜单枚举或 DLL 加载成功当作原生能力已验证。真实宿主回归需要 Guitar Pro 8.1.1.17 及匹配的宿主文件哈希。

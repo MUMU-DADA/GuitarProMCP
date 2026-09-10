@@ -12,7 +12,6 @@
 #include <QtWidgets/QMessageBox>
 #include <QtWidgets/QLabel>
 #include <QtCore/QElapsedTimer>
-#include <QtCore/QBuffer>
 #include <QtCore/QDateTime>
 #include <QtCore/QFileInfo>
 #include <QtCore/QDirIterator>
@@ -23,7 +22,6 @@
 #include <QtCore/QMetaProperty>
 #include <QtCore/QMetaMethod>
 #include <QtCore/QThread>
-#include <QtGui/QPainter>
 #include "mcp_server.h"
 #include "plugin_config.h"
 #include "discovery.h"
@@ -33,6 +31,7 @@
 #include "guitarpro_clipboard.h"
 #include "guitarpro_semantics.h"
 #include "object_registry.h"
+#include "window_capture.h"
 #include <QtCore/QEvent>
 #include <QtCore/QPointer>
 #include <QtCore/QSaveFile>
@@ -117,6 +116,7 @@ static bool samePreferenceValue(const QMetaProperty &property, const QVariant &l
 
 class Bridge : public QObject {
     McpServer server{this};
+    WindowCapture windows{server.instanceId()};
     ObjectRegistry registry;
     guitarpro::ScoreClipboard clipboardBuffer;
 
@@ -573,80 +573,6 @@ class Bridge : public QObject {
                 {"qt_thread", QThread::currentThread() == qApp->thread()}, {"state_scope", "Live native score metadata, tracks, notes, cursor and Qt objects; see coverage for unimplemented state"}};
     }
 
-    QJsonObject screenshot() const {
-        QWidget *target = QApplication::activeModalWidget();
-        const bool activeModal = target != nullptr;
-        if (!target) {
-            // Bind the capture to the host's actual main-window class.  Do not
-            // use the foreground window, title text or cursor position.
-            for (QWidget *candidate : QApplication::topLevelWidgets()) {
-                if (QByteArray(candidate->metaObject()->className()) != "gp::gui::MainWindow") continue;
-                if (!target || candidate->isVisible()) target = candidate;
-                if (candidate->isVisible()) break;
-            }
-        }
-        if (!target) return {{"status", "host_limited"}, {"instance_id", server.instanceId()},
-                            {"pid", double(QCoreApplication::applicationPid())},
-                            {"error", "No Guitar Pro main window or active modal dialog is available"}, {"active_modal", false}};
-
-        const QSize logicalSize = target->size();
-        const qreal deviceRatio = target->devicePixelRatioF() > 0 ? target->devicePixelRatioF() : 1.0;
-        const qint64 pixelWidth = qRound64(logicalSize.width() * deviceRatio);
-        const qint64 pixelHeight = qRound64(logicalSize.height() * deviceRatio);
-        constexpr qint64 MaxDimension = 4096, MaxPixels = 16 * 1024 * 1024, MaxEncodedBytes = 8 * 1024 * 1024;
-        if (logicalSize.width() <= 0 || logicalSize.height() <= 0 || pixelWidth > MaxDimension || pixelHeight > MaxDimension ||
-            pixelWidth * pixelHeight > MaxPixels)
-            return {{"status", "host_limited"}, {"instance_id", server.instanceId()},
-                    {"pid", double(QCoreApplication::applicationPid())}, {"error", "Window dimensions are unavailable or exceed the screenshot limit"},
-                    {"target_window", activeModal ? "active_modal" : "main"}, {"active_modal", activeModal},
-                    {"visible", target->isVisible()}, {"minimized", target->isMinimized()}};
-
-        QElapsedTimer captureTimer;
-        captureTimer.start();
-        QImage image(int(pixelWidth), int(pixelHeight), QImage::Format_ARGB32_Premultiplied);
-        if (image.isNull()) return {{"status", "host_limited"}, {"instance_id", server.instanceId()},
-                                   {"pid", double(QCoreApplication::applicationPid())}, {"error", "Qt could not allocate the screenshot image"},
-                                   {"target_window", activeModal ? "active_modal" : "main"}, {"active_modal", activeModal}};
-        image.setDevicePixelRatio(deviceRatio);
-        image.fill(Qt::transparent);
-        QPainter painter(&image);
-        target->render(&painter, QPoint(), QRegion(), QWidget::DrawWindowBackground | QWidget::DrawChildren);
-        painter.end();
-        if (image.isNull()) return {{"status", "host_limited"}, {"instance_id", server.instanceId()},
-                                   {"pid", double(QCoreApplication::applicationPid())}, {"error", "Qt widget rendering returned an empty image"},
-                                   {"target_window", activeModal ? "active_modal" : "main"}, {"active_modal", activeModal}};
-
-        QByteArray encoded;
-        QBuffer buffer(&encoded);
-        if (!buffer.open(QIODevice::WriteOnly) || !image.save(&buffer, "PNG") || encoded.isEmpty())
-            return {{"status", "host_limited"}, {"instance_id", server.instanceId()},
-                    {"pid", double(QCoreApplication::applicationPid())}, {"error", "PNG encoding failed"},
-                    {"target_window", activeModal ? "active_modal" : "main"}, {"active_modal", activeModal}};
-        const QByteArray base64 = encoded.toBase64();
-        const qint64 captureMs = captureTimer.elapsed();
-        if (captureMs > 2000)
-            return {{"status", "host_limited"}, {"instance_id", server.instanceId()},
-                    {"pid", double(QCoreApplication::applicationPid())}, {"error", "Qt screenshot rendering exceeded the 2000 ms time limit"},
-                    {"target_window", activeModal ? "active_modal" : "main"}, {"active_modal", activeModal},
-                    {"capture_ms", captureMs}};
-        if (encoded.size() > MaxEncodedBytes || base64.size() > MaxEncodedBytes)
-            return {{"status", "host_limited"}, {"instance_id", server.instanceId()},
-                    {"pid", double(QCoreApplication::applicationPid())}, {"error", "PNG exceeds the response size limit"},
-                    {"target_window", activeModal ? "active_modal" : "main"}, {"active_modal", activeModal},
-                    {"width", image.width()}, {"height", image.height()}, {"capture_ms", captureMs},
-                    {"encoded_bytes", encoded.size()}, {"response_image_bytes", base64.size()}};
-
-        const int dpiX = target->logicalDpiX(), dpiY = target->logicalDpiY();
-        return {{"status", "experimental"}, {"instance_id", server.instanceId()}, {"pid", double(QCoreApplication::applicationPid())},
-                {"target_window", activeModal ? "active_modal" : "main"},
-                {"target_class", target->metaObject()->className()}, {"target_object_name", target->objectName()},
-                {"capture_mode", "qt_widget_render"}, {"width", image.width()}, {"height", image.height()},
-                {"dpi", QJsonObject{{"x", dpiX}, {"y", dpiY}}}, {"active_modal", activeModal},
-                {"visible", target->isVisible()}, {"minimized", target->isMinimized()},
-                {"capture_ms", captureMs}, {"captured_at", QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)},
-                {"__mcp_image", QJsonObject{{"mimeType", "image/png"}, {"data", QString::fromLatin1(base64)}}}};
-    }
-
     QList<QPointer<QObject>> services() const {
         QList<QPointer<QObject>> result;
         QSet<QObject *> seen;
@@ -1008,7 +934,8 @@ class Bridge : public QObject {
         add("gp_save", "异步保存 .gp 副本并保留文档状态；已有目标须 overwrite=true。轮询 gp_operation 的 saved/result。", {{"document", str}, {"path", str}, {"overwrite", boolean}}, {"path"});
         add("gp_save_current", "异步保存当前 .gp 路径；轮询 gp_operation 的 saved/result。未命名文档须先 gp_save_as。", {{"document", str}});
         add("gp_window", "通过 Qt 原生窗口方法隐藏、最小化或恢复主窗口；restore 会显示并请求激活窗口，hide 重新进入不抢焦点的后台模式。", {{"state", str}}, {"state"});
-        add("gp_screenshot", "读取 Guitar Pro 主窗口或活动模态对话框的 PNG。使用 Qt 离屏渲染，不激活窗口、不抢焦点、不发送输入；返回窗口状态、尺寸、DPI 和捕获状态。", {});
+        add("gp_windows", "只读枚举当前实例的 Qt 窗口、稳定 ID、父窗口关系及实际状态。include_hidden 默认 true；过滤不改变总数。不包含桌面和其他进程。", {{"include_hidden", boolean}});
+        add("gp_screenshot", "读取指定 window_id 的 PNG；省略时优先活动模态，否则主窗口。使用 Qt 离屏渲染，不激活窗口、不抢焦点、不发送输入；无效 ID 明确拒绝，无法可靠渲染返回 host_limited。", {{"window_id", str}});
         add("gp_capabilities", "原生 C++ 插件身份、后台控制能力及尚未覆盖的范围。", {});
         add("gp_dialogs", "Read the active modal dialog, its message labels and available buttons. Native score mutations are blocked until it is resolved.", {});
         add("gp_objects", "读取宿主 Qt 对象、属性和可调用方法；无需窗口可见或前台。", {{"query", str}, {"offset", integer}, {"limit", integer}, {"include_hidden", boolean}});
@@ -1023,7 +950,8 @@ class Bridge : public QObject {
         if (!server.start(sessionFile, info(), tools, [this](const QString &tool, const QJsonObject &args) {
             refreshOperations();
             if (tool == "gp_dialogs") return modalState();
-            if (tool == "gp_screenshot") return screenshot();
+            if (tool == "gp_windows") return windows.enumerate(args.value("include_hidden").toBool(true));
+            if (tool == "gp_screenshot") return windows.screenshot(args);
             if (tool == "gp_formats") return guitarpro::fileFormats();
             if (tool == "gp_midi_import") return midiImport(args);
             if (tool == "gp_operation") {
