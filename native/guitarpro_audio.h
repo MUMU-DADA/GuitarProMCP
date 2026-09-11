@@ -1,6 +1,11 @@
 #pragma once
 #include "guitarpro_api.h"
 #include <QtCore/QMetaEnum>
+#include <QtCore/QDateTime>
+#include <QtCore/QHash>
+#include <QtCore/QJsonArray>
+#include <QtCore/QUuid>
+#include <windows.h>
 
 namespace guitarpro {
 inline gp::rse::ConductorController *audioController(const Document &document, const QList<QPointer<QObject>> &objects) {
@@ -16,6 +21,256 @@ inline gp::rse::ConductorController *audioController(const Document &document, c
 inline void refreshTempo(const QJsonObject &args, const QList<QPointer<QObject>> &objects) {
     const auto controller = audioController(choose(args), objects);
     if (controller) controller->conductor()->updateTempoManagerAsync({});
+}
+
+// Opaque handles are process-local capabilities.  They never contain a native
+// address; every use re-resolves the current conductor and checks the Score,
+// core Track, Musician, Sound and EffectsChain identity before dereferencing.
+struct AudioTrackHandle {
+    QString id;
+    QString document;
+    gp::core::Score *score = nullptr;
+    gp::core::Track *track = nullptr;
+    gp::rse::Musician *musician = nullptr;
+    int index = -1;
+    std::weak_ptr<gp::core::Track> lifetime;
+};
+struct AudioChainHandle {
+    QString id;
+    QString document;
+    gp::core::Score *score = nullptr;
+    gp::core::Track *track = nullptr;
+    gp::rse::Musician *musician = nullptr;
+    gp::rse::Sound *sound = nullptr;
+    gp::rse::EffectsChain *chain = nullptr;
+    int trackIndex = -1;
+    int soundIndex = -1;
+    std::weak_ptr<gp::rse::Sound> soundLifetime;
+    std::weak_ptr<gp::rse::EffectsChain> chainLifetime;
+};
+inline QHash<QString, AudioTrackHandle> &audioTrackHandles() { static QHash<QString, AudioTrackHandle> value; return value; }
+inline QHash<QString, AudioChainHandle> &audioChainHandles() { static QHash<QString, AudioChainHandle> value; return value; }
+
+inline bool verifiedRseObject(const void *object, const char *rtti) {
+    return object && discovery::type(reinterpret_cast<quintptr>(object)) == rtti;
+}
+
+inline QJsonObject audioAbi(const QJsonObject &args, const QList<QPointer<QObject>> &objects) {
+    const bool rseVerified = supportedBuild() && verifiedHostFile("GPRSE.dll");
+    const bool audioVerified = supportedBuild() && verifiedHostFile("AMAudio.dll");
+    const QString operation = args.value("operation").toString("state");
+    if (operation == "buffer_probe" && !qEnvironmentVariableIsSet("GPMCP_DEVELOPMENT"))
+        return {{"status", "host_limited"}, {"reason", "buffer_probe is development-only until the real host regression is recorded"},
+            {"rse_abi_verified", rseVerified}, {"audio_abi_verified", audioVerified}};
+    if (!rseVerified || (operation == "buffer_probe" && !audioVerified))
+        return {{"status", "host_limited"}, {"reason", "GPRSE.dll/AMAudio.dll hash is not verified"},
+            {"rse_abi_verified", rseVerified}, {"audio_abi_verified", audioVerified}};
+
+    // Reject unknown capabilities before document lookup.  This keeps an old
+    // or malformed ID distinguishable from a temporarily unavailable score.
+    if (operation == "resolve") {
+        const QString requestedTrackId = args.value("track_id").toString();
+        const QString requestedChainId = args.value("chain_id").toString();
+        if (!requestedTrackId.isEmpty() && !audioTrackHandles().contains(requestedTrackId))
+            return {{"status", "error"}, {"reason", "unknown_or_expired_track_id"}};
+        if (requestedTrackId.isEmpty() && !requestedChainId.isEmpty() && !audioChainHandles().contains(requestedChainId))
+            return {{"status", "error"}, {"reason", "unknown_or_expired_chain_id"}};
+    }
+    if (operation == "buffer_probe" && args.contains("chain_id") &&
+        !audioChainHandles().contains(args.value("chain_id").toString()))
+        return {{"status", "error"}, {"reason", "unknown_or_expired_chain_id"}};
+
+    const auto document = choose(args);
+    if (!document.score) {
+        if (operation == "resolve" && args.contains("track_id") && audioTrackHandles().contains(args.value("track_id").toString()))
+            return {{"status", "error"}, {"reason", "stale_track_id"}, {"detail", "document is closed or no longer observable"}};
+        if ((operation == "resolve" || operation == "buffer_probe") && args.contains("chain_id") && audioChainHandles().contains(args.value("chain_id").toString()))
+            return {{"status", "error"}, {"reason", "stale_chain_id"}, {"detail", "document is closed or no longer observable"}};
+        return {{"status", "host_limited"}, {"reason", "verified native score is unavailable"}};
+    }
+    const auto controller = audioController(document, objects);
+    if (!controller || !controller->conductor())
+        return {{"status", "host_limited"}, {"reason", "RSE conductor for this document is unavailable"}, {"document", document.id()}};
+    const auto conductor = controller->conductor();
+    if (conductor->score().get() != document.score)
+        return {{"status", "error"}, {"reason", "RSE conductor belongs to another document"}, {"document", document.id()}};
+
+    const auto trackHandle = [&](int index, AudioTrackHandle *out, QString *error) {
+        if (index < 0 || size_t(index) >= document.score->tracks().size()) { if (error) *error = "Existing track index required"; return false; }
+        const auto &coreTrack = document.score->tracks()[size_t(index)];
+        if (!coreTrack || !verifiedRseObject(coreTrack.get(), ".?AVTrack@core@gp@@")) { if (error) *error = "Core track RTTI validation failed"; return false; }
+        auto *musician = conductor->musician(unsigned(index));
+        if (!verifiedRseObject(musician, ".?AVMusician@rse@gp@@")) { if (error) *error = "RSE musician is unavailable for this track"; return false; }
+        const auto &bound = musician->coreTrack();
+        if (!bound || bound.get() != coreTrack.get()) { if (error) *error = "RSE musician coreTrack does not match the requested document track"; return false; }
+        for (auto it = audioTrackHandles().begin(); it != audioTrackHandles().end(); ++it) {
+            if (it->document == document.id() && it->score == document.score && it->track == coreTrack.get() &&
+                !it->lifetime.expired() && it->lifetime.lock().get() == coreTrack.get()) { if (out) *out = it.value(); return true; }
+        }
+        AudioTrackHandle handle{QUuid::createUuid().toString(QUuid::WithoutBraces), document.id(), document.score, coreTrack.get(), musician, index, coreTrack};
+        audioTrackHandles().insert(handle.id, handle); if (out) *out = handle; return true;
+    };
+    const auto chainHandle = [&](int trackIndex, int soundIndex, AudioChainHandle *out, QString *error) {
+        AudioTrackHandle track;
+        if (!trackHandle(trackIndex, &track, error)) return false;
+        if (soundIndex < 0 || size_t(soundIndex) >= document.score->tracks()[size_t(trackIndex)]->sounds().size()) { if (error) *error = "Existing sound index required"; return false; }
+        auto *musician = track.musician;
+        musician->updateAll();
+        auto sound = conductor->sound(unsigned(trackIndex), unsigned(soundIndex));
+        if (!sound) sound = musician->soundAtIndex(unsigned(soundIndex));
+        if (!sound || !verifiedRseObject(sound.get(), ".?AVSound@rse@gp@@")) { if (error) *error = "RSE sound is unavailable for this sound index"; return false; }
+        const auto &chain = sound->effectChain();
+        if (!chain || !verifiedRseObject(chain.get(), ".?AVEffectsChain@rse@gp@@")) { if (error) *error = "RSE effect chain is unavailable"; return false; }
+        for (auto it = audioChainHandles().begin(); it != audioChainHandles().end(); ++it) {
+            if (it->document == document.id() && it->score == document.score && it->track == track.track && it->sound == sound.get() && it->chain == chain.get() &&
+                !it->soundLifetime.expired() && it->soundLifetime.lock().get() == sound.get() &&
+                !it->chainLifetime.expired() && it->chainLifetime.lock().get() == chain.get()) { if (out) *out = it.value(); return true; }
+        }
+        AudioChainHandle handle{QUuid::createUuid().toString(QUuid::WithoutBraces), document.id(), document.score, track.track, musician, sound.get(), chain.get(), trackIndex, soundIndex, sound, chain};
+        audioChainHandles().insert(handle.id, handle); if (out) *out = handle; return true;
+    };
+
+    if (operation == "resolve") {
+        const QString requestedTrackId = args.value("track_id").toString();
+        if (!requestedTrackId.isEmpty()) {
+            const auto foundTrack = audioTrackHandles().find(requestedTrackId);
+            if (foundTrack == audioTrackHandles().end()) return {{"status", "error"}, {"reason", "unknown_or_expired_track_id"}};
+            if (foundTrack->document != document.id()) return {{"status", "error"}, {"reason", "foreign_document_track_id"}, {"document", document.id()}};
+            AudioTrackHandle current;
+            QString error;
+            if (!trackHandle(foundTrack->index, &current, &error) || current.id != foundTrack->id)
+                return {{"status", "error"}, {"reason", "stale_track_id"}, {"detail", error}};
+            return {{"status", "verified"}, {"document", document.id()}, {"track_id", current.id},
+                {"track_index", current.index}, {"core_track_bound", true}};
+        }
+        const QString id = args.value("chain_id").toString();
+        const auto found = audioChainHandles().find(id);
+        if (found == audioChainHandles().end()) return {{"status", "error"}, {"reason", "unknown_or_expired_chain_id"}};
+        AudioChainHandle current;
+        QString error;
+        if (!chainHandle(found->trackIndex, found->soundIndex, &current, &error) || current.id != found->id)
+            return {{"status", "error"}, {"reason", "stale_chain_id"}, {"detail", error}};
+        QString trackId;
+        for (auto it = audioTrackHandles().cbegin(); it != audioTrackHandles().cend(); ++it)
+            if (it->document == current.document && it->score == current.score && it->track == current.track) { trackId = it.key(); break; }
+        QJsonObject resolved{{"status", "verified"}, {"document", document.id()}, {"chain_id", current.id}, {"track_id", trackId}};
+        resolved["track_index"] = current.trackIndex; resolved["sound_index"] = current.soundIndex;
+        resolved["chain_index"] = int(current.chain->index()); resolved["chain_name"] = QString::fromStdString(current.chain->name());
+        return resolved;
+    }
+
+    if (operation == "buffer_probe") {
+        const int frames = args.value("frames").toInt(64);
+        if (frames < 1 || frames > 4096) return {{"status", "error"}, {"reason", "frames must be 1..4096"}};
+        AudioChainHandle chain;
+        QString error;
+        const bool haveChain = args.contains("chain_id");
+        if (haveChain) {
+            const auto found = audioChainHandles().find(args.value("chain_id").toString());
+            if (found == audioChainHandles().end() || !chainHandle(found->trackIndex, found->soundIndex, &chain, &error) || chain.id != found->id)
+                return {{"status", "error"}, {"reason", "stale_chain_id"}, {"detail", error}};
+        }
+        am::audio::AudioBuffer buffer(2);
+        const auto module = GetModuleHandleW(L"AMAudio.dll");
+        using BufferU = void (__cdecl *)(am::audio::AudioBuffer *, unsigned);
+        using BufferDtor = void (__cdecl *)(am::audio::AudioBuffer *);
+        using IoVoid = void (__cdecl *)(am::audio::IAudioBuffer *);
+        const auto setChannelCount = reinterpret_cast<BufferU>(module ? GetProcAddress(module, "?setChannelCount@AudioBuffer@audio@am@@UEAAXI@Z") : nullptr);
+        const auto lock = reinterpret_cast<IoVoid>(module ? GetProcAddress(module, "?lock@IAudioBuffer@audio@am@@UEAAXXZ") : nullptr);
+        const auto unlock = reinterpret_cast<IoVoid>(module ? GetProcAddress(module, "?unlock@IAudioBuffer@audio@am@@UEAAXXZ") : nullptr);
+        const auto destroy = reinterpret_cast<BufferDtor>(module ? GetProcAddress(module, "??1AudioBuffer@audio@am@@UEAA@XZ") : nullptr);
+        if (!setChannelCount || !lock || !unlock || !destroy) return {{"status", "host_limited"}, {"reason", "AMAudio buffer entry points are incomplete"}};
+        setChannelCount(&buffer, 2); buffer.setFrameCount(frames);
+        auto &audioCore = am::audio::AudioCore::Instance();
+        audioCore.allocAudioBufferData(&buffer);
+        am::audio::IAudioBuffer &io = reinterpret_cast<am::audio::IAudioBuffer &>(buffer);
+        std::vector<float> input(size_t(frames) * 2), roundTrip(input.size());
+        for (int i = 0; i < frames; ++i) { input[size_t(i) * 2] = 0.125f + float(i % 17) / 100.0f; input[size_t(i) * 2 + 1] = -0.25f + float(i % 11) / 100.0f; }
+        io.fromInterleavedData(input.data(), unsigned(frames));
+        lock(&io); unlock(&io);
+        bool processInvoked = false;
+        QString processSource;
+        if (haveChain) {
+            std::vector<am::audio::Tick> ticks;
+            ticks.push_back(am::audio::Tick{1, 0, frames});
+            chain.chain->processDSP(io, ticks);
+            processInvoked = true; processSource = "bound_track_chain";
+        } else {
+            const int trackIndex = args.value("track").toInt(0), soundIndex = args.value("sound").toInt(0);
+            if (trackIndex >= 0 && size_t(trackIndex) < document.score->tracks().size()) {
+                const auto &sounds = document.score->tracks()[size_t(trackIndex)]->sounds();
+                if (soundIndex >= 0 && size_t(soundIndex) < sounds.size() && sounds[size_t(soundIndex)]) {
+                    const auto converted = gp::rse::SESoundConverter::convertEffectChain(sounds[size_t(soundIndex)]->rseSound().effectChain());
+                    if (converted) {
+                        std::vector<am::audio::Tick> ticks;
+                        ticks.push_back(am::audio::Tick{1, 0, frames});
+                        converted->processDSP(io, ticks); processInvoked = true; processSource = "converted_core_sound_chain";
+                    }
+                }
+            }
+        }
+        io.toInterleavedData(roundTrip.data(), long long(roundTrip.size()));
+        bool finite = true, changed = false;
+        for (size_t i = 0; i < roundTrip.size(); ++i) { finite = finite && std::isfinite(roundTrip[i]); changed = changed || std::abs(roundTrip[i] - input[i]) > 1e-7f; }
+        audioCore.freeAudioBuffer(&buffer); destroy(&buffer);
+        if (!finite) return {{"status", "error"}, {"reason", "nonfinite_audio_buffer_result"}};
+        return {{"status", "verified"}, {"document", document.id()}, {"frames", frames}, {"channels", 2},
+            {"write_roundtrip", true}, {"lock_roundtrip", true}, {"process_dsp_invoked", processInvoked}, {"process_changed", changed},
+            {"process_source", processSource}, {"chain_id", haveChain ? chain.id : QString()}, {"boundary", "AMAudio AudioBuffer -> IAudioBuffer -> GPRSE EffectsChain::processDSP"}};
+    }
+    if (operation != "state") return {{"status", "error"}, {"reason", "operation must be state, resolve or buffer_probe"}};
+
+    QJsonArray tracks;
+    int mappedChains = 0;
+    bool chainHostLimited = false;
+    const int requestedTrack = args.contains("track") ? args.value("track").toInt(-1) : -1;
+    const int first = requestedTrack >= 0 ? requestedTrack : 0;
+    const int last = requestedTrack >= 0 ? requestedTrack + 1 : int(document.score->tracks().size());
+    if (first < 0 || last > int(document.score->tracks().size()) || last - first > 1024) return {{"status", "error"}, {"reason", "track range exceeds safety bound"}};
+    for (int i = first; i < last; ++i) {
+        AudioTrackHandle track;
+        QString error;
+        if (!trackHandle(i, &track, &error)) return {{"status", "host_limited"}, {"reason", error}, {"track", i}};
+        QJsonObject row{{"track_id", track.id}, {"track_index", i}, {"core_track_bound", true}};
+        if (args.contains("sound")) {
+            AudioChainHandle chain;
+            if (chainHandle(i, args.value("sound").toInt(-1), &chain, &error)) {
+                ++mappedChains;
+                QJsonObject chainRow{{"chain_id", chain.id}};
+                chainRow["sound_index"] = chain.soundIndex; chainRow["chain_index"] = int(chain.chain->index());
+                chainRow["name"] = QString::fromStdString(chain.chain->name());
+                row["chains"] = QJsonArray{chainRow};
+            }
+            else { chainHostLimited = true; row["chain_status"] = QJsonObject{{"status", "host_limited"}, {"reason", error}}; }
+        } else {
+            QJsonArray chains;
+            bool trackChainLimited = false;
+            QString trackChainError;
+            const auto &sounds = document.score->tracks()[size_t(i)]->sounds();
+            if (sounds.size() > 256) return {{"status", "host_limited"}, {"reason", "sound count exceeds safety bound"}, {"track", i}};
+            for (int s = 0; s < int(sounds.size()); ++s) {
+                AudioChainHandle chain;
+                if (!chainHandle(i, s, &chain, &error)) {
+                    chainHostLimited = true; trackChainLimited = true;
+                    if (trackChainError.isEmpty()) trackChainError = error;
+                    continue;
+                }
+                ++mappedChains;
+                QJsonObject chainRow{{"chain_id", chain.id}};
+                chainRow["sound_index"] = s; chainRow["chain_index"] = int(chain.chain->index());
+                chainRow["name"] = QString::fromStdString(chain.chain->name()); chains.append(chainRow);
+            }
+            row["chains"] = chains;
+            if (trackChainLimited) row["chain_status"] = QJsonObject{{"status", "host_limited"}, {"reason", trackChainError}};
+        }
+        tracks.append(row);
+    }
+    const bool chainVerified = mappedChains > 0 && !chainHostLimited;
+    const char *overallStatus = chainVerified ? "verified" : (tracks.isEmpty() ? "host_limited" : "experimental");
+    return {{"status", overallStatus}, {"document", document.id()}, {"rse_abi_verified", true}, {"audio_abi_verified", audioVerified},
+        {"track_binding_status", "verified"}, {"chain_mapping_status", chainVerified ? "verified" : "host_limited"},
+        {"handle_policy", "opaque_process_local_revalidated"}, {"tracks", tracks},
+        {"buffer_boundary", QJsonObject{{"status", "experimental"}, {"probe", "buffer_probe"}, {"abi", "AMAudio 8.1.1.17 AudioBuffer/IAudioBuffer"}}}};
 }
 
 inline QJsonObject audioDevice(const QJsonObject &args, const QList<QPointer<QObject>> &objects) {

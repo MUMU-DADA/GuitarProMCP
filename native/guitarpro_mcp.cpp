@@ -872,6 +872,7 @@ class Bridge : public QObject {
         };
         if (qEnvironmentVariableIsSet("GPMCP_DEVELOPMENT")) add("gp_debug_objects", "开发用：从已知 Qt 对象读取关联的 C++ RTTI，定位原生模型。", {});
         if (qEnvironmentVariableIsSet("GPMCP_DEVELOPMENT")) add("gp_audio_probe", "开发验收：原生渲染最多 30 秒测试曲谱，返回 PCM 帧数、能量和哈希。", {{"document", str}});
+        add("gp_audio_abi", "读取当前文档的 RSE EffectsChain 到不透明 track_id/chain_id 映射；可在开发模式用 buffer_probe 验证可写 AMAudio IAudioBuffer 和 EffectsChain::processDSP。", {{"document", str}, {"operation", str}, {"track", integer}, {"sound", integer}, {"track_id", str}, {"chain_id", str}, {"frames", integer}});
         add("gp_audio_device", "原生全局音频设备：state/set。property/value 必须来自返回的 choices；修改前停止播放，不加入曲谱撤销栈。", {{"operation", str}, {"property", str}, {"value", QJsonObject{{"anyOf", QJsonArray{str, integer, anyObject}}}}});
         add("gp_p9_status", "读取 P9 编辑面板能力矩阵。每项明确返回已实现、已验证、实验性、未实现或宿主受限；只读，不改变曲谱。", {});
         add("gp_preferences", "读取或设置明确允许的全局原生偏好。scope 为 application，model 为 general/gui/score/user_info/midi。返回实际值、类型和宿主 choices；设置失败会恢复旧值。文档设置使用 gp_presentation。", {{"scope", str}, {"model", str}, {"operation", str}, {"property", str}, {"value", QJsonObject{{"anyOf", QJsonArray{boolean, str, QJsonObject{{"type", "number"}}, QJsonObject{{"type", "array"}}}}}}});
@@ -965,7 +966,7 @@ class Bridge : public QObject {
             if (pending(exporting) && (tool == "gp_close_window" || tool == "gp_window" || tool == "gp_trigger" || tool == "gp_set_property"))
                 return QJsonObject{{"error", "Export is active; cancel its request and observe completion first"}};
             const bool automationRead = tool == "gp_automation" && (args.value("operation").toString("types") == "types" || args.value("operation").toString("state") == "state");
-            static const QSet<QString> modalReads{"gp_capabilities", "gp_p9_status", "gp_screenshot", "gp_documents", "gp_score", "gp_read_bars", "gp_read_master_bars", "gp_templates", "gp_objects", "gp_actions", "gp_debug_objects", "gp_debug_resources", "gp_formats", "gp_export_json", "gp_export_tab", "gp_structure", "gp_read_chords", "gp_read_lyrics", "gp_read_sections"};
+            static const QSet<QString> modalReads{"gp_capabilities", "gp_p9_status", "gp_audio_abi", "gp_screenshot", "gp_documents", "gp_score", "gp_read_bars", "gp_read_master_bars", "gp_templates", "gp_objects", "gp_actions", "gp_debug_objects", "gp_debug_resources", "gp_formats", "gp_export_json", "gp_export_tab", "gp_structure", "gp_read_chords", "gp_read_lyrics", "gp_read_sections"};
             static const QSet<QString> dialogActions{"gp_trigger", "gp_set_property", "gp_close_window", "gp_window"};
             if (QApplication::activeModalWidget() && !modalReads.contains(tool) && !automationRead && !dialogActions.contains(tool))
                 return QJsonObject{{"error", "A modal dialog blocks native operations; inspect gp_dialogs"}, {"dialog", modalState()}};
@@ -985,6 +986,7 @@ class Bridge : public QObject {
             }
             if (tool == "gp_preferences") return preferences(args);
             if (tool == "gp_p9_status") return guitarpro::p9Status();
+            if (tool == "gp_audio_abi") return guitarpro::audioAbi(args, services());
             if (tool == "gp_automation") return guitarpro::automationState(args);
             if (tool == "gp_presentation") return args.contains("page_metadata") && args.value("operation") == "set" ? scheduleSemantic(tool, args) : guitarpro::presentation(args);
             if (tool == "gp_export_json") return guitarpro::exportJson(args);

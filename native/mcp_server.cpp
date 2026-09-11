@@ -21,6 +21,7 @@
 namespace {
 constexpr int MaxBody = 1024 * 1024, MaxHeaders = 16384;
 const QString Version = "2025-06-18";
+const QString ProductVersion = "0.8.0";
 const QStringList Versions = {Version};
 QString randomId() { return QUuid::createUuid().toString(QUuid::WithoutBraces); }
 QJsonObject rpcError(const QJsonValue &id, int code, const QString &message) {
@@ -229,7 +230,7 @@ void McpServer::accept() {
                 const QString version = Versions.contains(params.value("protocolVersion").toString()) ? params.value("protocolVersion").toString() : Version;
                 const QString key = randomId();
                 sessions.insert(key, {version, false, QDateTime::currentMSecsSinceEpoch()});
-                reply(socket, 200, rpcResult(id, {{"protocolVersion", version}, {"serverInfo", QJsonObject{{"name", "GuitarProMCP"}, {"version", "0.7.0"}}},
+                reply(socket, 200, rpcResult(id, {{"protocolVersion", version}, {"serverInfo", QJsonObject{{"name", "GuitarProMCP"}, {"version", ProductVersion}}},
                       {"_meta", QJsonObject{{"instance_id", instanceIdentity}, {"pid", QCoreApplication::applicationPid()}}},
                       {"capabilities", QJsonObject{{"tools", QJsonObject{{"listChanged", false}}}}},
                       {"instructions", "Native C++ plugin. No Python, simulated input or foreground window is required. Inspect capabilities and observed state; verify mutations."}}),

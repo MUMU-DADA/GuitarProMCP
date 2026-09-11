@@ -30,6 +30,7 @@ ABI 约束只保留已核验的最小范围：
 - `guitarpro_abi.h` 只声明已使用的导出接口；实时模型由 Guitar Pro 持有，P8 批量建谱另通过原生构造函数创建独立 `Score` 副本。
 - 已核验值对象包括 `ScoreModelRange`（8 字节）、`RhythmValue`（56 字节）、`Color`（3 字节 RGB）、`TimeSignature`（8 字节）和 `KeySignature`（16 字节且含虚析构函数）。构造、析构、对齐和大小均有静态断言或原生读回证据。
 - MSVC 负责成员调用及返回值 ABI；代码不手写 `std::string` 或 `std::shared_ptr` 的返回约定。新增 Score、和弦、歌词和页面对象见 [P8 实现说明](P8.md)。
+- 音频边界另经 8.1.1.17 专项核对：`AMAudio::AudioBuffer`/`IAudioBuffer` 的对象大小、交错 PCM 读写、锁和 `GPRSE::EffectsChain::processDSP` 均通过运行时探针；`gp_audio_abi` 句柄不暴露 native 地址，每次使用重新校验文档和对象归属。`Conductor` 尚未构造 RSE 声音时，`chain_mapping_status` 明确返回 `host_limited`（整体状态为 `experimental`），不把导出符号当作绑定链证据。
 
 ## 构建和加载
 
@@ -51,7 +52,7 @@ ABI 约束只保留已核验的最小范围：
 
 启动脚本为隔离新进程设置 `QT_PLUGIN_PATH`、`QT_QPA_GENERIC_PLUGINS` 和 `GPMCP_SESSION_FILE`，临时目录使用 `.cache/tmp`。服务优先监听 `127.0.0.1:18432`，端口冲突时回退到其他回环端口；显式设置 `GPMCP_PORT` 时严格报错。实例以 UUID、PID 和启动时间绑定，重启后旧配置失效。
 
-完整实例、UTF-8、DDE 文件关联和安装生命周期验证见 [覆盖清单](../docs/COVERAGE.md) 与 [安装说明](../docs/INSTALL.md)。开发者需要运行 DDE 专项时使用：
+完整实例、UTF-8、DDE 文件关联和安装生命周期验证见 [覆盖清单](../docs/COVERAGE.md) 与 [安装说明](../docs/INSTALL.md)。`test/test-all.ps1` 的完整原生回归包含 `audio-abi` 句柄和 buffer 边界专项；开发者需要运行 DDE 专项时使用：
 
 ```powershell
 ./test/build-dde-client.ps1
@@ -131,6 +132,9 @@ IDocumentsManager + 0x10 → 管理器实现对象
 
 # P10 偏好、音频 choices 和 MIDI 模型可用性
 ./test/test-p10.ps1 -SessionFile <session.json> -VerifyRestart
+
+# EffectsChain -> track 句柄和 IAudioBuffer/DSP 边界（开发模式）
+./test/test-audio-abi.ps1 -SessionFile <isolated-session.json>
 
 # P11 窗口截图、PNG image content 和焦点保持
 ./test/test-p11.ps1 -SessionFile <session.json> -RequireCapture

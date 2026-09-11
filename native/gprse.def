@@ -1,5 +1,22 @@
 LIBRARY GPRSE
 EXPORTS
+??0EffectsChain@rse@gp@@QEAA@XZ
+??1EffectsChain@rse@gp@@UEAA@XZ
+?index@EffectsChain@rse@gp@@QEBAIXZ
+?setIndex@EffectsChain@rse@gp@@QEAAXI@Z
+?name@EffectsChain@rse@gp@@QEBAAEBV?$basic_string@DU?$char_traits@D@std@@V?$allocator@D@2@@std@@XZ
+?process@EffectsChain@rse@gp@@QEAAXAEAVIAudioBuffer@audio@am@@AEBV?$vector@VTick@audio@am@@V?$allocator@VTick@audio@am@@@std@@@std@@@Z
+?processDSP@EffectsChain@rse@gp@@QEAAXAEAVIAudioBuffer@audio@am@@AEBV?$vector@VTick@audio@am@@V?$allocator@VTick@audio@am@@@std@@@std@@@Z
+?convertEffectChain@SESoundConverter@rse@gp@@SA?AV?$shared_ptr@VEffectsChain@rse@gp@@@std@@AEBVEffectChain@core@3@@Z
+?effectChain@Sound@rse@gp@@QEBAAEBV?$shared_ptr@VEffectsChain@rse@gp@@@std@@XZ
+?setEffectChain@Sound@rse@gp@@QEAAXAEBV?$shared_ptr@VEffectsChain@rse@gp@@@std@@@Z
+?coreTrack@Musician@rse@gp@@QEBAAEBV?$shared_ptr@VTrack@core@gp@@@std@@XZ
+?soundAtIndex@Musician@rse@gp@@QEBA?AV?$shared_ptr@VSound@rse@gp@@@std@@I@Z
+?updateAll@Musician@rse@gp@@QEAAXXZ
+?musician@Conductor@rse@gp@@QEBAPEAVMusician@23@I@Z
+?sound@Conductor@rse@gp@@QEBA?AV?$shared_ptr@VSound@rse@gp@@@std@@II@Z
+?master@Conductor@rse@gp@@QEBAAEBVMaster@23@XZ
+?masterTrack@Conductor@rse@gp@@QEBAAEBVMasterTrack@23@XZ
 ?setExportMetronome@AudioExportManager@rse@gp@@QEAAX_N@Z
 ?setExportCountdown@AudioExportManager@rse@gp@@QEAAX_N@Z
 ?setExportSelection@AudioExportManager@rse@gp@@QEAAX_N@Z

@@ -1,6 +1,6 @@
 # 原生控制覆盖清单
 
-更新日期：2026-09-10。P0–P10 已按已声明的最小范围完成；P11 已交付最小 Qt 离屏截图路径，但真实宿主全矩阵仍属实验性；P12 窗口枚举与指定截图已实现并通过核心真实宿主专项，截图整体仍保持实验性。P10 只有具备实际模型读回、重启持久化和新建曲谱继承证据的项目计入已完成范围。未实现、实验性和宿主限制仍在各节明确列出，以下不以 DLL 加载成功、菜单可枚举或导出符号存在代替功能完成。
+更新日期：2026-09-11。P0–P10 已按已声明的最小范围完成；P11 已交付最小 Qt 离屏截图路径，但真实宿主全矩阵仍属实验性；P12 窗口枚举与指定截图已实现并通过核心真实宿主专项，截图整体仍保持实验性。P10 只有具备实际模型读回、重启持久化和新建曲谱继承证据的项目计入已完成范围。未实现、实验性和宿主限制仍在各节明确列出，以下不以 DLL 加载成功、菜单可枚举或导出符号存在代替功能完成。
 
 当前开发目标、范围决策和质量门槛统一见 [AGENTS.md](../AGENTS.md)。本清单记录操作覆盖与最新验证证据；未列入当前范围的扩展和宿主限制单独标明，不视为已验证能力。阶段计划见 [开发计划](DEVELOPMENT_PLAN.md)，历史验收见文末归档。
 
@@ -19,6 +19,7 @@
 | P8 段落与页面元数据 | 段落起点、名称/文本、推导结束小节；标题、作者、作曲者、版权、页眉页脚及页码文本/可见性；整组一次撤销、保存重开、PDF 文本与页面呈现 | 段落名不自动设置播放跳转；任意刻谱样式、完整歌词排版和物理打印队列未扩展 |
 | P9 编辑面板与能力矩阵 | `gp_edit_beat operation=text/dynamic/stem` 按光标/选区写入节拍文本、`PPP`–`FFF` 力度标记和 `Upward`/`Downward`/`auto` 符干方向，保留 Unicode/空白；实际 `Beat::freeText`/`Beat::dynamic`/符干 getter 读回；`gp_edit_measure operation=clef` 写入 `G2/F4/C3` 并读回；`gp_automation` 读取整条音轨自动化并以实验性 DSP 参数路径保留其他点和旁路状态；dirty、撤销/重做、保存重开；`gp_p9_status` 返回每项能力的状态值 | P9 剩余要求包括力度清除、力度/表情/音量自动化、细粒度排版、完整歌词/刻谱排版、任意乐器/指法、自定义音色/效果、完整自动化、系统剪贴板、任意音轨映射、剩余特别粘贴过滤项和全部技法组合；分别标为宿主受限、实验性或未实现，详见 [P9 剩余要求](DEVELOPMENT_PLAN.md#p9-剩余要求归档) |
 | P10 偏好与基础音频/MIDI | `gp_preferences` 的 general/gui/score/user_info/midi 显式 allowlist、`property_info` 类型/枚举 choices、错误输入拒绝和同值写入读回；setter 失败时尝试恢复旧值；`gp_audio_device` 返回输出声道 choices、属性类型、运行状态并拒绝未知值；真实宿主专项核对重启持久化和新建曲谱默认资讯继承 | 每路 MIDI 延迟、通道检测、驱动控制面板、更新/Beta 保留为宿主受限或待调查；输出通道只接受当前宿主给出的 choices，不猜测额外映射 |
+| RSE/音频 ABI 边界 | `gp_audio_abi` 为当前文档的 `core::Track` 返回稳定进程内 `track_id`；句柄不含 native 地址，每次使用重新验证 `Score`/`Musician`/`Sound`/`EffectsChain` 归属；`buffer_probe` 已在 8.1.1.17 真实宿主完成 2 声道 64 帧 `AudioBuffer`/`IAudioBuffer` 交错写读、锁和 `processDSP` 有限值检查 | 最小曲谱和 Steel Guitar 夹具的 `Conductor::Sound` 尚未形成可观察 RSE `EffectsChain`，因此 `chain_mapping_status` 当前为 `host_limited`；不把导出符号或转换链当作实时绑定链。构造真实 RSE 链后运行 `test/test-audio-abi.ps1 -RequireBoundChain` 补验；实时线程复用和线程安全仍需单独专项 |
 | P11 界面截图与窗口状态 | `gp_screenshot` 通过 `QWidget::render` 返回标准 MCP PNG image content；活动模态对话框优先，结构化结果含目标窗口、`capture_mode`、尺寸、DPI、可见/最小化和采集时间；尺寸、像素数、PNG 体积受限；专项脚本核对工具注册、PNG 签名和截图前后焦点保持 | 当前状态为实验性；关闭确认模态已有最小专项证据，多窗口、遮挡、多文档与无文档补验见 P12；其他模态类型和全部显示配置未穷举；窗口不存在、尺寸超限、编码失败或响应过大时返回 `status=host_limited` |
 | P12 窗口枚举与指定截图 | `gp_windows` 的 Qt 窗口统计、隐藏过滤、稳定 ID 和父关系；`gp_screenshot(window_id)` 在模态存在时保持主窗口、键盘/指板浮动窗口和非模态偏好的显式目标；模态销毁拒绝、只读状态、正常/隐藏/最小化/最大化、多文档/无文档及保存重开 | 新窗口类型仍属实验性；未准备的隐藏菜单不初始化或调整大小，Qt 待处理几何事件在绘制后保留；纯 QWindow/GPU/原生嵌入无可靠路径时返回宿主受限；具体证据与剩余矩阵见下文 |
 | 连音 | 两层比例结构化读取和原生编辑；单拍、选区、反向跨小节、跨声部/音轨、钢琴谱表；指定层独立清除；另一层及音符/基础时值/附点隔离；重复写入、原生宏命令一次撤销、重做、GPIF、嵌套与次层单独保存重开及插件内复制粘贴 | 比例为 1..255；不自动重排小节或改变连音括号/分组排版；任意比例组合的实际发声和极端时长播放尚未验证 |
@@ -72,6 +73,10 @@ P12 功能提交的核心 DLL SHA-256：`FD540740217764587B843571751E9EB0F308224
 
 `0.7.0` 发布构建仅更新协议、安装器和打包脚本的版本号，核心 DLL SHA-256 为 `C55290F551E6D741C571D7E69159250A3DE62651030068FC3D86E19419AA705E`。解压后的实际安装包通过文件清单与哈希检查、33 项安装器检查、自动加载与版本读回、27 项 MCP 协议检查及 5369 项 P12 专项；保存 19 份 PNG，隔离宿主退出码 0，连接描述清理和卸载完成。发布证据：`artifacts/release-0.7.0-bec2d87632a3435d85b85874699af8fb/verification.json`；P12 明细：`artifacts/native-p12-2fe8d7810a26444a925675ae333b57cc/verification.json`。首次复测遇到外部 Firefox 前台切换，Qt 窗口及文档状态未变；保留失败记录后重跑通过。完整 27 组回归对应上述功能提交 DLL，发布 DLL 的验证范围以本段为准。
 
+### 0.8.0 发布构建
+
+2026-09-11 基于新增 `gp_audio_abi` 的源码构建并生成 `GuitarProMCP-0.8.0-f4162963504445d28ba29196e51d2d8f.zip`；包内清单 2 个插件文件哈希已核对，zip SHA-256 为 `34F441F50E26922D1A4E41F7F4D1169D2734E494A77DF75F4D3820484F9DA873`，核心 DLL 为 `21BBE7972A6DD1A5994AFABB3F876A07A227B3DE680C0C2DAED92B7B24BB6048`，autoload DLL 为 `EC5FBC9007FEF3ED7D95364F0E5B3B00BD805767CB69450DD67846B59EDF45A2`。`test/test-installer-files.ps1` 通过 33 项，完整 `test/test-all.ps1` 在 `.tools` 隔离宿主通过 27 组、14777 项并以退出码 0 完成：`artifacts/regression-3a135ab949fa42cbaa8d88ebd7d01f67/regression.json`。其中 `test/test-audio-abi.ps1 -RequireProbe` 通过 20 项并确认运行时 `serverInfo.version=0.8.0`；音频证据 `artifacts/native-audio-abi-18ddea72de4e45f19b1234c6f84241be/verification.json` 仍记录 `bound_chain` 为 `host_limited`，因为最小夹具未暴露可绑定的 RSE `EffectsChain`，不把该边界写成完整链路验收。
+
 剩余状态：真实宿主嵌套模态、独立 `Qt::SubWindow`、QWindow-only、纯系统/外部驱动窗口、未构造的其他弹出窗口和其他显示器/DPI 配置未验证；分配失败、PNG 编码失败、8 MiB 响应上限和阻塞绘制未注入真实宿主，不计为通过。2000 ms 仅在绘制/编码返回后判断。接口保持 `experimental`，无可靠 Qt 路径则明确 `host_limited`；本阶段的完成结论依据 [P12 交付核对](DEVELOPMENT_PLAN.md#p124-交付核对)，不宣称全窗口类型验收。
 
 ### P11 最小专项
@@ -89,6 +94,12 @@ P12 功能提交的核心 DLL SHA-256：`FD540740217764587B843571751E9EB0F308224
 ### P10 验收
 
 源码已通过 `native/build.ps1` 的 C++/Qt 构建检查。`test/test-p10.ps1 -VerifyRestart` 在 Guitar Pro 8.1.1.17 上通过 98 项，五类偏好模型和音频/MIDI 模型无 `host_limited`，并核对了 allowlist、类型/choices、同值写入读回、五项乐谱错误开关、跨宿主重启持久化和新建曲谱默认资讯继承。证据：`artifacts/native-p10-89b706d861a941659cc7b1806098b3c5/verification.json`，其中 `complete=true`；插件 SHA-256 为 `B5DB3991C4BCA16F5C76134F1F730D23310B5DE6FBA541B8C44FDCCE7EF85FA7`。
+
+### RSE/音频 ABI 边界专项
+
+`gp_audio_abi` 已纳入工具目录和开发模式专项。`state` 在 Guitar Pro 8.1.1.17 隔离宿主上核对 `Musician::coreTrack()` 与实时文档音轨的对象归属，并重复读取确认同一实例内 `track_id` 稳定；`buffer_probe frames=64` 连续 3 次实测 `AMAudio::AudioBuffer` → `IAudioBuffer` 的 2 声道交错写读、锁/解锁和有限值，调用 `GPRSE::EffectsChain::processDSP` 后 PCM 发生变化。最近一次 20 项证据：`artifacts/native-audio-abi-18ddea72de4e45f19b1234c6f84241be/verification.json`；每次返回 `status=verified`、`write_roundtrip=true`、`lock_roundtrip=true`、`process_dsp_invoked=true`、`process_changed=true`、`process_source=converted_core_sound_chain`。
+
+`chain_id` 只在宿主实际提供 `Conductor::Sound`/`EffectsChain` 时发布；最小/Steel Guitar 夹具当前返回 `chain_mapping_status=host_limited`，这是可观察宿主对象状态，而非 ABI 导出缺失。脚本默认接受该边界并记录，`-RequireBoundChain` 用于真实 RSE 链夹具的强制验收。关闭/重开/重启或音轨结构变化后旧句柄必须被拒绝并重新读取；实时音频线程接入、长期 buffer 复用和跨线程安全不在本专项结论内。
 
 ### P8 验收
 

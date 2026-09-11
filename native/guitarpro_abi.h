@@ -45,6 +45,67 @@ struct AudioDeviceInfo {
     std::vector<int> nativeValues;
 };
 static_assert(sizeof(AudioDeviceInfo) == 64);
+// GP 8.1.1.17 audio ABI. These wrappers describe only the verified object
+// size; the implementation remains owned by AMAudio.dll.
+class Tick {
+public:
+    int value = 0;
+    long long frameOffset = 0;
+    long long frameCount = 0;
+};
+static_assert(sizeof(Tick) == 24 && alignof(Tick) == 8);
+class __declspec(dllimport) IAudioBuffer {
+    alignas(8) unsigned char storage[0x20];
+public:
+    enum class RawPolicy : int {};
+    IAudioBuffer();
+    ~IAudioBuffer() = default;
+    void clear(); void unclear(); void lock(); void unlock();
+    float *const *data(RawPolicy);
+    const float *const *constData() const;
+    bool empty() const;
+    void fromInterleavedData(float *, unsigned);
+    void toInterleavedData(float *, long long) const;
+    void addToInterleavedData(float *, long long) const;
+    long long add(const IAudioBuffer &);
+    long long addScaled(const IAudioBuffer &, float);
+    long long copyFrom(const IAudioBuffer &);
+    void fill(float); void fill(unsigned, float); void scale(float); void clip();
+};
+static_assert(sizeof(IAudioBuffer) == 0x20 && alignof(IAudioBuffer) == 8);
+class __declspec(dllimport) AudioBuffer {
+    alignas(8) unsigned char storage[0x48];
+public:
+    AudioBuffer(); explicit AudioBuffer(unsigned);
+    ~AudioBuffer() = default;
+    unsigned channelCount() const;
+    long long frameCount() const;
+    const std::array<float *, 2> &rawData() const;
+    void lock(); void unlock();
+    void setChannelCount(unsigned); void setChannelData(unsigned, float *);
+    void setFrameCount(long long);
+};
+static_assert(sizeof(AudioBuffer) == 0x48 && alignof(AudioBuffer) == 8);
+class __declspec(dllimport) AudioCore {
+public:
+    static AudioCore &Instance();
+    void allocAudioBufferData(AudioBuffer *);
+    void freeAudioBuffer(AudioBuffer *);
+    int samplingRate() const;
+    long long audioBufferFrameCount() const;
+};
+class __declspec(dllimport) VolumePan {
+public:
+    VolumePan();
+    ~VolumePan();
+    bool isBypassed() const;
+    unsigned parameterCount() const;
+    float parameter(unsigned) const;
+    void setBypassed(bool);
+    void setParameter(unsigned, float);
+    void reset();
+    void process(IAudioBuffer &, const IAudioBuffer &);
+};
 class __declspec(dllimport) AudioLayer {
 public:
     static AudioLayer &instance();
@@ -674,6 +735,32 @@ __declspec(dllimport) std::string ottaviaToString(Ottavia);
 __declspec(dllimport) std::string rasgueadoToString(Rasgueado);
 }
 namespace gp::rse {
+class Master;
+class MasterTrack;
+class __declspec(dllimport) EffectsChain {
+public:
+    unsigned index() const;
+    void setIndex(unsigned);
+    const std::string &name() const;
+    EffectsChain *clone() const;
+    void process(am::audio::IAudioBuffer &, const std::vector<am::audio::Tick> &);
+    void processDSP(am::audio::IAudioBuffer &, const std::vector<am::audio::Tick> &);
+};
+class __declspec(dllimport) SESoundConverter {
+public:
+    static std::shared_ptr<EffectsChain> convertEffectChain(const gp::core::EffectChain &);
+};
+class __declspec(dllimport) Sound {
+public:
+    const std::shared_ptr<EffectsChain> &effectChain() const;
+    void setEffectChain(const std::shared_ptr<EffectsChain> &);
+};
+class __declspec(dllimport) Musician {
+public:
+    const std::shared_ptr<gp::core::Track> &coreTrack() const;
+    std::shared_ptr<Sound> soundAtIndex(unsigned) const;
+    void updateAll();
+};
 class __declspec(dllimport) PlaybackRange {
 public:
     int playTickOffset() const; int endTickOffset() const;
@@ -686,6 +773,10 @@ public:
 class __declspec(dllimport) Conductor {
 public:
     const std::shared_ptr<gp::core::Score> &score() const;
+    Musician *musician(unsigned) const;
+    std::shared_ptr<Sound> sound(unsigned, unsigned) const;
+    Master &master() const;
+    MasterTrack &masterTrack() const;
     unsigned barCount() const;
     int tickCount() const; int tickOffset() const; int tickOffset(unsigned) const;
     long long frameOffset() const;

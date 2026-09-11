@@ -1,6 +1,6 @@
 # GuitarProMCP 阶段计划与当前验收
 
-更新日期：2026-09-10。本文件记录 P0-P12 阶段计划、当前验收标准、P9 实施边界、P10 验收、P11 实验性记录和 P12 多窗口枚举与指定窗口截图的验收记录。当前协作规范、开发目标、产品要求、范围决策和质量门槛统一见 [AGENTS.md](../AGENTS.md)；历史执行记录见文末归档。
+更新日期：2026-09-11。本文件记录 P0-P12 阶段计划、当前验收标准、P9 实施边界、P10 验收、RSE/音频 ABI 边界、P11 实验性记录和 P12 多窗口枚举与指定窗口截图的验收记录。当前协作规范、开发目标、产品要求、范围决策和质量门槛统一见 [AGENTS.md](../AGENTS.md)；历史执行记录见文末归档。
 
 > 文档分工遵循 [AGENTS.md](../AGENTS.md#文档分工)：阶段记录见本文件，当前能力及具名证据见 [COVERAGE.md](COVERAGE.md)，接口细节见 [native/API.md](../native/API.md) 和 [native/P8.md](../native/P8.md)。
 
@@ -119,6 +119,12 @@ P9 用于归拢当前截图及实际用户编辑流程中尚未覆盖的按钮�
 ### P10.6 当前实现证据
 
 `test/test-p10.ps1 -SessionFile <session.json> -VerifyRestart` 在 Guitar Pro 8.1.1.17 上通过 98 项：五类模型均可访问，实际可写字段完成同值读回，显式 allowlist 和错误输入拒绝、音频输出通道 choices、MIDI 输出列表/采集灵敏度、五项乐谱错误开关、`forceNotation` 跨宿主重启持久化，以及 `user_info.tab` 到新建曲谱 `Tabber` 的默认继承。具名证据为 `artifacts/native-p10-89b706d861a941659cc7b1806098b3c5/verification.json`，其中 `complete=true`；同一构建插件 SHA-256 为 `B5DB3991C4BCA16F5C76134F1F730D23310B5DE6FBA541B8C44FDCCE7EF85FA7`。更新/Beta、每路 MIDI 延迟、通道检测和驱动控制面板仍按宿主受限或待调查保留。
+
+### P10.7 RSE EffectsChain 与 IAudioBuffer 边界
+
+`gp_audio_abi` 是开发者可调用的原生边界入口。`state` 生成不含地址的 UUID 句柄，并把 `Musician::coreTrack()` 与当前文档 `Score::tracks()` 逐项比对；`resolve` 和 `buffer_probe` 每次重新验证对象链，文档重开、音轨结构变化、声音替换和宿主重启后旧句柄均必须重新读取。`buffer_probe` 在 `GPMCP_DEVELOPMENT=1` 下构造真实 `AMAudio::AudioBuffer`，核对 `IAudioBuffer` 交错数据、锁/解锁和 `EffectsChain::processDSP`，不把 HTTP 线程接入实时音频回调。
+
+当前 8.1.1.17 隔离宿主的 `test/test-audio-abi.ps1 -RequireProbe` 已通过 20 项，连续 3 次验证 2 声道 64 帧写读和 DSP 边界；证据为 `artifacts/native-audio-abi-18ddea72de4e45f19b1234c6f84241be/verification.json`。最小/Steel Guitar 夹具的 `Conductor::Sound` 尚未产生可观察 `EffectsChain`，故 `chain_mapping_status=host_limited` 会被记录而不被猜测为成功。需要强制实时链证据时，用构造了 RSE Sound 的曲谱运行同一脚本并加 `-RequireBoundChain`；在该专项通过前，产品接口只承诺 `track_binding_status=verified` 和转换链的验收路径。
 
 ## P11：界面截图与窗口状态采集
 

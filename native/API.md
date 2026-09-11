@@ -86,6 +86,7 @@ try {
 | `gp_read_sections` / `gp_edit_section` | `document?`，写入另需 `bar`, `name?`, `text?`, `operation?` | 读段落起止；异步设置或移除原生段落起点 |
 | `gp_presentation` 的页面元数据 | `document?`, `operation=set`, `page_metadata` | 标题、作者、作曲者、版权、页眉页脚和页码，异步整组提交及一次撤销 |
 | `gp_p9_status` | 无 | 读取 P9 能力矩阵及“已实现、已验证、实验性、未实现、宿主受限”状态，不改变曲谱 |
+| `gp_audio_abi` | `document?`, `operation=state/resolve/buffer_probe`, `track?`, `sound?`, `track_id?`, `chain_id?`, `frames?` | 返回不透明 `track_id`/`chain_id` 及逐次归属核验；开发模式 `buffer_probe` 验证 `AudioBuffer`/`IAudioBuffer` 交错写读、锁和 `EffectsChain::processDSP` |
 | `gp_windows` | `include_hidden?` | 只读枚举当前实例 Qt 窗口，返回数量、稳定 `window_id`、父窗口关系和实际状态；默认包含隐藏窗口，过滤不改变统计总数 |
 | `gp_screenshot` | `window_id?` | 按 `gp_windows` 的 ID 读取单个窗口；省略参数仍优先活动模态，否则主窗口。通过 Qt `QWidget::render` 返回标准 MCP PNG `image` content；无效 ID 拒绝且无图像，无法可靠渲染时返回 `status=host_limited` |
 
@@ -418,6 +419,10 @@ GPIF 预检使用宿主 `Qt5Gui.dll` 的 `QZipReader` 和 Qt XML 流解析器，
 | `effect_swap` / `effect_remove` | 交换 `effect/other` 或删除 `effect` |
 
 除 `select` 外，修改独立的原生 `Sound` 副本后通过 `Score::setTrackSound` 提交，支持撤销重做及保存重开。音色复制保留目标音轨的 MIDI/RSE 引擎选择；RSE 音轨可从模板创建或通过 `gp_insert_track` 复用，不增加引擎或乐器定义系统。效果参数沿用宿主索引，不引入参数名称数据库、任意新效果构造或自动化曲线编辑。音量、声像、独奏和静音继续使用 `gp_edit_track`。
+
+`gp_audio_abi` 提供给需要直接验证原生音频边界的开发者。`operation=state` 逐音轨返回进程内不透明的 `track_id`；当当前 `Conductor` 已为该文档构造 RSE 声音时，同时返回 `chain_id`、声音索引、链索引和名称。`operation=resolve` 携带 `track_id` 或 `chain_id` 可检查句柄仍绑定原对象。句柄只是随机 UUID，不编码 native 地址；每次 `resolve` 或 `buffer_probe` 都重新定位当前文档的 `Score`、`core::Track`、`Musician`、`Sound` 和 `EffectsChain` 并逐级核对 RTTI 与对象身份。文档关闭/替换、音轨重排/删除、声音或链替换、宿主重启以及实例切换都会使旧句柄失效，调用方必须重新读取 `state`，不能缓存地址或把旧 ID 用到其他实例。`track_binding_status=verified` 只表示 `Musician::coreTrack()` 与目标音轨匹配；`chain_mapping_status=host_limited` 表示该宿主时刻没有可观察的 RSE `Sound/EffectsChain`，不会猜测或回退到别的音轨。
+
+`operation=buffer_probe`（仅 `GPMCP_DEVELOPMENT=1`）在宿主线程分配真实 `AMAudio::AudioBuffer`，经 `IAudioBuffer::fromInterleavedData`、`lock/unlock`、`toInterleavedData` 验证可写交错 PCM 边界，并调用 `GPRSE::EffectsChain::processDSP`。传入 `chain_id` 时使用已绑定的实时链；省略时使用当前曲谱 `core::EffectChain` 经 `SESoundConverter::convertEffectChain` 得到的验收链，返回 `process_source=bound_track_chain` 或 `converted_core_sound_chain`。两条路径都只用于边界验收；实时播放线程的长期复用、线程安全和无锁音频回调仍需单独专项，HTTP 请求不能直接持有实时 buffer。当前 8.1.1.17 隔离宿主已验证 64 帧、2 声道、有限值、写读和 DSP 改变；真实 `Conductor` 链尚未由最小夹具构造时，`state.status=experimental` 且 `chain_mapping_status=host_limited`，不会伪造绑定链成功。
 
 `gp_audio_device state` 返回 `scope=application`、`configuration`、`property_types`、当前宿主 `choices` 和 `running`。`set property=... value=...` 只接受返回 choices 中的精确值；`audioOutputChannels` 只有在宿主模型可读时才会列出当前合法值，不猜测声道数量。通过宿主配置模型的 Qt 属性提交，原生配置负责持久化，不进入曲谱撤销。播放中拒绝设备修改；未知选项在修改前拒绝，原生设置失败尝试恢复旧值。Standard、Studio 2 PRO 输出与 512/1024 缓冲区已验证；ASIO、热拔插、厂商控制面板及驱动故障未验收，不声明自动恢复所有设备错误。
 
