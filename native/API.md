@@ -438,7 +438,7 @@ generation 在观察到文档 Score、音轨指针或音轨集合变化时递增
 
 `GPMCP_AUDIO_HOST_LIMITED` 可以携带已核验的音轨上下文：未就绪链为 `chain=nullptr`、`sound_index=-1`、binding `status=GPMCP_AUDIO_HOST_LIMITED`。非活动文档可能没有 Conductor，此时不返回该文档绑定，枚举总状态为 `HOST_LIMITED`；切换回文档后重新发现。回调内不得编辑宿主、处理 Qt 事件、重新进入 Provider 或抛异常；消费者只复制元数据，DLL 卸载后不得调用旧函数地址。
 
-0.9.0 保留 MCP 协议 `2025-06-18` 和 `gp_audio_abi` 原有参数/状态含义，新增 generation、控制器信息及 `gp_capabilities.audio_provider`；客户端可忽略新增字段。`state`/`resolve` 和原生枚举均只观察现有对象，不再隐式调用 `Musician::updateAll()`；链未就绪时保留 `host_limited`。内部 ABI v1 首次发布，后续不兼容修改提高 ABI 主版本并提供迁移说明。当前 ABI 只提供音轨/音色/效果链绑定，VST3 消费者、实时 PCM 和系统混音未实现。
+0.9.1 保留 MCP 协议 `2025-06-18` 和 `gp_audio_abi` 原有参数/状态含义，新增 generation、控制器信息及 `gp_capabilities.audio_provider`；客户端可忽略新增字段。`state`/`resolve` 和原生枚举均只观察现有对象，不再隐式调用 `Musician::updateAll()`；链未就绪时保留 `host_limited`。内部 ABI v1 首次发布，后续不兼容修改提高 ABI 主版本并提供迁移说明。当前 ABI 只提供音轨/音色/效果链绑定，VST3 消费者、实时 PCM 和系统混音未实现。偏好模型额外允许写入 `currentRow`，以支持列表选择控件的原生读回。
 
 ## 窗口截图
 

@@ -94,6 +94,12 @@ P12 功能提交的核心 DLL SHA-256：`FD540740217764587B843571751E9EB0F308224
 
 当前源码的真实宿主原生消费者专项通过 213 项，证据为 `artifacts/native-audio-provider-30b630ada0de439e97fe857cf3b32d5d/verification.json`。最新包的整包回归通过 29 个套件、14741 项，`complete=true`、宿主退出码 `0`，证据为 `artifacts/regression-14f2d2fb3b644255902a63881458b1aa/regression.json`；加载的核心/autoload DLL 哈希与本包清单一致。入口包含 P6、P11、P12、`audio-abi` 和 Provider fixture 检查。VST3 消费者、实时 PCM、系统混音以及未构造的多控制器重建组合不计入已实现范围。
 
+### 0.9.1 发布构建
+
+2026-09-12 基于 P13 Provider ABI 和 `currentRow` 偏好控件写入修复构建并生成 `GuitarProMCP-0.9.1-be8b77fc943b4732999dec11855783cb.zip`。包内 2 个插件文件的 SHA-256 已由 `package.json` 和 `test/test-installer-files.ps1` 核对：核心 Provider DLL 为 `7981D851ED7156B01DF2E337196129814D1B5D3791E8B6AC0A33D8FAA76FB160`，autoload DLL 为 `816E52B9AF87545CDC38971AE5A7340368B58329CF1C27BF2992AD5819C7D5F9`，zip SHA-256 为 `EDF56CAD4CB312E2979A37EAEF36C75A02BB4BC0B5DFF40D43FE2836F7DE8A45`（702399 bytes）。安装器文件归属、回滚、配置保留和卸载通过 33 项；证据为 `artifacts/installer-files-530a2c1e0b0f4d2381daf3f8069acfad/verification.json`。
+
+P10 偏好与基础音频/MIDI 专项通过 98 项，重启持久化和新建曲谱默认资讯均通过；证据为 `artifacts/native-p10-ae5dfee13f594e7fac971325cdd4dc0e/verification.json`。最新包完整回归通过 29 个套件、14741 项，`complete=true`、宿主退出码 `0`，加载的核心/autoload DLL 哈希与本包清单一致；证据为 `artifacts/regression-b75e9240845e43c1b0921cfdae2cc0f5/regression.json`。`audio-abi` 的开发 buffer probe 仍按宿主边界记录为 `host_limited`，不把该状态写成实时 PCM 已实现。
+
 ### P11 最小专项
 
 在 Guitar Pro 8.1.1.17 上运行 `test/test-p11.ps1 -RequireCapture`，通过 60 项：工具注册、标准 MCP `image` content、PNG 签名、Qt 离屏渲染元数据、正常/隐藏/最小化/活动模态状态、模态文本与按钮交叉核对、取消/丢弃后重开文档和截图前后前台窗口保持。证据目录由脚本生成于 `artifacts/native-p11-*/verification.json`；本记录只覆盖 P11 最小专项，多窗口、遮挡、多文档与无文档的后续补验见 P12，全类型截图仍为实验性。

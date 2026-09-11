@@ -48,7 +48,7 @@
 #include <cstring>
 
 static QString nonce() { return QUuid::createUuid().toString(QUuid::WithoutBraces); }
-static const QStringList writableNames = {"checked", "value", "currentIndex", "currentText", "text", "plainText"};
+static const QStringList writableNames = {"checked", "value", "currentIndex", "currentRow", "currentText", "text", "plainText"};
 
 static QJsonValue preferenceJsonValue(const QMetaProperty &property, const QVariant &value) {
     if (property.isEnumType()) return value.isValid() ? QJsonValue(value.toInt()) : QJsonValue();

@@ -98,7 +98,7 @@ foreach ($relative in $paths) {
     $files += [pscustomobject]@{path=$relative;sha256=(Get-FileHash -LiteralPath $source).Hash}
 }
 $packageManifest = Join-Path $PackageDirectory 'package.json'
-$version = '0.9.0'
+$version = '0.9.1'
 if (Test-Path -LiteralPath $packageManifest) {
     $manifest = Get-Content -LiteralPath $packageManifest -Raw -Encoding UTF8 | ConvertFrom-Json
     if ($manifest.product -ne 'GuitarProMCP' -or $manifest.version -notmatch '^\d+\.\d+\.\d+([-.][A-Za-z0-9.]+)?$') { throw 'Invalid package manifest.' }

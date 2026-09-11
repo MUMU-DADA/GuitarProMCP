@@ -21,7 +21,7 @@
 namespace {
 constexpr int MaxBody = 1024 * 1024, MaxHeaders = 16384;
 const QString Version = "2025-06-18";
-const QString ProductVersion = "0.9.0";
+const QString ProductVersion = "0.9.1";
 const QStringList Versions = {Version};
 QString randomId() { return QUuid::createUuid().toString(QUuid::WithoutBraces); }
 QJsonObject rpcError(const QJsonValue &id, int code, const QString &message) {
