@@ -1,6 +1,6 @@
 # GuitarProMCP 阶段计划与当前验收
 
-更新日期：2026-09-11。本文件记录 P0-P12 阶段计划、当前验收标准、P9 实施边界、P10 验收、RSE/音频 ABI 边界、P11 实验性记录和 P12 多窗口枚举与指定窗口截图的验收记录。当前协作规范、开发目标、产品要求、范围决策和质量门槛统一见 [AGENTS.md](../AGENTS.md)；历史执行记录见文末归档。
+更新日期：2026-09-12。本文件记录 P0-P13 阶段计划、当前验收标准、P9 实施边界、P10 验收、RSE/音频 ABI 边界、P11 实验性记录、P12 多窗口枚举与指定窗口截图的验收记录以及 P13 音频 Provider 与多插件接口设计计划。当前协作规范、开发目标、产品要求、范围决策和质量门槛统一见 [AGENTS.md](../AGENTS.md)；历史执行记录见文末归档。
 
 > 文档分工遵循 [AGENTS.md](../AGENTS.md#文档分工)：阶段记录见本文件，当前能力及具名证据见 [COVERAGE.md](COVERAGE.md)，接口细节见 [native/API.md](../native/API.md) 和 [native/P8.md](../native/P8.md)。
 
@@ -23,6 +23,7 @@
 | P10 偏好设置与基础音频/MIDI 控制 | 已完成最小可核验范围，剩余项按宿主受限或待调查保留 | 一般/界面偏好、我的资讯默认值、音频输出通道 choices、MIDI 设备/输出列表/采集灵敏度及乐谱错误开关；更新/Beta、每路 MIDI 延迟、通道检测及驱动控制面板另行调查 |
 | P11 界面截图与窗口状态采集 | 已实现最小 Qt 离屏路径，实验性 | `gp_screenshot` 已注册并通过 MCP image content 返回 PNG；正常、后台、被遮挡和最小化均走 `QWidget::render`，不改变焦点、不发送输入、不截取整个桌面；活动模态对话框优先捕获；尚未完成真实宿主全矩阵，无法证明离屏结果等价时返回 `status=host_limited` |
 | P12 多窗口枚举与指定窗口截图 | 已完成核心实现与真实宿主专项，截图保持实验性 | `gp_windows` 提供稳定身份、数量与状态，`gp_screenshot(window_id)` 保留显式目标；核心多窗口、模态并存、只读性和失效拒绝有证据；剩余矩阵逐项保留，见下文与 [P12 范围约定](../AGENTS.md#p12-范围约定) |
+| P13 音频 Provider 与多插件接口设计 | 已完成最小 Provider 契约、MCP 适配和真实宿主原生消费者专项；VST3 消费者未实现 | 抽象进程内音频 Provider；MCP、VST3 和其他插件通过版本化 ABI 使用；允许按真实需求重新设计 MCP 工具和数据模型；实时 PCM 获取仍需单独设计和验证 |
 
 P0、P1、P2 为 P3–P6 提供基础，随后由 P7 对完整安装包进行发布验收。P1 已完成真实安装集成验收；可靠性检查继续贯穿后续阶段。
 
@@ -191,6 +192,77 @@ P9 用于归拢当前截图及实际用户编辑流程中尚未覆盖的按钮�
 | 4 | API、覆盖清单、用户/开发说明及阶段状态 | 已更新；当前目标继续仅在 AGENTS 维护 |
 
 C++/Qt 构建、PowerShell 语法和 `git diff --check` 与上述专项一起执行。完整回归包括既有会话/模态、P11 和 P12；未穷举的宿主矩阵不因完整回归通过而自动计为已验证。
+
+## P13：音频 Provider 与多插件接口设计计划
+
+状态：已完成最小进程内 Provider 契约与 MCP 适配。`audioControllers`、`enumerateAudioBindingsV1`、`gpmcp_audio_bridge_version`、`gpmcp_audio_bridge_get_info` 和 `gpmcp_audio_enumerate_v1` 已实现并通过源码构建；独立原生消费者在真实宿主中核对效果链绑定、加载顺序与生命周期。Provider 只交付绑定快照；未就绪音轨和无可观察 Conductor 的非活动文档保持 `host_limited`，PCM 获取未实现。P13 服从 [AGENTS.md](../AGENTS.md) 的进程内运行约束，MCP 工具、字段和数据模型可以在提高版本并提供迁移说明后调整。
+
+### P13.1 能力归属与协议设计
+
+- 宿主音频发现、ABI 校验、文档/音轨/声音/效果链绑定和生命周期属于进程内 Audio Provider。Provider 可以先由 MCP 插件承载，也可以迁移到独立原生插件或由其他插件承载；MCP 只是其中一个协议适配器。
+- 同一实时宿主对象图必须有明确的权威 Provider。MCP、VST3 和其他插件通过 Provider 接口消费结果，不复制第二套 `Score`、`Track`、`Musician`、`Sound` 或 `EffectsChain` 解析。
+- 现有 `gp_audio_abi` 作为行为和验收基线，但不再限制目标设计。若 Provider 需要新的对象模型、参数或状态语义，可以调整现有工具或引入带主版本的新工具；不得在同一版本中静默改变字段含义。
+- 每次 MCP 协议调整都必须明确协议版本、迁移说明、请求/响应样例和失败降级路径。Provider 不可用、版本不匹配、宿主哈希未核验或对象暂不可观察时，MCP 必须返回明确的稳定失败状态，普通 Guitar Pro 仍可用。内部 Provider ABI 版本与 MCP 协议版本分开管理。
+
+v1 的最小协商示例：
+
+```text
+gpmcp_audio_bridge_get_info({struct_size: sizeof(gpmcp_audio_bridge_info)})
+  -> {abi_version: 1, status: ready|not_ready|host_limited, generation, capabilities, host_build_sha256}
+gpmcp_audio_enumerate_v1(1, visitor, user, result)
+  -> result {status: ok|not_ready|host_limited|abi_mismatch|wrong_thread, generation, count}
+```
+
+请求方遇到 `abi_mismatch` 时不得继续读取 v1 字段；遇到 `not_ready`/`host_limited` 时保留宿主正常运行并等待下一次显式发现。新增不兼容字段提高 ABI 主版本，MCP 工具继续沿用现有 JSON 语义并在工具描述中声明迁移版本。
+
+### P13.2 Provider 抽象与对象解析
+
+- 把当前音频发现和绑定逻辑从 MCP HTTP 分发中抽出，形成独立 Provider 内核；保留 MCP 适配层和其他插件适配层。
+- 对多个 `ConductorController` 建立确定性选择顺序，记录选中的控制器和曲谱身份；每次绑定都重新核对 `Score -> Track -> Musician -> Sound -> EffectsChain` 的对象归属。
+- 修复句柄复用时的旧 `Musician` 指针，清理关闭文档、曲谱替换和音轨结构变化后的过期句柄，并使用文档/曲谱 `generation` 拒绝旧绑定。
+- 把发现快照与 `updateAll()`、DSP 调用分开；枚举接口只产生经过验证的快照，不因读取请求隐式改变宿主状态。活动文档不可确认时返回未知语义，不把所有文档标成活动。
+
+### P13.3 内部 ABI、线程与生命周期
+
+- 提供独立的 `audio_bridge_api.h`，定义 ABI 版本、结构体大小、调用约定、宿主文件哈希、能力列表、状态码和 `generation`。Provider 版本不通过 MCP JSON 猜测。
+- 明确回调中的字符串和对象指针只在回调期间有效；消费者必须复制元数据，不能把 `EffectsChain*` 保存到宿主重建后的其他线程继续使用。需要跨线程或长期使用时，改为带代数的快照/受控句柄。
+- `enumerate`、`resolve` 和注册表操作只能在 Qt/控制线程执行。VST3 `process()` 等实时线程只读取消费者自己的不可变缓存，不调用 Qt、MCP、对象发现或 `updateAll()`。
+- Provider 缺失、加载顺序变化、卸载、宿主退出和 ABI 不匹配都必须可安全返回；不得阻塞 Guitar Pro 正常启动、编辑、播放或退出。
+
+### P13.4 消费者与加载顺序
+
+- 先编写独立 native probe，验证 `GetModuleHandle`/`GetProcAddress`、版本协商、线程拒绝、回调数据和 Provider 缺失路径；再接入真实 VST3 或其他插件。
+- MCP 适配器把 Provider 结果映射为当前选定版本的 MCP 工具；其他插件只消费同一内部 ABI。加载方不得依赖 MCP HTTP 会话或客户端令牌。
+- 如果 Provider 尚未加载，消费者采用有限重试和明确的 `not_ready`/`host_limited` 状态；不创建第二个 Provider，也不静默切换到其他曲谱或实例。
+
+### P13.5 音频获取的后续边界
+
+- `enumerateAudioBindingsV1` 只解决对象绑定，不等同于音频获取。`buffer_probe` 继续作为开发验收边界；它使用测试 buffer 和 `processDSP`，不代表正在播放的实际 PCM。
+- 若产品需要曲谱离线音频，另行设计有时长/大小上限的渲染接口，复用已验证的 `AudioExportManager` 路径；可以新增工具或调整现有工具，但必须使用明确的协议版本和迁移说明。
+- 若产品需要实时播放 PCM，另行验证宿主输出 tap、采样率/声道/时间戳、无锁环形缓冲区、丢帧统计、开始/停止和文档切换。系统扬声器或 Windows 混音采集不属于当前进程内 Provider 范围。
+
+### P13.6 举一反三的能力层模式
+
+P13 只建立可复用的 Provider 规则，不创建一个大而杂的总接口。后续领域按独立 ABI 拆分：
+
+- `AudioBinding`：音轨、声音、效果链和音频状态；
+- `PlaybackTransport`：播放头、速度、循环和播放状态；
+- `MidiBinding`：MIDI 设备、输出和采集状态；
+- `AutomationBinding`：音量、声像和自动化点；
+- `WindowBinding`：窗口身份、状态和截图目标。
+
+每个领域都必须具备宿主哈希校验、对象身份、generation、线程规则、错误状态和消费者失效处理；领域之间不共享未经验证的宿主裸指针。
+
+### P13.7 交付与验收顺序
+
+1. 定义目标 MCP/Provider 请求、响应和版本迁移方案，增加新契约测试；已完成 `audio_bridge_api.h` v1、版本协商和失败状态。
+2. 完成 Provider 抽象、确定性解析、句柄清理和线程/生命周期契约；已完成控制器排序、generation 失效和宿主退出清理。
+3. 通过 Provider probe 和加载顺序测试，再接入一个真实插件消费者；已完成独立 native probe、缺失 Provider 路径及 `audio-bridge-consumer.cpp` 原生 Qt 插件；两种加载顺序和真实导出回调通过专项，VST3 消费者未实现。
+4. 在 Guitar Pro 8.1.1.17 上验证多控制器、曲谱重建、音色替换、关闭重开、Save As、宿主重启和多文档隔离；已验证音轨复制、撤销重做、关闭重开、Save As、重启和多文档切换；未构造的多控制器并存和全部音色重建组合保留为未验证。
+5. 若确认需要 PCM 获取，单独完成离线渲染或实时输出 tap 专项，不把桥接枚举证据写成音频采集完成；
+6. 更新 `native/API.md`、`native/README.md`、`docs/COVERAGE.md`、安装/打包脚本和回归入口，执行 C++/Qt 构建、`git diff --check`、专项测试及完整原生回归。
+
+P13 最小契约与原生消费者接入已完成：`test/test-audio-provider-host.ps1` 在 Guitar Pro 8.1.1.17 通过 213 项，证据为 `artifacts/native-audio-provider-30b630ada0de439e97fe857cf3b32d5d/verification.json`。独立 fixture/缺失 Provider 检查通过 2 项，不能替代真实宿主结果。版本、发布包和完整回归记录见 [覆盖清单](COVERAGE.md#p13-provider-abi)；VST3、实时 PCM 和系统混音未实现，未构造的多控制器组合不计为已验证。
 
 ## 历史记录
 

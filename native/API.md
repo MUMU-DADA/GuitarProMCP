@@ -428,6 +428,18 @@ GPIF 预检使用宿主 `Qt5Gui.dll` 的 `QZipReader` 和 Qt XML 流解析器，
 
 `GPMCP_DEVELOPMENT=1` 时提供 `gp_audio_probe`，通过宿主 `AudioExportManager` 渲染最多 30 秒的测试曲谱，返回双声道浮点 PCM 的帧数、RMS、峰值及哈希。仅用于验收，不作为 P6 文件导出接口，不采集系统或麦克风声音。`test/test-audio.ps1 -Render` 验证速度、渐变、反复、音量/声像、效果和音色变化；默认最小夹具是 MIDI 音轨，测试副本改为 RSE 并复用 Steel Guitar / Acoustic Piano 模板。验收使用 `C:/ProgramData/Arobas Music/Soundbanks/com.arobas-music.soundbank.standard`，不能用接近静音的 MIDI 渲染证明 RSE 发声正确。
 
+### P13 Audio Provider 内部 ABI
+
+`native/audio_bridge_api.h` 定义进程内 Provider 的 C ABI，当前 `GPMCP_AUDIO_BRIDGE_ABI_VERSION=1`。MCP 插件导出 `gpmcp_audio_bridge_version`、`gpmcp_audio_bridge_get_info` 和 `gpmcp_audio_enumerate_v1`；兄弟原生插件通过 `GetModuleHandle`/`GetProcAddress` 协商版本后使用，不依赖 HTTP 会话或客户端令牌。调用方必须把 `struct_size` 设置为当前结构体大小，并复制回调期间的 `document_id`、`track_id`、`score_key`；`chain` 及字符串指针在回调返回后失效。
+
+`gpmcp_audio_bridge_info` 回报 ABI 版本、Provider 状态、能力位、宿主 `GuitarPro.exe` SHA-256 和当前 `generation`。`gpmcp_audio_enumerate_v1` 只在 Qt 控制线程执行，返回 `GPMCP_AUDIO_OK`、`GPMCP_AUDIO_NOT_READY`、`GPMCP_AUDIO_HOST_LIMITED`、`GPMCP_AUDIO_ABI_MISMATCH`、`GPMCP_AUDIO_WRONG_THREAD` 或其他稳定状态；Provider 未加载、宿主哈希未核验、对象暂不可观察和版本不匹配均保留明确状态，不切换到其他实例或曲谱。每个 binding 同时带有 generation、控制器序号、音轨/声音索引、活动文档和选中音轨标记。
+
+generation 在观察到文档 Score、音轨指针或音轨集合变化时递增，旧 `track_id`/`chain_id` 会被拒绝；关闭文档清理句柄，宿主退出清空注册表。binding 的 generation 对应该文档修订，枚举结果及 info 的 generation 对应 Provider 已观察的全局修订；它不延长宿主指针寿命。`active_document`/`selected_track` 为 0（否）、1（是）或 2（无法确认），不根据文档数量猜测。
+
+`GPMCP_AUDIO_HOST_LIMITED` 可以携带已核验的音轨上下文：未就绪链为 `chain=nullptr`、`sound_index=-1`、binding `status=GPMCP_AUDIO_HOST_LIMITED`。非活动文档可能没有 Conductor，此时不返回该文档绑定，枚举总状态为 `HOST_LIMITED`；切换回文档后重新发现。回调内不得编辑宿主、处理 Qt 事件、重新进入 Provider 或抛异常；消费者只复制元数据，DLL 卸载后不得调用旧函数地址。
+
+0.9.0 保留 MCP 协议 `2025-06-18` 和 `gp_audio_abi` 原有参数/状态含义，新增 generation、控制器信息及 `gp_capabilities.audio_provider`；客户端可忽略新增字段。`state`/`resolve` 和原生枚举均只观察现有对象，不再隐式调用 `Musician::updateAll()`；链未就绪时保留 `host_limited`。内部 ABI v1 首次发布，后续不兼容修改提高 ABI 主版本并提供迁移说明。当前 ABI 只提供音轨/音色/效果链绑定，VST3 消费者、实时 PCM 和系统混音未实现。
+
 ## 窗口截图
 
 先调用 `gp_windows({include_hidden: true})`，再把返回记录的 `window_id` 传给 `gp_screenshot`。两者在 Qt 主线程执行，模态对话框存在或原生操作等待期间仍可读取。`gp_windows` 不刷新 `gp_objects` 的快照；多客户端、重新建立 MCP 会话、标题变化及隐藏/最小化不改变窗口 ID。ID 绑定实例和 QObject 生命周期，窗口销毁或宿主重启后失效，客户端应将它作为不透明字符串使用。

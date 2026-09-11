@@ -31,6 +31,7 @@ ABI 约束只保留已核验的最小范围：
 - 已核验值对象包括 `ScoreModelRange`（8 字节）、`RhythmValue`（56 字节）、`Color`（3 字节 RGB）、`TimeSignature`（8 字节）和 `KeySignature`（16 字节且含虚析构函数）。构造、析构、对齐和大小均有静态断言或原生读回证据。
 - MSVC 负责成员调用及返回值 ABI；代码不手写 `std::string` 或 `std::shared_ptr` 的返回约定。新增 Score、和弦、歌词和页面对象见 [P8 实现说明](P8.md)。
 - 音频边界另经 8.1.1.17 专项核对：`AMAudio::AudioBuffer`/`IAudioBuffer` 的对象大小、交错 PCM 读写、锁和 `GPRSE::EffectsChain::processDSP` 均通过运行时探针；`gp_audio_abi` 句柄不暴露 native 地址，每次使用重新校验文档和对象归属。`Conductor` 尚未构造 RSE 声音时，`chain_mapping_status` 明确返回 `host_limited`（整体状态为 `experimental`），不把导出符号当作绑定链证据。
+- P13 Provider 契约见 [`audio_bridge_api.h`](audio_bridge_api.h)：v1 使用 C ABI、显式结构体大小和稳定状态码，导出 `gpmcp_audio_bridge_get_info`/`gpmcp_audio_enumerate_v1` 供同进程原生消费者协商。枚举只允许 Qt 控制线程；回调元数据须立即复制，`chain` 和字符串不得跨回调保存。`test/build-audio-bridge-probe.ps1` 编译独立 fixture/probe 和原生 Qt 消费者；`test/test-audio-bridge.ps1` 检查无宿主契约及缺失 Provider，`test/test-audio-provider-host.ps1 -HostDirectory <.tools 中无已安装 MCP 的隔离宿主>` 验证真实导出回调、两种加载顺序、线程拒绝和句柄生命周期。VST3 消费者与实时 PCM 未实现。
 
 ## 构建和加载
 

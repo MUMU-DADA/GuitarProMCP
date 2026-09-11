@@ -43,6 +43,9 @@
 #include <QtNetwork/QTcpSocket>
 #include <windows.h>
 #include <cmath>
+#include <cstddef>
+#include <algorithm>
+#include <cstring>
 
 static QString nonce() { return QUuid::createUuid().toString(QUuid::WithoutBraces); }
 static const QStringList writableNames = {"checked", "value", "currentIndex", "currentText", "text", "plainText"};
@@ -175,6 +178,7 @@ class Bridge : public QObject {
         server.stop();
         clipboardBuffer = {};
         pendingRecovery = {};
+        guitarpro::clearAudioBindings();
         nativeObjects.clear(); observed.clear(); creationBefore.clear();
     }
 
@@ -1294,6 +1298,17 @@ class Bridge : public QObject {
                 result["plugin_data_directory"] = gpmcp::dataDirectory();
                 result["modal_dialog"] = modalState();
                 result["p9"] = guitarpro::p9Status();
+                gpmcp_audio_bridge_info provider{};
+                provider.struct_size = sizeof(provider);
+                const uint32_t providerStatus = audioBridgeInfo(&provider);
+                const QString providerStatusName = providerStatus == GPMCP_AUDIO_OK ? "ready" :
+                    providerStatus == GPMCP_AUDIO_NOT_READY ? "not_ready" :
+                    providerStatus == GPMCP_AUDIO_WRONG_THREAD ? "wrong_thread" :
+                    providerStatus == GPMCP_AUDIO_ABI_MISMATCH ? "abi_mismatch" : "host_limited";
+                result["audio_provider"] = QJsonObject{{"abi_version", int(provider.abi_version)},
+                    {"status", providerStatusName}, {"generation", qint64(provider.generation)},
+                    {"capabilities", qint64(provider.capabilities)}, {"host_build_sha256", QString::fromLatin1(provider.host_build_sha256)},
+                    {"consumer_contract", "audio_bridge_api.h; callback metadata is valid only during the call"}};
                 result["limitations"] = QJsonArray{"P9 status is exposed by gp_p9_status; unsupported engraving, arbitrary instrument/fingering and dynamics/volume automation remain explicitly host-limited. gp_automation DSP parameter writes are experimental and do not claim complete automation semantics.", "System clipboard interop remains experimental and disabled unless GPMCP_DEVELOPMENT=1 with an isolated validation environment.", "New/open/save/close workflows and playback can complete asynchronously; poll operation/document/playback state. Activate a document before playback control."};
                 return result;
             }
@@ -1395,6 +1410,36 @@ protected:
         return false;
     }
 public:
+    uint32_t audioBridgeInfo(gpmcp_audio_bridge_info *info) {
+        if (!info || info->struct_size < sizeof(*info)) return GPMCP_AUDIO_ABI_MISMATCH;
+        if (qApp && QThread::currentThread() != qApp->thread()) return GPMCP_AUDIO_WRONG_THREAD;
+        std::memset(info, 0, sizeof(*info));
+        info->struct_size = sizeof(*info);
+        info->abi_version = GPMCP_AUDIO_BRIDGE_ABI_VERSION;
+        info->generation = guitarpro::currentAudioGeneration();
+        info->capabilities = GPMCP_AUDIO_CAP_BINDINGS | GPMCP_AUDIO_CAP_CONTEXTS;
+        if (qEnvironmentVariableIsSet("GPMCP_DEVELOPMENT")) info->capabilities |= GPMCP_AUDIO_CAP_BUFFER_PROBE;
+        const QByteArray hostHash = guitarpro::hash(QCoreApplication::applicationFilePath());
+        const size_t hashLength = hostHash.size() < qint64(sizeof(info->host_build_sha256) - 1)
+            ? size_t(hostHash.size()) : sizeof(info->host_build_sha256) - 1;
+        if (hashLength) std::memcpy(info->host_build_sha256, hostHash.constData(), hashLength);
+        info->status = !guitarpro::supportedBuild() || !guitarpro::verifiedHostFile("GPRSE.dll")
+            ? GPMCP_AUDIO_HOST_LIMITED : (guitarpro::documents().isEmpty() ? GPMCP_AUDIO_NOT_READY : GPMCP_AUDIO_OK);
+        return info->status;
+    }
+    uint32_t enumerateAudioBindingsV1(uint32_t requestedAbi, gpmcp_audio_binding_visitor visitor,
+                                      void *user, gpmcp_audio_enumerate_result *result) {
+        if (!qApp || QThread::currentThread() != qApp->thread()) {
+            if (result && result->struct_size >= sizeof(*result)) {
+                result->status = qApp ? GPMCP_AUDIO_WRONG_THREAD : GPMCP_AUDIO_NOT_READY;
+                result->generation = 0;
+                result->count = 0;
+            }
+            return qApp ? GPMCP_AUDIO_WRONG_THREAD : GPMCP_AUDIO_NOT_READY;
+        }
+        return guitarpro::enumerateAudioBindingsV1(services(), requestedAbi, visitor, user, result);
+    }
+
     Bridge() {
         // Qt owns generic-plugin return values; release resources without deleting its object.
         connect(qApp, &QCoreApplication::aboutToQuit, this, [this] { shutdown(); });
@@ -1423,4 +1468,53 @@ public:
         return new Bridge;
     }
 };
+
+// Internal same-process bridge for native plugin consumers. It intentionally
+// exposes only a callback over the verified native object boundary; MCP clients
+// continue to receive opaque UUID handles and never see these addresses.
+extern "C" GPMCP_AUDIO_EXPORT unsigned GPMCP_AUDIO_CALL gpmcp_audio_bridge_version() noexcept { return GPMCP_AUDIO_BRIDGE_ABI_VERSION; }
+
+extern "C" GPMCP_AUDIO_EXPORT uint32_t GPMCP_AUDIO_CALL gpmcp_audio_bridge_get_info(
+    gpmcp_audio_bridge_info *info) noexcept {
+    if (!info || info->struct_size < sizeof(*info)) return GPMCP_AUDIO_ABI_MISMATCH;
+    std::memset(info, 0, sizeof(*info));
+    info->struct_size = sizeof(*info);
+    info->abi_version = GPMCP_AUDIO_BRIDGE_ABI_VERSION;
+    info->status = GPMCP_AUDIO_NOT_READY;
+    if (!qApp) return info->status;
+    if (QThread::currentThread() != qApp->thread()) {
+        info->status = GPMCP_AUDIO_WRONG_THREAD;
+        return info->status;
+    }
+    try {
+        auto *object = qApp->property("gpmcpBridge").value<QObject *>();
+        if (object && object->objectName() == QStringLiteral("GuitarProMCPBridge"))
+            return static_cast<Bridge *>(object)->audioBridgeInfo(info);
+    } catch (...) { info->status = GPMCP_AUDIO_INTERNAL_ERROR; }
+    return info->status;
+}
+
+extern "C" GPMCP_AUDIO_EXPORT uint32_t GPMCP_AUDIO_CALL gpmcp_audio_enumerate_v1(
+    uint32_t requestedAbi, gpmcp_audio_binding_visitor visitor, void *user,
+    gpmcp_audio_enumerate_result *result) noexcept {
+    if (!result || result->struct_size < sizeof(*result)) return GPMCP_AUDIO_ABI_MISMATCH;
+    result->status = GPMCP_AUDIO_NOT_READY;
+    result->generation = 0;
+    result->count = 0;
+    if (requestedAbi != GPMCP_AUDIO_BRIDGE_ABI_VERSION) {
+        result->status = GPMCP_AUDIO_ABI_MISMATCH;
+        return result->status;
+    }
+    if (!qApp) return result->status;
+    if (QThread::currentThread() != qApp->thread()) {
+        result->status = GPMCP_AUDIO_WRONG_THREAD;
+        return result->status;
+    }
+    try {
+        auto *object = qApp->property("gpmcpBridge").value<QObject *>();
+        if (object && object->objectName() == QStringLiteral("GuitarProMCPBridge"))
+            return static_cast<Bridge *>(object)->enumerateAudioBindingsV1(requestedAbi, visitor, user, result);
+    } catch (...) { result->status = GPMCP_AUDIO_INTERNAL_ERROR; }
+    return result->status;
+}
 #include "guitarpro_mcp.moc"

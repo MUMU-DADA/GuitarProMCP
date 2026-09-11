@@ -234,7 +234,10 @@ try {
     try { $reader=[IO.StreamReader]::new($zip.GetEntry('Content/score.gpif').Open()); try { [xml]$xml=$reader.ReadToEnd() } finally {$reader.Dispose()} } finally {$zip.Dispose()}
     $point=$xml.SelectSingleNode('//MasterTrack/Automations/Automation[Type="Tempo" and Bar="1"]')
     Assert ($point.Value -eq '150 2' -and $point.Position -eq '0.5' -and $point.Linear -eq 'true') 'Saved GPIF tempo differs'
-    Wait-Operation (Call gp_close).request 'closed' | Out-Null
+    # Audio graph refreshes can mark the live document dirty after Save As has
+    # completed. The persisted bytes were validated above, so explicitly
+    # discard only that post-save in-memory state before reopening the copy.
+    Wait-Operation (Call gp_close @{unsaved='discard'}).request 'closed' | Out-Null
     $opened=Invoke-McpTool $connection gp_open @{path=$saved}; $id=(Wait-Operation $opened.request 'opened').document; $owned += $id
     Assert ((Json (& $tempoRead)) -eq $expectedTempo) 'Reopened tempo differs'
     Assert ((Json (& $soundRead)) -eq $expectedSound) 'Reopened sound differs'

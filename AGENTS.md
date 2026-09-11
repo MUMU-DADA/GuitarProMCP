@@ -54,6 +54,7 @@ P0-P10 已按下表声明的范围完成。P9 已验收可核验的节拍文本�
 | P10 偏好设置与基础音频/MIDI 控制 | 复用现有 `gp_preferences` 和 `gp_audio_device`，通过显式 Qt 模型/属性 allowlist 读取并设置一般、界面、乐谱错误、我的资讯、MIDI 偏好及音频 choices；核对实际读回、恢复、跨宿主重启持久化和新建曲谱默认资讯继承 | 更新/Beta、每路 MIDI 延迟、通道检测和驱动控制面板按宿主受限或待调查保留；未提供的模型属性、额外声道映射与设备 choices 不作猜测 |
 | P11 界面截图与窗口状态采集 | 已实现最小 Qt 离屏路径，实验性：新增 `gp_screenshot`，在不激活、不抢焦点、不发送输入的前提下获取 Guitar Pro 当前窗口或活动模态对话框；通过 MCP image content 返回 PNG，并覆盖后台、被遮挡和最小化状态 | 不截取整个桌面；最小化/被遮挡时不能依赖桌面合成像素，真实宿主等价性仍待补验；无法可靠捕获的窗口必须显式返回 `status=host_limited`，不得伪造成功 |
 | P12 多窗口枚举与指定窗口截图 | 已实现并通过核心真实宿主专项：只读 `gp_windows` 返回数量、稳定 ID、父关系与状态；`gp_screenshot(window_id)` 在多窗口和活动模态存在时保留显式目标；主窗口、非模态偏好、键盘/指板浮动窗口与关闭确认已有证据，截图保持实验性 | 范围见下方约定；默认截图保留 P11 行为；失效或跨实例 ID 明确拒绝，不回退到其他窗口；各类窗口渲染须分别核验，枚举成功不代表截图已验证 |
+| P13 音频 Provider 与多插件接口设计 | 已完成最小进程内 Provider 契约、MCP 适配、generation 失效和独立原生消费者专项；VST3 消费者未实现 | `audio_bridge_api.h` v1 明确结构体大小、宿主哈希、能力位、状态码、generation 和 Qt 控制线程；实时 PCM 获取、系统混音采集和跨线程保存宿主裸指针不因桥接交付自动纳入范围 |
 
 ### P12 范围约定
 
@@ -62,6 +63,8 @@ P0-P10 已按下表声明的范围完成。P9 已验收可核验的节拍文本�
 - 每个已枚举窗口具有绑定实例和对象生命周期的稳定 ID。多客户端重复查询、标题变化、隐藏或最小化不使 ID 改指其他窗口；窗口对象销毁或宿主重启后旧 ID 失效。
 - 不传 `window_id` 时保持 P11 的活动模态优先、否则主窗口行为；显式指定时只捕获该窗口，即使主窗口正被模态对话框阻塞。截图与枚举都是只读能力，不改变焦点、窗口可见性、模态关系、文档状态或撤销历史。
 - 继续使用进程内 Qt 路径和标准 MCP PNG image content，不跨进程、不截取桌面。没有可靠 Qt 渲染路径的窗口须返回 `status=host_limited`；纯系统原生窗口、外部驱动窗口及特殊渲染窗口不承诺完整覆盖，必须记录可枚举性与可渲染性的实际边界。
+
+P13 的实现归属保持可替换：MCP 插件可以先作为首个 Provider 实现，后续也可以迁移到独立插件；实时宿主对象图必须有明确的权威绑定来源，消费者不得复制一套 `Score`/`Track`/`Musician`/`Sound`/`EffectsChain` 解析。P13 仍使用进程内 Qt/GPCore 链路，但允许在明确版本和迁移说明后调整 MCP 工具、字段和数据模型；详细计划、阶段交付物和验收矩阵见 [docs/DEVELOPMENT_PLAN.md](docs/DEVELOPMENT_PLAN.md#p13音频-provider-与多插件接口设计计划)。
 
 ## 质量门槛
 
@@ -77,5 +80,5 @@ P0-P10 已按下表声明的范围完成。P9 已验收可核验的节拍文本�
 - [docs/INSTALL.md](docs/INSTALL.md)：安装包使用、更新/卸载和故障恢复。
 - [docs/COVERAGE.md](docs/COVERAGE.md)：已验证能力、保留边界和证据索引。
 - [native/README.md](native/README.md)：C++/Qt 构建、加载、ABI 和测试命令；协议与工具行为见 [native/API.md](native/API.md)，P8 格式与调用细节见 [native/P8.md](native/P8.md)。
-- [docs/DEVELOPMENT_PLAN.md](docs/DEVELOPMENT_PLAN.md)：P0-P12 阶段总览、P9 保留边界、P10 验收、P11 实验性记录与 P12 验收记录；历史记录见文末归档，当前目标以本文件为准。
+- [docs/DEVELOPMENT_PLAN.md](docs/DEVELOPMENT_PLAN.md)：P0-P13 阶段总览、P9 保留边界、P10 验收、P11 实验性记录、P12 验收记录与 P13 音频 Provider 接口设计计划；历史记录见文末归档，当前目标以本文件为准。
 - [docs/README.md](docs/README.md)：面向用户和开发者的文档导航。

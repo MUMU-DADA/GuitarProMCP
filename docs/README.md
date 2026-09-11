@@ -11,7 +11,7 @@
 | [原生插件开发](../native/README.md) | C++/Qt 构建、加载、ABI 和测试入口 |
 | [原生 MCP API 参考](../native/API.md) | 协议、工具参数和原生行为 |
 | [P8 编曲与语义 JSON](../native/P8.md) | 批量建谱、交换格式、和弦/歌词/段落和页面元数据 |
-| [阶段计划与当前验收](DEVELOPMENT_PLAN.md) | P0-P12 总览、P9 边界、P10 验收、P11 实验性记录与 P12 多窗口截图验收 |
+| [阶段计划与当前验收](DEVELOPMENT_PLAN.md) | P0-P13 总览、P9 边界、P10 验收、P11 实验性记录、P12 多窗口截图验收与 P13 音频 Provider 交付记录 |
 | [Qt 自动加载方案](../native/AUTOLOAD.md) | 自动加载入口、生产实现和探针验证 |
 | [开发计划历史归档](archive/DEVELOPMENT_HISTORY.md) | 旧版阶段快照、验收口径和执行记录 |
 | [覆盖清单历史归档](archive/COVERAGE_HISTORY.md) | 旧版覆盖检查点和失败记录 |
