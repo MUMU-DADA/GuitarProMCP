@@ -87,6 +87,7 @@ try {
 | `gp_presentation` 的页面元数据 | `document?`, `operation=set`, `page_metadata` | 标题、作者、作曲者、版权、页眉页脚和页码，异步整组提交及一次撤销 |
 | `gp_p9_status` | 无 | 读取 P9 能力矩阵及“已实现、已验证、实验性、未实现、宿主受限”状态，不改变曲谱 |
 | `gp_audio_abi` | `document?`, `operation=state/resolve/buffer_probe`, `track?`, `sound?`, `track_id?`, `chain_id?`, `frames?` | 返回不透明 `track_id`/`chain_id` 及逐次归属核验；开发模式 `buffer_probe` 验证 `AudioBuffer`/`IAudioBuffer` 交错写读、锁和 `EffectsChain::processDSP` |
+| `gp_audio_stream` | `operation=state/start/stop/snapshot/read/diagnose/recover`, `document?`, `stream_id?`, `layers?`, `max_frames?`, `max_bytes?` | P14 实时流会话、快照、有限值/连续性指标、诊断和恢复；当前宿主无已核验 realtime tap，明确返回 `host_limited` 和 `pcm_available=false` |
 | `gp_windows` | `include_hidden?` | 只读枚举当前实例 Qt 窗口，返回数量、稳定 `window_id`、父窗口关系和实际状态；默认包含隐藏窗口，过滤不改变统计总数 |
 | `gp_screenshot` | `window_id?`, `include_frame?` | 按 `gp_windows` 的 ID 读取单个窗口；省略参数仍优先活动模态，否则主窗口。默认通过 Qt `QWidget::render` 返回客户区；Windows 上传 `include_frame=true` 时额外用同进程 `WM_PRINT(PRF_NONCLIENT)` 补入系统标题栏和边框。无效 ID 拒绝且无图像，无法可靠渲染时返回 `status=host_limited` |
 
@@ -438,7 +439,15 @@ generation 在观察到文档 Score、音轨指针或音轨集合变化时递增
 
 `GPMCP_AUDIO_HOST_LIMITED` 可以携带已核验的音轨上下文：未就绪链为 `chain=nullptr`、`sound_index=-1`、binding `status=GPMCP_AUDIO_HOST_LIMITED`。非活动文档可能没有 Conductor，此时不返回该文档绑定，枚举总状态为 `HOST_LIMITED`；切换回文档后重新发现。回调内不得编辑宿主、处理 Qt 事件、重新进入 Provider 或抛异常；消费者只复制元数据，DLL 卸载后不得调用旧函数地址。
 
-0.9.2 保留 MCP 协议 `2025-06-18` 和 `gp_audio_abi` 原有参数/状态含义，新增 generation、控制器信息及 `gp_capabilities.audio_provider`；客户端可忽略新增字段。`state`/`resolve` 和原生枚举均只观察现有对象，不再隐式调用 `Musician::updateAll()`；链未就绪时保留 `host_limited`。内部 ABI v1 首次发布，后续不兼容修改提高 ABI 主版本并提供迁移说明。当前 ABI 只提供音轨/音色/效果链绑定，VST3 消费者、实时 PCM 和系统混音未实现。偏好模型额外允许写入 `currentRow`，以支持列表选择控件的原生读回。
+0.9.2 保留 MCP 协议 `2025-06-18` 和 `gp_audio_abi` 原有参数/状态含义，新增 generation、控制器信息及 `gp_capabilities.audio_provider`；客户端可忽略新增字段。`state`/`resolve` 和原生枚举均只观察现有对象，不再隐式调用 `Musician::updateAll()`；链未就绪时保留 `host_limited`。内部 ABI v1 首次发布，后续不兼容修改提高 ABI 主版本并提供迁移说明。该 ABI 只提供音轨/音色/效果链绑定；P14 实时流另用 `audio_stream_api.h`，VST3 消费者、实时 PCM 和系统混音仍未实现。偏好模型额外允许写入 `currentRow`，以支持列表选择控件的原生读回。
+
+### P14 实时音频流
+
+`native/audio_stream_api.h` 定义独立的 `GPMCP_AUDIO_STREAM_ABI_VERSION=1`，不改变 P13 `audio_bridge_api.h`。ABI 明确结构体大小、状态码、能力位、宿主哈希、generation 和固定字符串字段，并导出 `gpmcp_audio_stream_version`、`gpmcp_audio_stream_get_info`、`gpmcp_audio_stream_enumerate_v1`。枚举只允许 Qt 控制线程；没有已核验 tap 时返回 `GPMCP_AUDIO_STREAM_HOST_LIMITED` 和空列表。
+
+`gp_audio_stream` 的 `operation` 为 `state`、`start`、`stop`、`snapshot`、`read`、`diagnose` 或 `recover`。`start` 必须指定已核验 `document`，可选 `layers`（`input`/`source`/`track`/`effects`/`mix`/`audiolayer`/`endpoint`）、`max_frames=1..4096` 和 `max_bytes=4096..1048576`；返回不透明 `stream_id`。会话绑定当前实例、文档和 generation，文档或宿主重建后旧 ID 返回 `status=stale`，不会回退到其他曲谱。
+
+`guitarpro_audio_stream.h` 的实时回调边界是固定 256 帧、8 声道块和 32 块 SPSC ring；回调路径不分配、不调用 Qt、不做对象发现或文件 I/O。控制线程读取不可变快照并报告帧数、时间戳、缓冲深度、宿主/监测丢帧、underrun/overrun/xrun、RMS、峰值、DC、削波和非有限样本。当前 8.1.1.17 没有可核验 realtime tap，因此 `pcm_available=false`，指标为零值并带 `reason=no_verified_realtime_tap`；不得把离线 `gp_audio_probe`、`buffer_probe` 或设备配置读回当作实时证据。
 
 ## 窗口截图
 

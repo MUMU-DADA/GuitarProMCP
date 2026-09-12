@@ -61,7 +61,7 @@ try {
         Assert ((Send-Http $body $sessionHeaders).Json.error.code -eq -32602) 'Invalid arguments reached native code'
     }
     $list=Send-Http '{"jsonrpc":"2.0","id":10,"method":"tools/list"}' $sessionHeaders
-    Assert ($list.Json.result.tools.name -contains 'gp_set_fret') 'Native tool missing'
+    Assert ($list.Json.result.tools.name -contains 'gp_set_fret' -and $list.Json.result.tools.name -contains 'gp_audio_stream') 'Native tool missing'
     $decoded = Invoke-RestMethod -Uri $connection.Url -Method Post -Headers $connection.Headers -ContentType 'application/json' -Body '{"jsonrpc":"2.0","id":11,"method":"tools/list"}' -TimeoutSec 15 -MaximumRedirection 0
     $rawDescription = @($list.Json.result.tools | Where-Object name -EQ 'gp_save_current')[0].description
     $decodedDescription = @($decoded.result.tools | Where-Object name -EQ 'gp_save_current')[0].description

@@ -1,6 +1,6 @@
 # GuitarProMCP 阶段计划与当前验收
 
-更新日期：2026-09-12。本文件记录 P0-P13 阶段计划、当前验收标准、P9 实施边界、P10 验收、RSE/音频 ABI 边界、P11 实验性记录、P12 多窗口枚举与指定窗口截图的验收记录以及 P13 音频 Provider 与多插件接口设计计划。当前协作规范、开发目标、产品要求、范围决策和质量门槛统一见 [AGENTS.md](../AGENTS.md)；历史执行记录见文末归档。
+更新日期：2026-09-12。本文件记录 P0-P14 阶段计划、当前验收标准、P9 实施边界、P10 验收、RSE/音频 ABI 边界、P11 实验性记录、P12 多窗口枚举与指定窗口截图的验收记录、P13 音频 Provider 与多插件接口设计计划以及 P14 端到端实时音频流监测与管控计划。当前协作规范、开发目标、产品要求、范围决策和质量门槛统一见 [AGENTS.md](../AGENTS.md)；历史执行记录见文末归档。
 
 > 文档分工遵循 [AGENTS.md](../AGENTS.md#文档分工)：阶段记录见本文件，当前能力及具名证据见 [COVERAGE.md](COVERAGE.md)，接口细节见 [native/API.md](../native/API.md) 和 [native/P8.md](../native/P8.md)。
 
@@ -24,6 +24,7 @@
 | P11 界面截图与窗口状态采集 | 已实现最小 Qt 离屏路径，实验性 | `gp_screenshot` 已注册并通过 MCP image content 返回 PNG；正常、后台、被遮挡和最小化均走 `QWidget::render`，不改变焦点、不发送输入、不截取整个桌面；活动模态对话框优先捕获；尚未完成真实宿主全矩阵，无法证明离屏结果等价时返回 `status=host_limited` |
 | P12 多窗口枚举与指定窗口截图 | 已完成核心实现与真实宿主专项，截图保持实验性 | `gp_windows` 提供稳定身份、数量与状态，`gp_screenshot(window_id)` 保留显式目标；核心多窗口、模态并存、只读性和失效拒绝有证据；剩余矩阵逐项保留，见下文与 [P12 范围约定](../AGENTS.md#p12-范围约定) |
 | P13 音频 Provider 与多插件接口设计 | 已完成最小 Provider 契约、MCP 适配和真实宿主原生消费者专项；VST3 消费者未实现 | 抽象进程内音频 Provider；MCP、VST3 和其他插件通过版本化 ABI 使用；允许按真实需求重新设计 MCP 工具和数据模型；实时 PCM 获取仍需单独设计和验证 |
+| P14 端到端实时音频流监测与管控 | 已实现 P14.1–P14.3 最小边界；P14.0/P14.4/P14.5 宿主受限 | 已交付独立 `audio_stream_api.h`、固定容量 ring、指标模型、`gp_audio_stream` 状态/诊断/恢复接口和无宿主契约测试；Guitar Pro 8.1.1.17 尚无已核验 realtime tap，因此实时 PCM、Standard/ASIO 端点与真实恢复仍明确返回 `host_limited` |
 
 P0、P1、P2 为 P3–P6 提供基础，随后由 P7 对完整安装包进行发布验收。P1 已完成真实安装集成验收；可靠性检查继续贯穿后续阶段。
 
@@ -263,6 +264,90 @@ P13 只建立可复用的 Provider 规则，不创建一个大而杂的总接口
 6. 更新 `native/API.md`、`native/README.md`、`docs/COVERAGE.md`、安装/打包脚本和回归入口，执行 C++/Qt 构建、`git diff --check`、专项测试及完整原生回归。
 
 P13 最小契约与原生消费者接入已完成：`test/test-audio-provider-host.ps1` 在 Guitar Pro 8.1.1.17 通过 213 项，证据为 `artifacts/native-audio-provider-30b630ada0de439e97fe857cf3b32d5d/verification.json`。独立 fixture/缺失 Provider 检查通过 2 项，不能替代真实宿主结果。版本、发布包和完整回归记录见 [覆盖清单](COVERAGE.md#p13-provider-abi)；VST3、实时 PCM 和系统混音未实现，未构造的多控制器组合不计为已验证。
+
+## P14：端到端实时音频流监测与管控计划
+
+状态：计划中，尚未实现或验收。P14 针对“全面覆盖整个音频流”的目标，建立从宿主实际音频源到实际输入/输出端点的实时观测和受控操作路径。宿主已有且能核验的音频输入、曲谱/MIDI/RSE 源、音轨、`Conductor`、`Musician`、`Sound`、`EffectsChain`、总线/混音、格式转换以及输出均纳入候选范围。`Standard` 与 `ASIO` 共用 Provider 和中间模型，但实际拓扑、回调、时钟、缓冲和错误必须分别用证据核验，不能按后端名称假设相同。离线 `AudioExportManager` 结果和 `gp_audio_abi buffer_probe` 只能作为基线或边界证据，不能代替正在播放的实时 PCM。
+
+### P14.1 目标、范围与状态口径
+
+- 监测范围覆盖宿主能提供的音频输入、曲谱/MIDI/RSE 播放源、每条音轨、音色与效果链、总线/混音、`AudioLayer` 格式转换以及 Standard/ASIO 输入输出端点。每一层都要报告“已观测、未就绪、宿主受限或未验证”，不能由下游 `running=true` 推断上游处理正常。
+- 监测至少包括拓扑和对象身份、`generation`、采样率、声道数、样本格式、帧数、单调时间戳、缓冲区占用、RMS、峰值、DC 偏置、削波、NaN/Inf、处理耗时、宿主音频丢帧、underrun/overrun/xrun、监测缓冲区丢样和状态变化。指标应区分输入、音轨、效果链、混音和最终端点，允许在没有 PCM 内容时返回只读计数和明确的 `host_limited`。
+- 管控包括启动/停止监测、选择观测层、短时有界 PCM 取样、清理会话、读取快照和运行一次诊断流程；中间处理继续复用现有 `gp_audio_track`、`gp_edit_track`、`gp_automation` 的已验证或明确实验性能力，并在每次修改后用实时指标核对影响。设备、后端、声道和缓冲区设置继续复用 `gp_audio_device` 的精确 choices、停止播放限制、读回和失败恢复。
+- 控制平面分为三类：监测会话控制（开始、停止、层选择、读取和限额）、中间图控制（已有音色/效果、旁路、参数、音量、声像、静音/独奏及已验证自动化）和端点控制（后端、设备、声道、缓冲区及可逆恢复）。每次控制都要核对宿主允许的播放状态、目标文档/音轨、实际读回和实时指标；宿主未提供安全 setter 或真实终态时返回明确的 `host_limited`/`not_ready`，不静默执行替代动作。
+- 自动诊断应使用固定测试曲谱和已记录基线，依次检查拓扑、格式、连续性、指标和端点状态，并把异常定位到“源/音轨、效果链、混音、AudioLayer、设备端点或未知”。未知终态必须保留阻塞，不自动重放编辑或猜测恢复成功。
+- 自动恢复只允许执行已核验、可逆的宿主动作，例如停止播放、恢复上一次有效配置或切换到当前 choices 中的备用缓冲区；驱动重启、厂商控制面板点击和操作系统级声卡修复不因 MCP 进程内接口而默认获得权限。
+- 进程内“端点已送入回调”不等于扬声器、耳机或外部设备已经产生正确声压；物理输出验证需另配已记录的硬件 loopback/回录夹具，并把夹具误差与宿主端点指标分开记录。没有该夹具时不声称完成声学输出验收。
+
+### P14 当前交付记录（2026-09-12）
+
+- P14.1–P14.3 的最小边界已交付：`native/audio_stream_api.h` 定义独立 ABI v1、结构体大小、状态码、能力位、generation 和固定字符串字段；`native/guitarpro_audio_stream.h` 提供固定容量 SPSC ring、有限值/RMS/峰值/DC/削波统计和有界会话状态机。
+- MCP 新增 `gp_audio_stream`，支持 `state`、`start`、`stop`、`snapshot`、`read`、`diagnose`、`recover`。会话绑定当前 MCP 实例和文档 generation，旧流返回 `stale`；无 tap 时不生成 PCM，所有层和诊断均带 `host_limited` 原因。
+- 插件导出 `gpmcp_audio_stream_version`、`gpmcp_audio_stream_get_info` 和 `gpmcp_audio_stream_enumerate_v1`，与 P13 `audio_bridge_api.h` 保持分离；无宿主消费者、容量溢出、有限值统计和 FIFO 顺序测试见 `test/test-audio-stream.ps1`。
+- P14.0 可行性调查在当前 8.1.1.17 宿主未发现可核验实时 tap、回调线程契约或端点终态，因此 P14.4 Standard、P14.5 ASIO 和实时长测继续保留为 `host_limited`，不能由 `gp_audio_probe`/`buffer_probe` 替代。
+
+### P14.2 端点无关的实时链路设计
+
+```text
+  Host audio/MIDI/RSE sources (when exposed)
+  -> Input/source nodes
+  -> Score/Conductor
+  -> Track/Musician
+  -> Sound/EffectsChain
+  -> Track mix / master mix
+  -> AudioLayer format conversion
+  -> Standard 或 ASIO input/output endpoint callback
+```
+
+- 在 P13 Provider 之上增加实时流 Provider。P13 的 `audio_bridge_api.h` v1 保持兼容；实时能力使用单独的 `audio_stream_api.h` 或提高 ABI 主版本，不能静默扩展 v1 结构体和回调语义。
+- 宿主实时回调只在回调有效期内读取/复制宿主提供的 PCM，写入固定大小、无锁或单生产者/单消费者的环形缓冲区和原子计数；不得调用 Qt、MCP、对象发现、文件 I/O、分配内存或保存宿主裸指针。控制线程或有界消费者读取不可变快照，负责窗口化聚合、状态机、generation 检查和资源回收。
+- PCM 块必须带有流 ID、文档/音轨/效果链身份、generation、帧起点、帧数、采样率、声道和时间戳。Provider 不保证跨回调保存 `Sound`、`EffectsChain` 或字符串指针；曲谱重建、关闭、重启和端点重开都使旧流失效。
+- MCP 端计划提供一个端点无关的 `gp_audio_stream` 工具，候选操作为 `state`、`start`、`stop`、`snapshot`、`read`、`diagnose` 和 `recover`；最终字段和名称必须在宿主 tap 验证后固定，并给出协议版本、迁移说明、大小上限和过期流拒绝。
+
+### P14.3 监测与诊断数据模型
+
+1. **拓扑快照**：Provider 状态、宿主哈希、输入/输出后端、文档、音轨、效果链、混音节点、采样率/声道/格式和 `generation`；节点缺失时返回原因，不回退到其他文档或实例。
+2. **实时连续性**：期望帧数与实际帧数、起止时间戳、间隔、缓冲深度、宿主丢帧、监测缓冲区丢样、underrun/overrun/xrun、回调最大/平均耗时和端点重启次数；两类丢失必须分开计数。
+3. **信号质量**：输入、音轨、效果链、混音和端点的每窗 RMS、峰值、DC、削波计数、有限值检查和静音判定；PCM 取样有固定时长、帧数、内存和响应上限，不把“非静音”直接当作设备出声证明。
+4. **对照诊断**：同一测试曲谱分别生成离线基线和实时 tap 摘要，比较长度、时间线、能量和端点连续性；差异只用于定位线索，不能在没有宿主权威状态时断言某个驱动是根因。
+5. **状态机**：`not_ready`、`ready`、`running`、`degraded`、`host_limited`、`stopped`、`stale`、`error` 等状态必须带 `reason`、观察时间、generation 和建议动作；恢复后的状态仍需重新读回确认。
+6. **诊断规则**：区分源无数据、节点帧数不守恒、已知重采样、回调超时、时间戳跳变、宿主 xrun、监测环形缓冲区溢出、非有限样本、异常削波和端点无声；每条规则返回实际观测值、阈值/基线、证据窗口和置信状态，不把单一 RMS 或 `running` 字段当作根因。
+
+### P14.4 Standard 与 ASIO 验收矩阵
+
+中间链路使用同一套测试曲谱、指标和断言；端点相关项目分别留证，不把 Standard 通过外推为 ASIO 通过。
+
+| 验收面 | Standard | ASIO |
+| --- | --- | --- |
+| 后端枚举、设备/声道/缓冲区读回 | 复用 `gp_audio_device`，核对实际 choices | 核对 `ASIO` 是否可用、设备和实际驱动返回值 |
+| 输入端点与输入流 | 若宿主暴露输入回调，核对格式、帧连续性、路由和输入端指标；未暴露则记录 `host_limited` | 核对 ASIO 输入通道、block size、时钟和输入端 xrun；未暴露则记录 `host_limited` |
+| 启停与连续播放 | 播放头、实时 tap 帧数、时间戳和无 xrun | ASIO callback 帧数、时间戳、无 xrun/重启 |
+| 格式与路由 | 采样率、声道、缓冲区、左右声道和静音/削波 | 驱动 block size、采样率、通道映射和控制面板变更后的读回 |
+| 中间处理一致性 | 与离线基线及 ASIO 的音轨/效果/混音摘要比较 | 与 Standard 比较同一中间节点，记录端点差异 |
+| 故障与恢复 | 设备不可用、配置失败、缓冲区回退、输入/输出异常和重新启动 | ASIO 初始化失败、驱动拒绝、block size 不接受、输入/输出 xrun、重连和回退 |
+| 长测与生命周期 | 多文档、切换、停止、关闭、宿主重启 | 同上，并增加 ASIO 重开/控制面板关闭后的 stale 和恢复 |
+
+宿主不提供实时 tap、回调计数或可靠端点状态时，该格只能记录为 `host_limited`；`gp_audio_probe`、`running`、菜单可见或 DLL 符号存在均不能替代该项证据。热拔插、厂商控制面板和驱动故障需要真实硬件、明确的宿主终态和可回滚动作，否则保留为宿主受限或待调查。
+
+### P14.5 交付物与实施顺序
+
+1. **P14.0 宿主可行性**：在 Guitar Pro 8.1.1.17 已核验哈希上定位输出 tap、混音节点、回调线程、格式和端点状态；为每个不可观察节点记录 `host_limited` 原因。没有可靠 tap 时停止在此阶段，不伪造后续能力。
+2. **P14.1 实时 Provider**：定义 `audio_stream_api.h`、版本协商、结构体大小、流 ID、generation、状态码、环形缓冲区和关闭/重建语义；完成无宿主 fixture、线程违规和容量边界测试。
+3. **P14.2 监测管线**：实现分层 PCM tap、原子连续性计数、窗口指标、快照和有界读取；验证不阻塞 Qt 主线程和实时回调，并覆盖文档切换、音轨重建和宿主退出。
+4. **P14.3 诊断与管控**：实现 `gp_audio_stream` 的状态、诊断和恢复状态机；接入 `gp_audio_device`，所有写入继续在 Qt 控制线程顺序执行，并在每次动作后读回实际状态。
+5. **P14.4 Standard 专项**：使用真实设备完成启停、格式、声道、缓冲区、长测、异常和恢复，保留每层指标与证据。
+6. **P14.5 ASIO 专项**：使用真实 ASIO 驱动完成初始化、callback 连续性、block size、采样率/路由、xrun、控制面板和恢复；缺失硬件或宿主终态时明确降级，不把 Standard 证据复用为 ASIO 证据。
+7. **发布回归**：更新 `native/API.md`、`native/README.md`、`docs/COVERAGE.md`、测试脚本和安装包；运行 C++/Qt 构建、专项回归、`git diff --check`、多客户端/多文档隔离、资源回落和至少一小时实时长测。
+
+### P14.6 完成门槛与明确排除
+
+- 只有在实时 tap、线程安全、生命周期失效、指标读回、故障状态和真实 Standard/ASIO 端点证据同时具备时，P14 才能标记为已完成；部分节点或单一后端通过只能标记为部分完成。
+- 宿主已经拥有且能核验的输入流属于 P14；单独打开的操作系统麦克风采集、Windows 混音、其他进程和系统级回环不属于当前进程内 Provider 默认范围。如需纳入，必须另立跨进程权限和安全边界计划。
+- 不通过输入模拟、前台窗口、厂商 GUI 点击或外部常驻转接服务实现诊断。驱动控制面板和操作系统级重置若无稳定原生终态，保持宿主受限。
+- 不把离线 `AudioExportManager`、合成测试 buffer、`AudioLayer::isRunning()`、设备配置写入成功或 ASIO 选项可见写成实时端到端完成。
+- P13 v1 的既有消费者继续工作；实时 Provider 不复制 `Score`/`Track`/`Musician`/`Sound`/`EffectsChain` 解析，不跨线程保存宿主裸指针，不改变普通 Guitar Pro 的播放、编辑、退出和恢复可用性。
+
+P14 在完成真实宿主 tap 可行性和至少一个端点的专项前，覆盖清单应继续把“实时 PCM、系统混音、VST3 `process()`、xrun/延迟和自动驱动恢复”列为未实现、实验性或宿主受限；本计划本身不构成能力验收。
 
 ## 历史记录
 
