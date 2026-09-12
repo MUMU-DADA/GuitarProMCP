@@ -7,7 +7,7 @@ $root = Split-Path -Parent $PSScriptRoot
 $run = Join-Path $root ('artifacts/native-p6-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $run | Out-Null
 $s = New-McpSession -SessionFile $SessionFile
-$checks=0; $complete=$false; $owned=@(); $preferences=@{}; $evidence=@(); $midiRequest=$null; $midiBefore=$null
+$checks=0; $complete=$false; $owned=@(); $preferences=@{}; $evidence=@(); $midiRequest=$null; $midiBefore=$null; $forceNotationBefore=$null
 function Check($condition, $message) { if (-not $condition) { throw $message }; $script:checks++ }
 function Json($value) { ConvertTo-Json -InputObject $value -Depth 30 -Compress }
 function WaitOp($request, $expected) {
@@ -66,6 +66,11 @@ function InspectImage($path) {
 try {
     $initial=Invoke-McpTool $s gp_documents
     $others=@($initial.documents | Sort-Object id | Select-Object id,dirty,opened_path,save_path)
+    $generalBefore=Invoke-McpTool $s gp_preferences @{model='general'} -AllowError
+    if (-not $generalBefore.error -and $generalBefore.values.PSObject.Properties.Name -contains 'forceNotation') {
+        $forceNotationBefore=[bool]$generalBefore.values.forceNotation
+        if ($forceNotationBefore) { Invoke-McpTool $s gp_preferences @{model='general';operation='set';property='forceNotation';value=$false} | Out-Null }
+    }
     $path=Join-Path $run 'score.gp'; Copy-Item "$PSScriptRoot/testdata/minimal.gp" $path
     $id=OpenScore $path
     $formats=Invoke-McpTool $s gp_formats
@@ -111,8 +116,13 @@ try {
         $value=if ($field -eq 'zoom') {1.25} else {-not $pres.$field}
         $arguments=@{document=$id;operation='set'}; $arguments[$field]=$value
         Invoke-McpTool $s gp_presentation $arguments | Out-Null
-        Start-Sleep -Milliseconds 100
-        Check ((Invoke-McpTool $s gp_presentation @{document=$id}).state.$field -eq $value) "$field did not settle"
+        $settled=$false; $deadline=[DateTime]::UtcNow.AddSeconds(3)
+        do {
+            $settledState=(Invoke-McpTool $s gp_presentation @{document=$id}).state
+            if ($settledState.$field -eq $value) { $settled=$true; break }
+            Start-Sleep -Milliseconds 50
+        } while ([DateTime]::UtcNow -lt $deadline)
+        Check $settled "$field did not settle"
         $arguments[$field]=$pres.$field; Invoke-McpTool $s gp_presentation $arguments | Out-Null
     }
     $changed=Invoke-McpTool $s gp_presentation @{document=$id;operation='set';width=200;height=290;left=11;top=12;right=13;bottom=14;orientation='landscape'}
@@ -127,6 +137,7 @@ try {
     CloseScore $id; $id=OpenScore $path
     $reopened=(Invoke-McpTool $s gp_presentation @{document=$id}).state
     Check ($reopened.width -eq 200 -and $reopened.height -eq 290 -and $reopened.orientation -eq 'landscape' -and $reopened.left -eq 11 -and -not $reopened.tracks[0].tablature) 'Page or notation did not persist'
+    if ($null -ne $forceNotationBefore -and $forceNotationBefore) { Invoke-McpTool $s gp_preferences @{model='general';operation='set';property='forceNotation';value=$true} | Out-Null }
     $pdf=ExportScore $id 'print.pdf'; $png=ExportScore $id 'page.png'
     $evidence += @{png=(InspectImage (Join-Path $run 'page.png'))}
     Check ($png.width -gt $png.height -and $pdf.pages -eq 1) 'Landscape page dimensions differ'
@@ -233,6 +244,10 @@ try {
         $restored=Invoke-McpTool $s gp_preferences @{model=$model;operation='set';property=$property.Name;value=$property.Value}
         Check ($restored.values.($property.Name) -eq $property.Value) 'Preference restore failed'
     } }
+    if ($null -ne $forceNotationBefore -and $forceNotationBefore -and
+        ((Invoke-McpTool $s gp_preferences @{model='general'} -AllowError).values.forceNotation -ne $true)) {
+        Invoke-McpTool $s gp_preferences @{model='general';operation='set';property='forceNotation';value=$true} | Out-Null
+    }
     foreach ($doc in @($owned)) { CloseScore $doc }
     if ($initial.active_document) { Invoke-McpTool $s gp_activate @{document=$initial.active_document} | Out-Null }
     } catch {

@@ -12,7 +12,7 @@ Enter-VsDevShell -VsInstallPath $vsInstall -SkipAutomaticLocation -DevCmdArgumen
 $version = & "$QtDir/bin/qmake.exe" -query QT_VERSION
 if ($LASTEXITCODE -or $version -notmatch '^5\.\d+\.\d+$') { throw 'Cannot determine Qt header version.' }
 $includes = @("$QtDir/include", "$QtDir/include/QtCore", "$QtDir/include/QtGui", "$QtDir/include/QtWidgets", "$QtDir/include/QtNetwork", "$QtDir/include/QtPrintSupport", "$QtDir/include/QtCore/$version", "$QtDir/include/QtCore/$version/QtCore", "$QtDir/include/QtGui/$version", "$QtDir/include/QtGui/$version/QtGui", "$root/native")
-& cl /nologo /std:c++17 /EHsc /MD /O2 /utf-8 /DQT_NO_DEBUG ($includes | ForEach-Object { "/I$_" }) "$PSScriptRoot/audio-stream-probe.cpp" "/Fo$output/" "/Fe$output/audio-stream-probe.exe" /link "/LIBPATH:$QtDir/lib" Qt5Core.lib Qt5Gui.lib Qt5Widgets.lib Qt5Network.lib Qt5PrintSupport.lib
+& cl /nologo /std:c++17 /EHsc /MD /O2 /utf-8 /DQT_NO_DEBUG ($includes | ForEach-Object { "/I$_" }) "$PSScriptRoot/audio-stream-probe.cpp" "/Fo$output/" "/Fe$output/audio-stream-probe.exe" /link "/LIBPATH:$QtDir/lib" Qt5Core.lib Qt5Gui.lib Qt5Widgets.lib Qt5Network.lib Qt5PrintSupport.lib Ole32.lib Mmdevapi.lib
 if ($LASTEXITCODE) { throw 'Audio stream probe compilation failed.' }
 & cl /nologo /std:c++17 /EHsc /MD /O2 /utf-8 /LD "/I$root/native" "$PSScriptRoot/audio-stream-provider-fixture.cpp" "/Fo$output/" "/Fe$output/audio-stream-provider-fixture.dll"
 if ($LASTEXITCODE) { throw 'Audio stream provider fixture compilation failed.' }

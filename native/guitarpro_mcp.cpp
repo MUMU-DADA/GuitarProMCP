@@ -899,7 +899,7 @@ class Bridge : public QObject {
         if (qEnvironmentVariableIsSet("GPMCP_DEVELOPMENT")) add("gp_audio_probe", "开发验收：原生渲染最多 30 秒测试曲谱，返回 PCM 帧数、能量和哈希。", {{"document", str}});
         add("gp_audio_abi", "读取当前文档的 RSE EffectsChain 到不透明 track_id/chain_id 映射；可在开发模式用 buffer_probe 验证可写 AMAudio IAudioBuffer 和 EffectsChain::processDSP。", {{"document", str}, {"operation", str}, {"track", integer}, {"sound", integer}, {"track_id", str}, {"chain_id", str}, {"frames", integer}});
         add("gp_audio_device", "原生全局音频设备：state/set。property/value 必须来自返回的 choices；修改前停止播放，不加入曲谱撤销栈。", {{"operation", str}, {"property", str}, {"value", QJsonObject{{"anyOf", QJsonArray{str, integer, anyObject}}}}});
-        add("gp_audio_stream", "P14 实时音频流会话：state/start/stop/snapshot/read/diagnose/recover。使用固定容量、端点无关的流模型；当前宿主没有核验 realtime tap 时明确返回 host_limited，不伪造 PCM 或设备输出。", {{"operation", str}, {"document", str}, {"stream_id", str}, {"layers", QJsonObject{{"type", "array"}, {"items", str}}}, {"max_frames", integer}, {"max_bytes", integer}});
+        add("gp_audio_stream", "P14 实时音频流会话：通过进程 WASAPI loopback 采集 Guitar Pro 实际输出，支持 state/start/stop/snapshot/read/diagnose/recover；PCM 和连续性指标来自实时端点，layers 可选择 input/source/track/effects/mix/audiolayer/endpoint，backend 可选 auto/standard/asio/process_loopback/render_loopback。", {{"operation", str}, {"document", str}, {"stream_id", str}, {"layers", QJsonObject{{"type", "array"}, {"items", str}}}, {"backend", str}, {"max_frames", integer}, {"max_bytes", integer}});
         add("gp_p9_status", "读取 P9 编辑面板能力矩阵。每项明确返回已实现、已验证、实验性、未实现或宿主受限；只读，不改变曲谱。", {});
         add("gp_preferences", "读取或设置明确允许的全局原生偏好。scope 为 application，model 为 general/gui/score/user_info/midi。返回实际值、类型和宿主 choices；设置失败会恢复旧值。文档设置使用 gp_presentation。", {{"scope", str}, {"model", str}, {"operation", str}, {"property", str}, {"value", QJsonObject{{"anyOf", QJsonArray{boolean, str, QJsonObject{{"type", "number"}}, QJsonObject{{"type", "array"}}}}}}});
         add("gp_presentation", "读取或设置文档页面、页面元数据、缩放、编辑显示和谱表可见性。页面尺寸/边距使用毫米；一次只设置页面、page_metadata、视图或谱表一组。page_metadata 异步写入 title/author/composer/copyright，以及 even_header/odd_header、first_footer/even_footer/odd_footer、first_page_number/even_page_number/odd_page_number（对象含 text、visibility=0 可见/1 隐藏/2 折叠）。使用 gp_operation 查询终态，整组一次撤销。", {{"document", str}, {"operation", str}, {"width", QJsonObject{{"type", "number"}}}, {"height", QJsonObject{{"type", "number"}}}, {"left", QJsonObject{{"type", "number"}}}, {"top", QJsonObject{{"type", "number"}}}, {"right", QJsonObject{{"type", "number"}}}, {"bottom", QJsonObject{{"type", "number"}}}, {"orientation", str}, {"page_metadata", anyObject}, {"zoom", QJsonObject{{"type", "number"}}}, {"design_mode", boolean}, {"multivoice_edition", boolean}, {"track", integer}, {"standard_notation", boolean}, {"tablature", boolean}});
@@ -1465,6 +1465,54 @@ public:
         return guitarpro::enumerateAudioBindingsV1(services(), requestedAbi, visitor, user, result);
     }
 
+    uint32_t enumerateAudioStreamsV1(uint32_t requestedAbi, gpmcp_audio_stream_state_visitor visitor,
+                                     void *user, gpmcp_audio_stream_enumerate_result *result) {
+        if (!qApp || QThread::currentThread() != qApp->thread()) {
+            if (result && result->struct_size >= sizeof(*result)) {
+                result->status = qApp ? GPMCP_AUDIO_STREAM_WRONG_THREAD : GPMCP_AUDIO_STREAM_NOT_READY;
+                result->generation = 0;
+                result->count = 0;
+            }
+            return qApp ? GPMCP_AUDIO_STREAM_WRONG_THREAD : GPMCP_AUDIO_STREAM_NOT_READY;
+        }
+        return audioStreams.enumerate(requestedAbi, visitor, user, result,
+                                      guitarpro::currentAudioGeneration());
+    }
+
+    uint32_t audioStreamInfo(gpmcp_audio_stream_info *info) {
+        if (!info || info->struct_size < sizeof(*info)) return GPMCP_AUDIO_STREAM_ABI_MISMATCH;
+        std::memset(info, 0, sizeof(*info));
+        info->struct_size = sizeof(*info);
+        info->abi_version = GPMCP_AUDIO_STREAM_ABI_VERSION;
+        if (!qApp) {
+            info->status = GPMCP_AUDIO_STREAM_NOT_READY;
+            return info->status;
+        }
+        if (QThread::currentThread() != qApp->thread()) {
+            info->status = GPMCP_AUDIO_STREAM_WRONG_THREAD;
+            return info->status;
+        }
+        const QByteArray hostHash = guitarpro::hash(QCoreApplication::applicationFilePath());
+        const QJsonObject state = audioStreams.info(guitarpro::currentAudioGeneration(), hostHash);
+        info->generation = state.value("generation").toVariant().toULongLong();
+        info->stream_count = state.value("stream_count").toInt();
+        const QJsonArray capabilities = state.value("capabilities").toArray();
+        for (const auto &capability : capabilities) {
+            const QString name = capability.toString();
+            if (name == "session") info->capabilities |= GPMCP_AUDIO_STREAM_CAP_SESSION;
+            else if (name == "pcm") info->capabilities |= GPMCP_AUDIO_STREAM_CAP_PCM;
+            else if (name == "metrics") info->capabilities |= GPMCP_AUDIO_STREAM_CAP_METRICS;
+            else if (name == "diagnostics") info->capabilities |= GPMCP_AUDIO_STREAM_CAP_DIAGNOSTICS;
+            else if (name == "recovery") info->capabilities |= GPMCP_AUDIO_STREAM_CAP_RECOVERY;
+        }
+        const QString status = state.value("status").toString();
+        info->status = status == "ready" ? GPMCP_AUDIO_STREAM_OK :
+            status == "host_limited" ? GPMCP_AUDIO_STREAM_HOST_LIMITED : GPMCP_AUDIO_STREAM_NOT_READY;
+        const size_t length = (std::min<size_t>)(hostHash.size(), sizeof(info->host_build_sha256) - 1);
+        if (length) std::memcpy(info->host_build_sha256, hostHash.constData(), length);
+        return info->status;
+    }
+
     Bridge() {
         // Qt owns generic-plugin return values; release resources without deleting its object.
         connect(qApp, &QCoreApplication::aboutToQuit, this, [this] { shutdown(); });
@@ -1550,30 +1598,36 @@ extern "C" GPMCP_AUDIO_STREAM_EXPORT unsigned GPMCP_AUDIO_STREAM_CALL gpmcp_audi
 extern "C" GPMCP_AUDIO_STREAM_EXPORT uint32_t GPMCP_AUDIO_STREAM_CALL gpmcp_audio_stream_get_info(
     gpmcp_audio_stream_info *info) noexcept {
     if (!info || info->struct_size < sizeof(*info)) return GPMCP_AUDIO_STREAM_ABI_MISMATCH;
-    std::memset(info, 0, sizeof(*info));
-    info->struct_size = sizeof(*info);
-    info->abi_version = GPMCP_AUDIO_STREAM_ABI_VERSION;
-    info->status = GPMCP_AUDIO_STREAM_HOST_LIMITED;
-    info->capabilities = GPMCP_AUDIO_STREAM_CAP_SESSION | GPMCP_AUDIO_STREAM_CAP_METRICS |
-        GPMCP_AUDIO_STREAM_CAP_DIAGNOSTICS | GPMCP_AUDIO_STREAM_CAP_RECOVERY;
-    if (!qApp) return info->status;
+    if (!qApp) {
+        std::memset(info, 0, sizeof(*info));
+        info->struct_size = sizeof(*info);
+        info->abi_version = GPMCP_AUDIO_STREAM_ABI_VERSION;
+        info->status = GPMCP_AUDIO_STREAM_NOT_READY;
+        return info->status;
+    }
     if (QThread::currentThread() != qApp->thread()) {
+        std::memset(info, 0, sizeof(*info));
+        info->struct_size = sizeof(*info);
+        info->abi_version = GPMCP_AUDIO_STREAM_ABI_VERSION;
         info->status = GPMCP_AUDIO_STREAM_WRONG_THREAD;
         return info->status;
     }
     try {
-        info->generation = guitarpro::currentAudioGeneration();
-        const QByteArray hash = guitarpro::hash(QCoreApplication::applicationFilePath());
-        const size_t length = (std::min<size_t>)(hash.size(), sizeof(info->host_build_sha256) - 1);
-        if (length) std::memcpy(info->host_build_sha256, hash.constData(), length);
         auto *object = qApp->property("gpmcpBridge").value<QObject *>();
         if (object && object->objectName() == QStringLiteral("GuitarProMCPBridge")) {
-            // The MCP-facing registry owns sessions; the C ABI intentionally
-            // reports the same host-limited state until a verified callback is
-            // available, without exposing Qt or host pointers.
-            info->stream_count = 0;
+            return static_cast<Bridge *>(object)->audioStreamInfo(info);
         }
-    } catch (...) { info->status = GPMCP_AUDIO_STREAM_INTERNAL_ERROR; }
+    } catch (...) {
+        std::memset(info, 0, sizeof(*info));
+        info->struct_size = sizeof(*info);
+        info->abi_version = GPMCP_AUDIO_STREAM_ABI_VERSION;
+        info->status = GPMCP_AUDIO_STREAM_INTERNAL_ERROR;
+        return info->status;
+    }
+    std::memset(info, 0, sizeof(*info));
+    info->struct_size = sizeof(*info);
+    info->abi_version = GPMCP_AUDIO_STREAM_ABI_VERSION;
+    info->status = GPMCP_AUDIO_STREAM_NOT_READY;
     return info->status;
 }
 
@@ -1598,11 +1652,11 @@ extern "C" GPMCP_AUDIO_STREAM_EXPORT uint32_t GPMCP_AUDIO_STREAM_CALL gpmcp_audi
         return result->status;
     }
     result->generation = guitarpro::currentAudioGeneration();
-    // No verified host callback is available in 8.1.1.17.  Returning an empty
-    // enumeration is intentional and keeps consumers from mistaking a
-    // synthetic/offline buffer for live endpoint audio.
-    result->status = GPMCP_AUDIO_STREAM_HOST_LIMITED;
-    Q_UNUSED(user);
+    try {
+        auto *object = qApp->property("gpmcpBridge").value<QObject *>();
+        if (object && object->objectName() == QStringLiteral("GuitarProMCPBridge"))
+            return static_cast<Bridge *>(object)->enumerateAudioStreamsV1(requestedAbi, visitor, user, result);
+    } catch (...) { result->status = GPMCP_AUDIO_STREAM_INTERNAL_ERROR; }
     return result->status;
 }
 #include "guitarpro_mcp.moc"

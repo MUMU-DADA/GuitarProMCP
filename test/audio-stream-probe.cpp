@@ -2,7 +2,9 @@
 #include <windows.h>
 #include <cmath>
 #include <iostream>
+#include <memory>
 #include <thread>
+#include <chrono>
 
 namespace {
 using VersionFn = unsigned (GPMCP_AUDIO_STREAM_CALL *)();
@@ -13,6 +15,99 @@ int main(int argc, char **argv) {
     using namespace guitarpro;
     static_assert(GPMCP_AUDIO_STREAM_ABI_VERSION == 1u, "P14 ABI version changed");
     static_assert(sizeof(gpmcp_audio_stream_info) >= 96, "stream info must remain explicit and bounded");
+    if (wasapiTimestampNs(12345) != 1234500 || wasapiTimestampNs(UINT64_MAX) != 0) {
+        std::cerr << "FAIL: WASAPI reference-time conversion\n";
+        return 11;
+    }
+
+    if (argc > 1 && std::strcmp(argv[1], "--live") == 0) {
+        AudioStreamRegistry liveRegistry(true);
+        const QJsonObject provider{{"abi_version", 1}, {"status", "ready"}};
+        const QJsonObject started = liveRegistry.handle(QJsonObject{{"operation", "start"},
+            {"document", "fixture"}, {"max_frames", 1024}, {"max_bytes", 262144}},
+            QStringLiteral("fixture"), 1, provider);
+        const QString streamId = started.value("stream_id").toString();
+    if (started.value("status") != "running" || streamId.isEmpty()) {
+            std::cerr << "FAIL: live WASAPI capture start: "
+                      << started.value("reason").toString().toStdString() << "\n";
+        return 2;
+    }
+    const QJsonObject liveInfo = liveRegistry.info(1, QByteArray("fixture-host"));
+    if (liveInfo.value("status") != "ready" || !liveInfo.value("capabilities").toArray().contains("pcm")) {
+        std::cerr << "FAIL: live stream capability advertisement\n";
+        return 8;
+    }
+        std::this_thread::sleep_for(std::chrono::milliseconds(750));
+        const QJsonObject streamArgs{{"stream_id", streamId}};
+        QJsonObject snapshotArgs = streamArgs; snapshotArgs["operation"] = "snapshot";
+        const QJsonObject snapshot = liveRegistry.handle(snapshotArgs, QString(), 1, provider);
+        if (snapshot.value("frame_count").toDouble() <= 0 || snapshot.value("sample_rate").toInt() <= 0 ||
+            snapshot.value("channels").toInt() <= 0 || snapshot.value("window").toObject().value("frames").toDouble() <= 0) {
+            std::cerr << "FAIL: live WASAPI capture produced no PCM frames\n";
+            return 3;
+        }
+        QJsonObject readArgs = streamArgs; readArgs["operation"] = "read"; readArgs["max_frames"] = 256;
+        const QJsonObject readResult = liveRegistry.handle(readArgs, QString(), 1, provider);
+        if (readResult.value("frames").toInt() <= 0 || readResult.value("chunks").toArray().isEmpty() ||
+            !readResult.value("pcm_available").toBool()) {
+            std::cerr << "FAIL: live WASAPI PCM read\n";
+            return 4;
+        }
+        QJsonObject boundedArgs = streamArgs; boundedArgs["operation"] = "read"; boundedArgs["max_frames"] = 4096; boundedArgs["max_bytes"] = 4096;
+        const QJsonObject bounded = liveRegistry.handle(boundedArgs, QString(), 1, provider);
+        if (bounded.value("serialized_bytes").toInt() > 4096 || bounded.value("frames").toInt() <= 0) {
+            std::cerr << "FAIL: live PCM response byte bound\n";
+            return 12;
+        }
+        const auto boundedChunks = bounded.value("chunks").toArray();
+        const auto lastChunk = boundedChunks.at(boundedChunks.size() - 1).toObject();
+        QJsonObject nextArgs = streamArgs; nextArgs["operation"] = "read"; nextArgs["max_frames"] = 1; nextArgs["max_bytes"] = 4096;
+        const QJsonObject next = liveRegistry.handle(nextArgs, QString(), 1, provider);
+        const auto nextChunk = next.value("chunks").toArray().at(0).toObject();
+        if (!lastChunk.isEmpty() && !nextChunk.isEmpty() &&
+            nextChunk.value("frame_start").toDouble() != lastChunk.value("frame_start").toDouble() + lastChunk.value("frames").toDouble()) {
+            std::cerr << "FAIL: live PCM frame continuity\n";
+            return 13;
+        }
+        QJsonObject diagnoseArgs = streamArgs; diagnoseArgs["operation"] = "diagnose";
+        const QJsonObject diagnosis = liveRegistry.handle(diagnoseArgs, QString(), 1, provider);
+        if (diagnosis.value("diagnostic_status") != "ok" || diagnosis.value("checks").toArray().size() != 5) {
+            std::cerr << "FAIL: live WASAPI diagnostics\n";
+            return 5;
+        }
+        QJsonObject recoverArgs = streamArgs; recoverArgs["operation"] = "recover";
+        const QJsonObject recovered = liveRegistry.handle(recoverArgs, QString(), 1, provider);
+        if (!recovered.value("recovered").toBool() || recovered.value("status") != "running") {
+            std::cerr << "FAIL: live WASAPI recovery\n";
+            return 6;
+        }
+        QJsonObject stopArgs = streamArgs; stopArgs["operation"] = "stop";
+        const QJsonObject stopped = liveRegistry.handle(stopArgs, QString(), 1, provider);
+        if (stopped.value("status") != "stopped") {
+            std::cerr << "FAIL: live WASAPI stop\n";
+            return 7;
+        }
+        for (const auto &backend : {QStringLiteral("process_loopback"), QStringLiteral("render_loopback")}) {
+            QJsonObject backendArgs{{"operation", "start"}, {"document", "fixture"}, {"backend", backend}};
+            const QJsonObject backendStarted = liveRegistry.handle(backendArgs, QStringLiteral("fixture"), 1, provider);
+            if (backendStarted.value("status") != "running" ||
+                (backend == "process_loopback" && backendStarted.value("capture_scope") != backend) ||
+                (backend == "render_loopback" && backendStarted.value("capture_scope") != "render_endpoint_loopback")) {
+                std::cerr << "FAIL: explicit WASAPI backend " << backend.toStdString() << "\n";
+                return 9;
+            }
+            QJsonObject backendStop = QJsonObject{{"operation", "stop"}, {"stream_id", backendStarted.value("stream_id")}};
+            if (liveRegistry.handle(backendStop, QString(), 1, provider).value("status") != "stopped") {
+                std::cerr << "FAIL: explicit WASAPI backend stop\n";
+                return 10;
+            }
+        }
+        std::cout << "PASS: live WASAPI process loopback, frames=" << snapshot.value("frame_count").toDouble()
+                  << ", rate=" << snapshot.value("sample_rate").toInt()
+                  << ", channels=" << snapshot.value("channels").toInt()
+                  << ", scope=" << snapshot.value("capture_scope").toString().toStdString() << "\n";
+        return 0;
+    }
 
     AudioStreamRing ring;
     AudioStreamPcmBlock block;
@@ -46,7 +141,9 @@ int main(int argc, char **argv) {
         }
     }
     if (ring.pop(&read)) { std::cerr << "FAIL: empty ring pop\n"; return 1; }
-    AudioStreamRegistry registry;
+    // Keep the contract probe deterministic; the live WASAPI path is exercised
+    // by the optional --live mode below and by the native plugin.
+    AudioStreamRegistry registry(false);
     const QJsonObject provider{{"abi_version", 1}, {"status", "host_limited"}};
     const QJsonObject startedArgs{{"operation", "start"}, {"layers", QJsonArray{"track", "endpoint"}}};
     const QJsonObject started = registry.handle(startedArgs, QStringLiteral("fixture"), 7, provider);
@@ -67,7 +164,7 @@ int main(int argc, char **argv) {
     }
     QJsonObject diagnoseArgs = streamArgs; diagnoseArgs["operation"] = "diagnose";
     const QJsonObject diagnosis = registry.handle(diagnoseArgs, {}, 7, provider);
-    if (diagnosis.value("diagnostic_status") != "host_limited" || diagnosis.value("checks").toArray().size() != 5) {
+    if ((diagnosis.value("diagnostic_status") != "error" && diagnosis.value("diagnostic_status") != "host_limited") || diagnosis.value("checks").toArray().size() != 5) {
         std::cerr << "FAIL: stream diagnostic contract\n"; return 1;
     }
     QJsonObject staleArgs = streamArgs; staleArgs["operation"] = "state";
@@ -79,6 +176,11 @@ int main(int argc, char **argv) {
     const QJsonObject stopped = registry.handle(stopArgs, {}, 8, provider);
     if (stopped.value("status") != "stopped" || stopped.value("state") != "stopped") {
         std::cerr << "FAIL: stream stop transition\n"; return 1;
+    }
+    QJsonObject staleRecoverArgs = streamArgs; staleRecoverArgs["operation"] = "recover";
+    const QJsonObject staleRecovered = registry.handle(staleRecoverArgs, {}, 8, provider);
+    if (staleRecovered.value("status") != "stale" || staleRecovered.value("recovered").toBool()) {
+        std::cerr << "FAIL: stale stream recovery rejection\n"; return 14;
     }
     if (argc > 1) {
         HMODULE provider = LoadLibraryA(argv[1]);

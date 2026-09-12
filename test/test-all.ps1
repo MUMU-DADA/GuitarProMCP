@@ -55,7 +55,7 @@ $exitHandle = [GpmcpRegressionProcess]::OpenProcess(0x1000, $false, $process.Id)
 if ($exitHandle -eq [IntPtr]::Zero) { throw 'Cannot retain a process handle for exit-code verification.' }
 $exitCode = $null
 Write-Output "Regression host PID $($process.Id). Session: $sessionFile"
-$suites = @('p6','mcp','native','editing','tracks','measures','effects','selection','saving','document-operations','document-tabs','lifecycle','session','structure','clipboard','tuplets','connections','notation','instruments','score-form','transfer','audio','audio-abi','audio-stream','p8','p9','p10','p11','p12')
+$suites = @('p6','mcp','native','editing','tracks','measures','effects','selection','saving','document-operations','document-tabs','lifecycle','session','structure','clipboard','tuplets','connections','notation','instruments','score-form','transfer','audio','audio-abi','audio-stream','audio-stream-host','p8','p9','p10','p11','p12')
 if (Test-Path -LiteralPath (Join-Path $root '.tools/audio-bridge-probe/audio-bridge-probe.exe')) { $suites += 'audio-bridge' }
 $results = @()
 $fixtureRestorations = @()
@@ -70,10 +70,26 @@ function Wait-FixtureOperation($connection, $request, [string]$expected) {
     if ($state.status -ne $expected) { throw "Fixture restore failed: $($state | ConvertTo-Json -Depth 5 -Compress)" }
     return $state
 }
+function Close-NonArtifactDocuments($connection) {
+    $artifactRoot = [IO.Path]::GetFullPath((Join-Path $root 'artifacts')) + '\'
+    $documents = (Invoke-McpTool $connection gp_documents).documents
+    foreach ($doc in @($documents | Where-Object {
+        -not $_.opened_path -or -not [IO.Path]::GetFullPath($_.opened_path).StartsWith($artifactRoot, [StringComparison]::OrdinalIgnoreCase)
+    })) {
+        $close = Invoke-McpTool $connection gp_close @{document=$doc.id;unsaved='discard'}
+        Wait-FixtureOperation $connection $close.request 'closed' | Out-Null
+    }
+}
 try {
     foreach ($suite in $suites) {
         $connection = New-McpSession -SessionFile $sessionFile
         try {
+            # P12 deliberately requires a clean artifact-only document set.
+            # Isolated Guitar Pro copies can restore recent user tabs on
+            # startup, so discard those tabs before that read-only suite.
+            if ($suite -eq 'p12' -and [IO.Path]::GetFullPath($Exe).StartsWith([IO.Path]::GetFullPath((Join-Path $root '.tools')) + '\', [StringComparison]::OrdinalIgnoreCase)) {
+                Close-NonArtifactDocuments $connection
+            }
             $fixtureBefore = @((Invoke-McpTool $connection gp_documents).documents | Where-Object opened_path -EQ $fixture.Replace('\','/'))
             if ($fixtureBefore.Count -ne 1 -or $fixtureBefore[0].dirty) { throw 'Regression fixture is missing or dirty.' }
         } finally { Close-McpSession $connection }
