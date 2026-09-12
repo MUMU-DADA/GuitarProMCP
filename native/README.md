@@ -144,6 +144,8 @@ IDocumentsManager + 0x10 → 管理器实现对象
 ./test/test-p12.ps1 -SessionFile <isolated-session.json>
 # Qt 机制夹具：生命周期/地址复用、SubWindow、QWindow、限制及两种缩放
 ./test/test-p12-windows.ps1
+# Windows 非客户区夹具：标题栏/边框、DPI、隐藏窗口和焦点保持
+./test/test-p12-windows.ps1 -NativeFrame
 # P12 跨客户端、重连与宿主重启后的 ID 拒绝（同时回归既有实例行为）
 ./test/test-instances.ps1 -HostDirectory '<isolated .tools host>' -StartupSettlingMs 15000
 ```

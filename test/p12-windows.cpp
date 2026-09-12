@@ -5,6 +5,7 @@
 #include <QtWidgets/QMenu>
 #include <QtCore/QUuid>
 #include <cstdio>
+#include <cstring>
 #include <memory>
 #include <stdexcept>
 #include <vector>
@@ -31,9 +32,60 @@ public:
         resize(83, 24);
     }
 };
+
+static QImage decodeCapture(const QJsonObject &capture) {
+    return QImage::fromData(QByteArray::fromBase64(capture.value("__mcp_image").toObject().value("data").toString().toLatin1()), "PNG");
+}
+
+static int nativeFrameFixture(QApplication &app) {
+    try {
+        WindowCapture windows(QUuid::createUuid().toString(QUuid::WithoutBraces));
+        QWidget target;
+        target.setObjectName("frameTarget");
+        target.setWindowTitle(QString::fromUtf8("标题栏验证 — GuitarProMCP"));
+        target.setAttribute(Qt::WA_ShowWithoutActivating);
+        target.resize(360, 180);
+        target.setStyleSheet("background: rgb(21,137,63)");
+        target.ensurePolished();
+        target.show(); app.processEvents();
+        const auto record = row(windows.enumerate(), "frameTarget");
+        check(!record.isEmpty(), "native frame target was not enumerated");
+        const auto beforeForeground = GetForegroundWindow();
+        const auto client = windows.screenshot({{"window_id", record.value("window_id")}});
+        const auto framed = windows.screenshot({{"window_id", record.value("window_id")}, {"include_frame", true}});
+        check(client.value("status") == "experimental" && framed.value("status") == "experimental", "native frame capture failed");
+        check(framed.value("frame_included").toBool() && framed.value("capture_mode") == "qt_widget_render_with_win32_frame" &&
+              framed.value("frame_reason") == "win32_wm_print", "native frame metadata missing");
+        const auto clientImage = decodeCapture(client), framedImage = decodeCapture(framed);
+        check(!clientImage.isNull() && !framedImage.isNull(), "native frame PNG decode failed");
+        const auto insets = framed.value("frame_insets").toObject();
+        const int left = insets.value("left").toInt(), top = insets.value("top").toInt();
+        const int right = insets.value("right").toInt(), bottom = insets.value("bottom").toInt();
+        check(left > 0 && top > 0 && right >= 0 && bottom >= 0 &&
+              framedImage.size() == QSize(clientImage.width() + left + right, clientImage.height() + top + bottom),
+              "native frame dimensions or insets are invalid");
+        check(framedImage.pixelColor(left + clientImage.width()/2, top + clientImage.height()/2) == QColor(21,137,63),
+              "native frame composition displaced the Qt client image");
+        check(framedImage.pixelColor(framedImage.width()/2, qMax(0, top/2)) != QColor(21,137,63),
+              "native title bar pixels were not included");
+        check(GetForegroundWindow() == beforeForeground, "native frame capture changed foreground focus");
+        target.hide(); app.processEvents();
+        const auto hidden = windows.screenshot({{"window_id", record.value("window_id")}, {"include_frame", true}});
+        check(hidden.value("status") == "experimental" && hidden.value("frame_included").toBool() && !target.isVisible(),
+              "hidden native frame capture changed visibility or failed");
+        target.close(); app.processEvents();
+        std::printf("PASS: %d native frame fixture checks; frame %dx%d, client inset %d,%d\n", checks,
+                    framedImage.width(), framedImage.height(), left, top);
+        return 0;
+    } catch (const std::exception &error) {
+        std::fprintf(stderr, "FAIL after %d native frame checks: %s\n", checks, error.what()); return 1;
+    }
+}
+
 int main(int argc, char **argv) {
     QApplication app(argc, argv);
     app.setQuitOnLastWindowClosed(false);
+    if (argc > 1 && std::strcmp(argv[1], "--native-frame") == 0) return nativeFrameFixture(app);
     try {
         const auto instance = QUuid::createUuid().toString(QUuid::WithoutBraces);
         WindowCapture windows(instance);
@@ -59,6 +111,10 @@ int main(int argc, char **argv) {
         const auto pixels = QImage::fromData(png, "PNG");
         check(!pixels.isNull() && pixels.pixelColor(pixels.width()/2, pixels.height()/2) == QColor(21,137,63), "wrong target pixels");
         check(pixels.width() == qRound(tool.width()*tool.devicePixelRatioF()), "DPI dimensions mismatch");
+        const auto frameUnavailable = windows.screenshot({{"window_id", row(list, "tool").value("window_id")}, {"include_frame", true}});
+        check(frameUnavailable.value("status") == "host_limited" &&
+              frameUnavailable.value("reason") == "frame_handle_unavailable" &&
+              !frameUnavailable.contains("__mcp_image"), "offscreen frame request did not fail explicitly");
         auto oldTool = row(list, "tool");
         tool.setWindowTitle("renamed"); tool.show(); app.processEvents();
         list = windows.enumerate();

@@ -940,7 +940,7 @@ class Bridge : public QObject {
         add("gp_save_current", "异步保存当前 .gp 路径；轮询 gp_operation 的 saved/result。未命名文档须先 gp_save_as。", {{"document", str}});
         add("gp_window", "通过 Qt 原生窗口方法隐藏、最小化或恢复主窗口；restore 会显示并请求激活窗口，hide 重新进入不抢焦点的后台模式。", {{"state", str}}, {"state"});
         add("gp_windows", "只读枚举当前实例的 Qt 窗口、稳定 ID、父窗口关系及实际状态。include_hidden 默认 true；过滤不改变总数。不包含桌面和其他进程。", {{"include_hidden", boolean}});
-        add("gp_screenshot", "读取指定 window_id 的 PNG；省略时优先活动模态，否则主窗口。使用 Qt 离屏渲染，不激活窗口、不抢焦点、不发送输入；无效 ID 明确拒绝，无法可靠渲染返回 host_limited。", {{"window_id", str}});
+        add("gp_screenshot", "读取指定 window_id 的 PNG；省略时优先活动模态，否则主窗口。使用 Qt 离屏渲染，不激活窗口、不抢焦点、不发送输入；include_frame=true 时在 Windows 上补入同一窗口的系统标题栏和边框。无效 ID 明确拒绝，无法可靠渲染返回 host_limited。", {{"window_id", str}, {"include_frame", boolean}});
         add("gp_capabilities", "原生 C++ 插件身份、后台控制能力及尚未覆盖的范围。", {});
         add("gp_dialogs", "Read the active modal dialog, its message labels and available buttons. Native score mutations are blocked until it is resolved.", {});
         add("gp_objects", "读取宿主 Qt 对象、属性和可调用方法；无需窗口可见或前台。", {{"query", str}, {"offset", integer}, {"limit", integer}, {"include_hidden", boolean}});

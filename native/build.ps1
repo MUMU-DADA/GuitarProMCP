@@ -36,7 +36,7 @@ $source = Join-Path $PSScriptRoot 'guitarpro_mcp.cpp'
 & (Join-Path $QtDir 'bin/moc.exe') @mocIncludes $source -o (Join-Path $buildDir 'guitarpro_mcp.moc')
 if ($LASTEXITCODE -ne 0) { throw 'Qt moc 生成失败。' }
 $clIncludes = $includeDirs | ForEach-Object { "/I$_" }
-& cl /nologo /std:c++17 /EHsc /MD /O2 /utf-8 /LD /DQT_NO_DEBUG /DQT_PLUGIN @clIncludes $source (Join-Path $PSScriptRoot 'mcp_server.cpp') "/Fo$buildDir/" "/Fd$buildDir/guitarpro_mcp.pdb" "/Fe$pluginDir/guitarpro_mcp.dll" /link "/LIBPATH:$QtDir/lib" Qt5Core.lib Qt5Gui.lib Qt5Widgets.lib Qt5Network.lib Qt5PrintSupport.lib User32.lib "$buildDir/GPCore.lib" "$buildDir/GPRSE.lib" "$buildDir/AMAudio.lib" "$buildDir/AMUtils.lib" "$buildDir/AMPainting.lib" "/IMPLIB:$buildDir/guitarpro_mcp.lib"
+& cl /nologo /std:c++17 /EHsc /MD /O2 /utf-8 /LD /DQT_NO_DEBUG /DQT_PLUGIN @clIncludes $source (Join-Path $PSScriptRoot 'mcp_server.cpp') "/Fo$buildDir/" "/Fd$buildDir/guitarpro_mcp.pdb" "/Fe$pluginDir/guitarpro_mcp.dll" /link "/LIBPATH:$QtDir/lib" Qt5Core.lib Qt5Gui.lib Qt5Widgets.lib Qt5Network.lib Qt5PrintSupport.lib User32.lib Gdi32.lib "$buildDir/GPCore.lib" "$buildDir/GPRSE.lib" "$buildDir/AMAudio.lib" "$buildDir/AMUtils.lib" "$buildDir/AMPainting.lib" "/IMPLIB:$buildDir/guitarpro_mcp.lib"
 if ($LASTEXITCODE -ne 0) { throw '原生插件编译失败。' }
 Write-Output "插件已生成：$pluginDir/guitarpro_mcp.dll"
 $autoloadDir = Join-Path $projectRoot '.tools/native/plugins/imageformats'

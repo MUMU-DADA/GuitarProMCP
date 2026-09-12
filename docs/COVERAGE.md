@@ -21,7 +21,7 @@
 | P10 偏好与基础音频/MIDI | `gp_preferences` 的 general/gui/score/user_info/midi 显式 allowlist、`property_info` 类型/枚举 choices、错误输入拒绝和同值写入读回；setter 失败时尝试恢复旧值；`gp_audio_device` 返回输出声道 choices、属性类型、运行状态并拒绝未知值；真实宿主专项核对重启持久化和新建曲谱默认资讯继承 | 每路 MIDI 延迟、通道检测、驱动控制面板、更新/Beta 保留为宿主受限或待调查；输出通道只接受当前宿主给出的 choices，不猜测额外映射 |
 | RSE/音频 ABI 边界 | `gp_audio_abi` 为当前文档的 `core::Track` 返回稳定进程内 `track_id`；句柄不含 native 地址，每次使用重新验证 `Score`/`Musician`/`Sound`/`EffectsChain` 归属；`buffer_probe` 已在 8.1.1.17 真实宿主完成 2 声道 64 帧 `AudioBuffer`/`IAudioBuffer` 交错写读、锁和 `processDSP` 有限值检查 | 0.8.0 最小夹具未形成可观察 RSE `EffectsChain`；P13 隔离宿主已观察到真实链，但非活动文档的 Conductor 及未就绪链仍可能为 `host_limited`；不把导出符号或转换链当作实时绑定链。构造真实 RSE 链后运行 `test/test-audio-abi.ps1 -RequireBoundChain` 补验；实时线程复用和线程安全仍需单独专项 |
 | P11 界面截图与窗口状态 | `gp_screenshot` 通过 `QWidget::render` 返回标准 MCP PNG image content；活动模态对话框优先，结构化结果含目标窗口、`capture_mode`、尺寸、DPI、可见/最小化和采集时间；尺寸、像素数、PNG 体积受限；专项脚本核对工具注册、PNG 签名和截图前后焦点保持 | 当前状态为实验性；关闭确认模态已有最小专项证据，多窗口、遮挡、多文档与无文档补验见 P12；其他模态类型和全部显示配置未穷举；窗口不存在、尺寸超限、编码失败或响应过大时返回 `status=host_limited` |
-| P12 窗口枚举与指定截图 | `gp_windows` 的 Qt 窗口统计、隐藏过滤、稳定 ID 和父关系；`gp_screenshot(window_id)` 在模态存在时保持主窗口、键盘/指板浮动窗口和非模态偏好的显式目标；模态销毁拒绝、只读状态、正常/隐藏/最小化/最大化、多文档/无文档及保存重开 | 新窗口类型仍属实验性；未准备的隐藏菜单不初始化或调整大小，Qt 待处理几何事件在绘制后保留；纯 QWindow/GPU/原生嵌入无可靠路径时返回宿主受限；具体证据与剩余矩阵见下文 |
+| P12 窗口枚举与指定截图 | `gp_windows` 的 Qt 窗口统计、隐藏过滤、稳定 ID 和父关系；`gp_screenshot(window_id)` 在模态存在时保持主窗口、键盘/指板浮动窗口和非模态偏好的显式目标；`include_frame=true` 在 Windows 顶层 QWidget 上通过同进程 `WM_PRINT(PRF_NONCLIENT)` 补入系统标题栏和边框；模态销毁拒绝、只读状态、正常/隐藏/最小化/最大化、多文档/无文档及保存重开 | 新窗口类型仍属实验性；未准备的隐藏菜单不初始化或调整大小，Qt 待处理几何事件在绘制后保留；纯 QWindow/GPU/原生嵌入、无现成 native handle 或非 Windows 无可靠路径时返回宿主受限；标题栏路径需在真实宿主的各窗口样式和 DPI 下单独核验，具体证据与剩余矩阵见下文 |
 | P13 音频 Provider 与多插件接口 | `audio_bridge_api.h` v1 的 ABI 版本、结构体大小、能力位、宿主哈希、状态码和 generation；MCP 插件导出 `gpmcp_audio_bridge_get_info`/`gpmcp_audio_enumerate_v1`，控制器确定性排序、对象归属核验、旧句柄失效和宿主退出清理；独立原生 Qt 消费者已核对真实导出回调、版本协商、加载顺序和线程拒绝 | VST3 消费者未实现；当前 Provider 只提供绑定快照，`process()` 实时线程、实时 PCM、系统混音采集和跨线程宿主裸指针均未实现；真实宿主多控制器重建矩阵仍需单独证据 |
 | 连音 | 两层比例结构化读取和原生编辑；单拍、选区、反向跨小节、跨声部/音轨、钢琴谱表；指定层独立清除；另一层及音符/基础时值/附点隔离；重复写入、原生宏命令一次撤销、重做、GPIF、嵌套与次层单独保存重开及插件内复制粘贴 | 比例为 1..255；不自动重排小节或改变连音括号/分组排版；任意比例组合的实际发声和极端时长播放尚未验证 |
 | 音符及节拍技法 | 掌根闷音、延音、点弦、揉弦、弱音/重音、指法、死音、击勾弦、颤音、回音/波音、滑音、泛音、弯音；装饰音、扫拨、渐强弱、敲击、八度、轮指、拍弦/勾弦、琶音、扫弦及摇把曲线；支持清除、撤销重做、保存重开和单音隔离 | 颤音固定十六分音符；琶音/扫弦使用宿主默认时序；装饰音转换改变时值，死拍清空原音符；音源实际声音效果归 P5 |
@@ -74,6 +74,8 @@
 
 Qt 5.15 的绘制准备会递归派发待处理几何事件；本次在绘制作用域暂存并恢复 Qt 的待处理 move/resize 标志，避免影响其他隐藏窗口。`test/test-p12-windows.ps1` 在 Qt SDK 5.15.2 的离屏平台、DPR 1.0/1.5 各通过 38 项：验证这些事件仍在宿主正常 show 时到达、同地址对象重建、标题/隐藏变化、QWidget/QWindow 去重、SubWindow 按 ID 截图、嵌套模态的下层选择、QWindow/GPU 拒绝、零/超限尺寸、未布局菜单保护和 512 窗口截断。日志：同一 P12 证据目录的 `qt-fixture.log`；夹具结果不代表相同类型已在 Guitar Pro 内验收。
 
+标题栏路径的 `test/test-p12-windows.ps1 -NativeFrame` 在 Windows 平台、DPR 1.0/1.5 各通过 9 项：核对 `WM_PRINT(PRF_NONCLIENT)` 的系统标题栏/边框、客户区物理像素合成、中文标题、隐藏窗口和前台焦点保持。该夹具证明 Windows/Qt 机制可用；真实 Guitar Pro 各窗口样式的标题栏仍需随新插件重启后单独核验。
+
 P12 功能提交的核心 DLL SHA-256：`FD540740217764587B843571751E9EB0F308224C1E9026A6826F2E11EB0E420B`；宿主 SHA-256：`B233B0F1C87DEB3AECE693D51E8D3C3A841C88FEE78828607B20034737C4C6DF`。源码哈希与具体截图状态在 `verification.json`；版本更新后的发布构建另见下文。
 
 上述功能提交 DLL 的完整原生回归通过 **27 组、14747 项**，包含 P11 60 项、完整工作区下的 P12 10189 项及既有协议、会话、模态、编辑、保存和导出专项；宿主退出码 0，连接描述已清理。证据：`artifacts/regression-8d7bab86cba648f08f2f475f4e1a5f44/regression.json`（`complete=true`）及 `artifacts/native-p12-422190a82455425a80971166aefcda08/verification.json`。本次完整入口未启用额外的 P8 故障注入、PDF 渲染、PCM 渲染或 P10 重启偏好检查，不替代这些既有专项的独立证据。
@@ -99,6 +101,12 @@ P12 功能提交的核心 DLL SHA-256：`FD540740217764587B843571751E9EB0F308224
 2026-09-12 基于 P13 Provider ABI 和 `currentRow` 偏好控件写入修复构建并生成 `GuitarProMCP-0.9.1-be8b77fc943b4732999dec11855783cb.zip`。包内 2 个插件文件的 SHA-256 已由 `package.json` 和 `test/test-installer-files.ps1` 核对：核心 Provider DLL 为 `7981D851ED7156B01DF2E337196129814D1B5D3791E8B6AC0A33D8FAA76FB160`，autoload DLL 为 `816E52B9AF87545CDC38971AE5A7340368B58329CF1C27BF2992AD5819C7D5F9`，zip SHA-256 为 `EDF56CAD4CB312E2979A37EAEF36C75A02BB4BC0B5DFF40D43FE2836F7DE8A45`（702399 bytes）。安装器文件归属、回滚、配置保留和卸载通过 33 项；证据为 `artifacts/installer-files-530a2c1e0b0f4d2381daf3f8069acfad/verification.json`。
 
 P10 偏好与基础音频/MIDI 专项通过 98 项，重启持久化和新建曲谱默认资讯均通过；证据为 `artifacts/native-p10-ae5dfee13f594e7fac971325cdd4dc0e/verification.json`。最新包完整回归通过 29 个套件、14741 项，`complete=true`、宿主退出码 `0`，加载的核心/autoload DLL 哈希与本包清单一致；证据为 `artifacts/regression-b75e9240845e43c1b0921cfdae2cc0f5/regression.json`。`audio-abi` 的开发 buffer probe 仍按宿主边界记录为 `host_limited`，不把该状态写成实时 PCM 已实现。
+
+### 0.9.2 发布提交
+
+2026-09-12 基于窗口截图标题栏修复提交 `v0.9.2`。`gp_screenshot` 新增 `include_frame=true`，在 Windows 顶层 QWidget 上通过同进程 `WM_PRINT(PRF_NONCLIENT)` 合成系统标题栏和边框；默认客户区路径保持不变。`test/test-p12-windows.ps1` 离屏夹具在 DPR 1.0/1.5 各通过 39 项，`-NativeFrame` 在两个 DPI 各通过 9 项，PowerShell 语法检查和 `git diff --check` 通过。
+
+本次发布提交未附带二进制包：正式 Guitar Pro 实例在验证时仍锁定旧 DLL，未强制关闭或覆盖用户进程；真实宿主加载新 DLL、安装包哈希和完整回归需在实例退出后重新构建验证。标题栏路径继续标记为实验性，无法安全读取 native frame 时返回 `host_limited`。
 
 ### P11 最小专项
 

@@ -13,6 +13,9 @@
 #include <QtGui/QWindow>
 #include <QtWidgets/QApplication>
 #include <QtWidgets/QWidget>
+#ifdef Q_OS_WIN
+#include <windows.h>
+#endif
 
 // GUI-thread only. Identity belongs to a QObject lifetime, independently of
 // gp_objects snapshots, window titles, native handles and MCP clients.
@@ -24,6 +27,125 @@ class WindowCapture {
     QHash<QWindow *, QWidget *> widgets;
     QStringList limitations;
     static constexpr int MaxWindows = 512, MaxScan = 20000;
+    static constexpr qint64 MaxDimension = 4096, MaxPixels = 16 * 1024 * 1024, MaxEncodedBytes = 8 * 1024 * 1024;
+
+    // Windows draws the title bar and resize border outside QWidget's paint
+    // tree.  Keep this path in-process and read-only: WM_PRINT asks the
+    // existing native window to paint only its non-client area into a DIB.
+    // The client area is still rendered by QWidget::render below and then
+    // composited into the native frame.  No handle is created for a hidden
+    // widget; internalWinId() is deliberately used instead of winId().
+    static bool captureNativeFrame(QWidget *target, QImage *frame, QPoint *clientOffset, QSize *clientSize,
+                                   QString *reason, QString *error) {
+#if !defined(Q_OS_WIN)
+        Q_UNUSED(target); Q_UNUSED(frame); Q_UNUSED(clientOffset); Q_UNUSED(clientSize);
+        if (reason) *reason = "platform_unsupported";
+        if (error) *error = "Native title-bar capture is only available on Windows";
+        return false;
+#else
+        if (!target->isWindow()) {
+            if (reason) *reason = "not_top_level";
+            if (error) *error = "Only a top-level QWidget has a system title bar";
+            return false;
+        }
+        const auto flags = target->windowFlags();
+        if (flags.testFlag(Qt::FramelessWindowHint)) {
+            if (reason) *reason = "not_applicable";
+            return true;
+        }
+        const HWND hwnd = reinterpret_cast<HWND>(target->internalWinId());
+        if (!hwnd || !IsWindow(hwnd)) {
+            if (reason) *reason = "frame_handle_unavailable";
+            if (error) *error = "The QWidget has no existing native window handle";
+            return false;
+        }
+        const LONG_PTR style = GetWindowLongPtrW(hwnd, GWL_STYLE);
+        if (!(style & (WS_CAPTION | WS_BORDER | WS_THICKFRAME))) {
+            if (reason) *reason = "not_applicable";
+            return true;
+        }
+        RECT windowRect{}, clientRect{};
+        if (!GetWindowRect(hwnd, &windowRect) || !GetClientRect(hwnd, &clientRect)) {
+            if (reason) *reason = "frame_geometry_unavailable";
+            if (error) *error = "Windows could not read the native window geometry";
+            return false;
+        }
+        POINT origin{0, 0};
+        if (!ClientToScreen(hwnd, &origin)) {
+            if (reason) *reason = "frame_geometry_unavailable";
+            if (error) *error = "Windows could not map the client area to screen coordinates";
+            return false;
+        }
+        const int width = windowRect.right - windowRect.left;
+        const int height = windowRect.bottom - windowRect.top;
+        const int clientWidth = clientRect.right - clientRect.left;
+        const int clientHeight = clientRect.bottom - clientRect.top;
+        if (width <= 0 || height <= 0 || clientWidth <= 0 || clientHeight <= 0 ||
+            origin.x < windowRect.left || origin.y < windowRect.top ||
+            origin.x + clientWidth > windowRect.right || origin.y + clientHeight > windowRect.bottom) {
+            if (reason) *reason = "frame_geometry_invalid";
+            if (error) *error = "Windows returned an invalid native frame or client rectangle";
+            return false;
+        }
+        if (width > MaxDimension || height > MaxDimension || qint64(width) * height > MaxPixels) {
+            if (reason) *reason = "dimensions_limit";
+            if (error) *error = "Native frame dimensions exceed the screenshot limit";
+            return false;
+        }
+        BITMAPINFO info{};
+        info.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+        info.bmiHeader.biWidth = width;
+        info.bmiHeader.biHeight = -height; // top-down DIB
+        info.bmiHeader.biPlanes = 1;
+        info.bmiHeader.biBitCount = 32;
+        info.bmiHeader.biCompression = BI_RGB;
+        void *bits = nullptr;
+        const HBITMAP bitmap = CreateDIBSection(nullptr, &info, DIB_RGB_COLORS, &bits, nullptr, 0);
+        if (!bitmap || !bits) {
+            if (bitmap) DeleteObject(bitmap);
+            if (reason) *reason = "frame_allocation_failed";
+            if (error) *error = "Windows could not allocate a native frame bitmap";
+            return false;
+        }
+        const HDC dc = CreateCompatibleDC(nullptr);
+        if (!dc) {
+            DeleteObject(bitmap);
+            if (reason) *reason = "frame_allocation_failed";
+            if (error) *error = "Windows could not allocate a native frame device context";
+            return false;
+        }
+        const HGDIOBJ previous = SelectObject(dc, bitmap);
+        if (!previous || previous == HGDI_ERROR) {
+            DeleteDC(dc); DeleteObject(bitmap);
+            if (reason) *reason = "frame_allocation_failed";
+            if (error) *error = "Windows could not select the native frame bitmap";
+            return false;
+        }
+        QImage native(static_cast<uchar *>(bits), width, height, width * 4, QImage::Format_RGB32);
+        native.fill(Qt::black);
+        const LRESULT painted = SendMessageW(hwnd, WM_PRINT, reinterpret_cast<WPARAM>(dc), PRF_NONCLIENT);
+        GdiFlush();
+        const QImage copy = native.convertToFormat(QImage::Format_ARGB32_Premultiplied);
+        SelectObject(dc, previous);
+        DeleteDC(dc);
+        DeleteObject(bitmap);
+        if (!painted || copy.isNull()) {
+            if (reason) *reason = "frame_paint_failed";
+            if (error) *error = "Windows could not paint the native title bar";
+            return false;
+        }
+        // A popup or borderless window can legitimately have no non-client
+        // pixels.  In that case the client already occupies the full bitmap.
+        if (width == clientWidth && height == clientHeight && origin.x == windowRect.left && origin.y == windowRect.top) {
+            if (reason) *reason = "not_applicable";
+            return true;
+        }
+        *frame = copy;
+        *clientOffset = QPoint(origin.x - windowRect.left, origin.y - windowRect.top);
+        *clientSize = QSize(clientWidth, clientHeight);
+        return true;
+#endif
+    }
 
     static bool windowWidget(QWidget *widget) {
         return (widget->isWindow() || widget->windowType() == Qt::SubWindow) &&
@@ -188,6 +310,8 @@ public:
         for (auto it = record.begin(); it != record.end(); ++it) result[it.key()] = it.value();
         result["target_window"] = record.value("active_modal").toBool() ? "active_modal" : record.value("kind") == "main" ? "main" : "window";
         result["target_class"] = record.value("class"); result["target_object_name"] = record.value("object_name");
+        const bool includeFrame = args.value("include_frame").toBool(false);
+        result["frame_requested"] = includeFrame;
         result["capture_mode"] = "qt_widget_render";
         QPointer<QWidget> target = qobject_cast<QWidget *>(selected);
         if (!target) return failure("host_limited", "qwindow_render_unsupported", "QWindow-only content has no verified QWidget rendering path");
@@ -207,7 +331,6 @@ public:
         const QSize logicalSize = target->size();
         const qreal ratio = target->devicePixelRatioF();
         const qint64 pixelWidth = qRound64(logicalSize.width() * ratio), pixelHeight = qRound64(logicalSize.height() * ratio);
-        constexpr qint64 MaxDimension = 4096, MaxPixels = 16 * 1024 * 1024, MaxEncodedBytes = 8 * 1024 * 1024;
         if (pixelWidth <= 0 || pixelHeight <= 0 || pixelWidth > MaxDimension || pixelHeight > MaxDimension || pixelWidth * pixelHeight > MaxPixels)
             return failure("host_limited", "dimensions_limit", "Window dimensions are unavailable or exceed the screenshot limit");
         // QWidget::render prepares hidden widgets and can adjustSize() their
@@ -215,6 +338,35 @@ public:
         if (!target->isVisible() && (!target->window()->testAttribute(Qt::WA_Resized) || !target->testAttribute(Qt::WA_WState_Polished)))
             return failure("host_limited", "unprepared_hidden_window", "Hidden window layout is not prepared; Qt rendering could resize or polish it");
         QElapsedTimer timer; timer.start();
+        QImage nativeFrame;
+        QPoint clientOffset;
+        QSize nativeClientSize;
+        QString frameReason;
+        QString frameError;
+        bool frameIncluded = false;
+        if (includeFrame) {
+            if (!captureNativeFrame(target, &nativeFrame, &clientOffset, &nativeClientSize, &frameReason, &frameError))
+                return failure("host_limited", frameReason.isEmpty() ? "frame_capture_failed" : frameReason,
+                               frameError.isEmpty() ? "Windows could not capture the native title bar" : frameError);
+            if (!target) return failure("host_limited", "window_destroyed", "Target was destroyed during native frame rendering");
+            if (!nativeFrame.isNull()) {
+                if (nativeClientSize != QSize(int(pixelWidth), int(pixelHeight)))
+                    return failure("host_limited", "frame_geometry_mismatch", "Native client pixels do not match Qt rendering pixels");
+                frameIncluded = true;
+            }
+        }
+        const qint64 outputWidth = frameIncluded ? nativeFrame.width() : pixelWidth;
+        const qint64 outputHeight = frameIncluded ? nativeFrame.height() : pixelHeight;
+        if (outputWidth <= 0 || outputHeight <= 0 || outputWidth > MaxDimension || outputHeight > MaxDimension || outputWidth * outputHeight > MaxPixels)
+            return failure("host_limited", "dimensions_limit", "Window dimensions are unavailable or exceed the screenshot limit");
+        result["frame_included"] = frameIncluded;
+        result["frame_reason"] = frameIncluded ? "win32_wm_print" : (frameReason.isEmpty() ? "not_requested" : frameReason);
+        if (frameIncluded) {
+            result["frame_insets"] = QJsonObject{{"left", clientOffset.x()}, {"top", clientOffset.y()},
+                                                  {"right", nativeFrame.width() - clientOffset.x() - int(pixelWidth)},
+                                                  {"bottom", nativeFrame.height() - clientOffset.y() - int(pixelHeight)}};
+            result["client_width"] = pixelWidth; result["client_height"] = pixelHeight;
+        }
         QImage image(int(pixelWidth), int(pixelHeight), QImage::Format_ARGB32_Premultiplied);
         if (image.isNull()) return failure("host_limited", "allocation_failed", "Qt could not allocate the screenshot image");
         image.setDevicePixelRatio(ratio); image.fill(Qt::transparent);
@@ -248,6 +400,18 @@ public:
         }
         painter.end();
         if (!target) return failure("host_limited", "window_destroyed", "Target was destroyed during rendering");
+        if (frameIncluded) {
+            // Native offsets are physical pixels. Avoid applying Qt's device
+            // ratio a second time to the inset or shrinking the client image.
+            image.setDevicePixelRatio(1);
+            QPainter framePainter(&nativeFrame);
+            framePainter.setCompositionMode(QPainter::CompositionMode_Source);
+            framePainter.drawImage(clientOffset, image);
+            framePainter.end();
+            nativeFrame.setDevicePixelRatio(ratio);
+            image = nativeFrame;
+            result["capture_mode"] = "qt_widget_render_with_win32_frame";
+        }
         QByteArray encoded; QBuffer buffer(&encoded);
         if (!buffer.open(QIODevice::WriteOnly) || !image.save(&buffer, "PNG") || encoded.isEmpty())
             return failure("host_limited", "encoding_failed", "PNG encoding failed");

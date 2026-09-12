@@ -88,7 +88,7 @@ try {
 | `gp_p9_status` | 无 | 读取 P9 能力矩阵及“已实现、已验证、实验性、未实现、宿主受限”状态，不改变曲谱 |
 | `gp_audio_abi` | `document?`, `operation=state/resolve/buffer_probe`, `track?`, `sound?`, `track_id?`, `chain_id?`, `frames?` | 返回不透明 `track_id`/`chain_id` 及逐次归属核验；开发模式 `buffer_probe` 验证 `AudioBuffer`/`IAudioBuffer` 交错写读、锁和 `EffectsChain::processDSP` |
 | `gp_windows` | `include_hidden?` | 只读枚举当前实例 Qt 窗口，返回数量、稳定 `window_id`、父窗口关系和实际状态；默认包含隐藏窗口，过滤不改变统计总数 |
-| `gp_screenshot` | `window_id?` | 按 `gp_windows` 的 ID 读取单个窗口；省略参数仍优先活动模态，否则主窗口。通过 Qt `QWidget::render` 返回标准 MCP PNG `image` content；无效 ID 拒绝且无图像，无法可靠渲染时返回 `status=host_limited` |
+| `gp_screenshot` | `window_id?`, `include_frame?` | 按 `gp_windows` 的 ID 读取单个窗口；省略参数仍优先活动模态，否则主窗口。默认通过 Qt `QWidget::render` 返回客户区；Windows 上传 `include_frame=true` 时额外用同进程 `WM_PRINT(PRF_NONCLIENT)` 补入系统标题栏和边框。无效 ID 拒绝且无图像，无法可靠渲染时返回 `status=host_limited` |
 
 P8/P9 编辑请求通过 `gp_operation` 查询 `applied/unchanged/error`，新建为 `created`；`gp_documents.editing` 提供最近编辑状态。格式、默认值、上限、模板复用及恢复语义见 [P8 编曲与语义 JSON](P8.md)；P9 能力边界和专项证据见 [覆盖清单](../docs/COVERAGE.md#p9-验收)。PowerShell 客户端仅自动等待保存工具，P8/P9 请求需要显式查询终态。
 
@@ -438,7 +438,7 @@ generation 在观察到文档 Score、音轨指针或音轨集合变化时递增
 
 `GPMCP_AUDIO_HOST_LIMITED` 可以携带已核验的音轨上下文：未就绪链为 `chain=nullptr`、`sound_index=-1`、binding `status=GPMCP_AUDIO_HOST_LIMITED`。非活动文档可能没有 Conductor，此时不返回该文档绑定，枚举总状态为 `HOST_LIMITED`；切换回文档后重新发现。回调内不得编辑宿主、处理 Qt 事件、重新进入 Provider 或抛异常；消费者只复制元数据，DLL 卸载后不得调用旧函数地址。
 
-0.9.1 保留 MCP 协议 `2025-06-18` 和 `gp_audio_abi` 原有参数/状态含义，新增 generation、控制器信息及 `gp_capabilities.audio_provider`；客户端可忽略新增字段。`state`/`resolve` 和原生枚举均只观察现有对象，不再隐式调用 `Musician::updateAll()`；链未就绪时保留 `host_limited`。内部 ABI v1 首次发布，后续不兼容修改提高 ABI 主版本并提供迁移说明。当前 ABI 只提供音轨/音色/效果链绑定，VST3 消费者、实时 PCM 和系统混音未实现。偏好模型额外允许写入 `currentRow`，以支持列表选择控件的原生读回。
+0.9.2 保留 MCP 协议 `2025-06-18` 和 `gp_audio_abi` 原有参数/状态含义，新增 generation、控制器信息及 `gp_capabilities.audio_provider`；客户端可忽略新增字段。`state`/`resolve` 和原生枚举均只观察现有对象，不再隐式调用 `Musician::updateAll()`；链未就绪时保留 `host_limited`。内部 ABI v1 首次发布，后续不兼容修改提高 ABI 主版本并提供迁移说明。当前 ABI 只提供音轨/音色/效果链绑定，VST3 消费者、实时 PCM 和系统混音未实现。偏好模型额外允许写入 `currentRow`，以支持列表选择控件的原生读回。
 
 ## 窗口截图
 
@@ -450,9 +450,9 @@ generation 在观察到文档 Score、音轨指针或音轨集合变化时递增
 
 枚举最多返回 512 个窗口，QWidget/QWindow 扫描上限各为 20000；达到限制时 `truncated=true`、`count_scope=observed_subset`，`truncation_reasons` 指明限制，此时数量只覆盖已观察集合。完整 Qt 集合使用 `count_scope=complete_qt_set`，仍不包含桌面代理、外部窗口包装、普通嵌入式控件、未构造窗口、纯系统原生窗口或其他进程窗口；具体口径由 `scope_note` 返回。
 
-`gp_screenshot({})` 保留 P11 行为：优先当前活动 QWidget 模态对话框，否则选 `gp::gui::MainWindow`。显式指定 ID 时仅绘制该对象，主窗口被模态阻塞时也不会替换目标。返回窗口记录中的身份和状态，以及 `target_window=main/active_modal/window`、`target_class`、`target_object_name`、`active_modal_window_id`（不存在为 `null`）、`capture_mode=qt_widget_render`、PNG 像素 `width/height`、`capture_ms` 和 `captured_at`。`active_modal` 只表示选中对象是否为活动模态，不能用于判断宿主是否存在另一个模态。
+`gp_screenshot({})` 保留 P11 行为：优先当前活动 QWidget 模态对话框，否则选 `gp::gui::MainWindow`。显式指定 ID 时仅绘制该对象，主窗口被模态阻塞时也不会替换目标。`include_frame` 默认为 `false`；设为 `true` 时，Windows 顶层 QWidget 会在 Qt 客户区外补入现有 native window 的系统标题栏和边框，不创建 native handle、不激活窗口。返回窗口记录中的身份和状态，以及 `target_window=main/active_modal/window`、`target_class`、`target_object_name`、`active_modal_window_id`（不存在为 `null`）、`capture_mode=qt_widget_render` 或 `qt_widget_render_with_win32_frame`、`frame_requested`、`frame_included`、`frame_reason`（成功为 `win32_wm_print`；无标题栏时为 `not_applicable`）以及 PNG 像素 `width/height`、`capture_ms` 和 `captured_at`。`frame_included=true` 时另返回 `frame_insets`（物理像素）和客户区 `client_width/client_height`。`active_modal` 只表示选中对象是否为活动模态，不能用于判断宿主是否存在另一个模态。
 
-PNG 通过标准 MCP `image` content 返回，结构化元数据同时作为 `structuredContent` 和 `text` content 返回；内部 `__mcp_image` 不暴露给客户端。图像表示目标 Qt 内容区及普通子控件，不含系统标题栏、桌面或其他独立窗口。成功状态仍为 `experimental`，已核验的具体窗口类型与剩余矩阵见 [P12 验收](../docs/COVERAGE.md#p12-验收)。
+PNG 通过标准 MCP `image` content 返回，结构化元数据同时作为 `structuredContent` 和 `text` content 返回；内部 `__mcp_image` 不暴露给客户端。默认图像表示目标 Qt 内容区及普通子控件，不含桌面或其他独立窗口；`include_frame=true` 且 `frame_included=true` 时还包含该窗口的系统标题栏和边框。没有现成 native handle、目标不是顶层 QWidget、非 Windows 平台或 Windows 无法可靠绘制非客户区时返回 `status=host_limited`，不伪造标题栏成功。成功状态仍为 `experimental`，已核验的具体窗口类型与剩余矩阵见 [P12 验收](../docs/COVERAGE.md#p12-验收)。
 
 | 失败状态 | `reason` 与处理 |
 | --- | --- |
@@ -460,6 +460,7 @@ PNG 通过标准 MCP `image` content 返回，结构化元数据同时作为 `st
 | `status=host_limited` | `no_window`、`qwindow_render_unsupported`、`special_rendering`、`embedded_subwindow`、`render_scan_limit`：不存在目标、只有 QWindow、含 GPU/原生内容、会合成其他独立 SubWindow 或子控件扫描超限 |
 | `status=host_limited` | `unprepared_hidden_window`：隐藏窗口尚未完成布局，Qt 绘制会初始化或调整其尺寸，故在绘制前拒绝；不会为截图显示、恢复或初始化窗口 |
 | `status=host_limited` | `dimensions_limit`、`allocation_failed`、`window_destroyed`、`encoding_failed`、`render_timeout`、`image_size_limit`：尺寸、分配、存活、编码、耗时或响应限制，均无图像且说明原因 |
+| `status=host_limited` | `frame_handle_unavailable`、`frame_geometry_unavailable`、`frame_geometry_invalid`、`frame_geometry_mismatch`、`frame_allocation_failed`、`frame_paint_failed`：请求 `include_frame=true` 时无法安全取得或绘制现有 Windows 非客户区，均无图像；`not_applicable` 表示无系统标题栏（无边框/弹出样式），仍返回客户区图像 |
 
 限制沿用 P11：单边不超过 4096 像素、总像素不超过 16 Mi、PNG 和 base64 各不超过 8 MiB。2000 ms 检查在绘制及编码返回后执行，不能中断阻塞中的 Qt 绘制。截图不会发送输入、激活窗口或改变文档及撤销历史；未准备好的隐藏菜单和没有可靠 QWidget 路径的窗口可以被枚举，但不代表可截图。
 
