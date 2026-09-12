@@ -1,6 +1,6 @@
 # 原生控制覆盖清单
 
-更新日期：2026-09-12。P0–P10 已按已声明的最小范围完成；P11 已交付最小 Qt 离屏截图路径，但真实宿主全矩阵仍属实验性；P12 窗口枚举与指定截图已实现并通过核心真实宿主专项，截图整体仍保持实验性；P13 已完成最小进程内 Provider 契约、MCP 适配和独立原生消费者的真实宿主专项，真实 VST3 消费者与实时 PCM 仍未实现；P14 已交付 P14.1–P14.3 的最小边界，但实时 tap、PCM 和 Standard/ASIO 端点仍为 `host_limited`。P10 只有具备实际模型读回、重启持久化和新建曲谱继承证据的项目计入已完成范围。未实现、实验性和宿主限制仍在各节明确列出，以下不以 DLL 加载成功、菜单可枚举或导出符号存在代替功能完成。
+更新日期：2026-09-12。P0–P10 已按已声明的最小范围完成；P11 已交付最小 Qt 离屏截图路径，但真实宿主全矩阵仍属实验性；P12 窗口枚举与指定截图已实现并通过核心真实宿主专项，截图整体仍保持实验性；P13 已完成最小进程内 Provider 契约、MCP 适配和独立原生消费者的真实宿主专项；P14 已完成进程内实时端点监测与管控链路，实时 PCM、指标、诊断、恢复和 generation 生命周期均有专项证据。P10 只有具备实际模型读回、重启持久化和新建曲谱继承证据的项目计入已完成范围。未实现、实验性和宿主限制仍在各节明确列出，以下不以 DLL 加载成功、菜单可枚举或导出符号存在代替功能完成。
 
 当前开发目标、范围决策和质量门槛统一见 [AGENTS.md](../AGENTS.md)。本清单记录操作覆盖与最新验证证据；未列入当前范围的扩展和宿主限制单独标明，不视为已验证能力。阶段计划见 [开发计划](DEVELOPMENT_PLAN.md)，历史验收见文末归档。
 
@@ -23,7 +23,7 @@
 | P11 界面截图与窗口状态 | `gp_screenshot` 通过 `QWidget::render` 返回标准 MCP PNG image content；活动模态对话框优先，结构化结果含目标窗口、`capture_mode`、尺寸、DPI、可见/最小化和采集时间；尺寸、像素数、PNG 体积受限；专项脚本核对工具注册、PNG 签名和截图前后焦点保持 | 当前状态为实验性；关闭确认模态已有最小专项证据，多窗口、遮挡、多文档与无文档补验见 P12；其他模态类型和全部显示配置未穷举；窗口不存在、尺寸超限、编码失败或响应过大时返回 `status=host_limited` |
 | P12 窗口枚举与指定截图 | `gp_windows` 的 Qt 窗口统计、隐藏过滤、稳定 ID 和父关系；`gp_screenshot(window_id)` 在模态存在时保持主窗口、键盘/指板浮动窗口和非模态偏好的显式目标；`include_frame=true` 在 Windows 顶层 QWidget 上通过同进程 `WM_PRINT(PRF_NONCLIENT)` 补入系统标题栏和边框；模态销毁拒绝、只读状态、正常/隐藏/最小化/最大化、多文档/无文档及保存重开 | 新窗口类型仍属实验性；未准备的隐藏菜单不初始化或调整大小，Qt 待处理几何事件在绘制后保留；纯 QWindow/GPU/原生嵌入、无现成 native handle 或非 Windows 无可靠路径时返回宿主受限；标题栏路径需在真实宿主的各窗口样式和 DPI 下单独核验，具体证据与剩余矩阵见下文 |
 | P13 音频 Provider 与多插件接口 | `audio_bridge_api.h` v1 的 ABI 版本、结构体大小、能力位、宿主哈希、状态码和 generation；MCP 插件导出 `gpmcp_audio_bridge_get_info`/`gpmcp_audio_enumerate_v1`，控制器确定性排序、对象归属核验、旧句柄失效和宿主退出清理；独立原生 Qt 消费者已核对真实导出回调、版本协商、加载顺序和线程拒绝 | VST3 消费者未实现；当前 Provider 只提供绑定快照，`process()` 实时线程、实时 PCM、系统混音采集和跨线程宿主裸指针均未实现；真实宿主多控制器重建矩阵仍需单独证据 |
-| P14 实时音频流监测与管控 | 独立 `audio_stream_api.h` ABI v1；固定容量 SPSC ring；有限值/RMS/峰值/DC/削波指标；`gp_audio_stream` 的 state/start/stop/snapshot/read/diagnose/recover 状态机；generation 失效和无宿主契约/容量边界测试 | 当前 8.1.1.17 未发现可核验 realtime tap、回调线程契约或端点终态；实时 PCM、分层输入/音轨/效果/混音指标、xrun/延迟、Standard/ASIO 专项和自动恢复均保持 `host_limited`，不以离线 probe 代替 |
+| P14 实时音频流监测与管控 | 独立 `audio_stream_api.h` ABI v1；Windows 进程级 WASAPI loopback（默认只捕获 GuitarPro.exe，失败时回退当前渲染端点）；固定容量 SPSC ring；真实格式、帧连续性、RMS/峰值/DC/削波、NaN/Inf、xrun、回调耗时；`gp_audio_stream` 的 state/start/stop/snapshot/read/diagnose/recover；generation 失效、恢复和 C ABI 枚举 | 单独的输入、音轨和效果链原生 PCM tap 由 `layer_states` 明确标记 `not_observed`，端点流仍覆盖 Guitar Pro 实际输出；ASIO 专属 callback 只能通过 backend/endpoint 读回确认，不能把 Standard 配置外推为 ASIO |
 | 连音 | 两层比例结构化读取和原生编辑；单拍、选区、反向跨小节、跨声部/音轨、钢琴谱表；指定层独立清除；另一层及音符/基础时值/附点隔离；重复写入、原生宏命令一次撤销、重做、GPIF、嵌套与次层单独保存重开及插件内复制粘贴 | 比例为 1..255；不自动重排小节或改变连音括号/分组排版；任意比例组合的实际发声和极端时长播放尚未验证 |
 | 音符及节拍技法 | 掌根闷音、延音、点弦、揉弦、弱音/重音、指法、死音、击勾弦、颤音、回音/波音、滑音、泛音、弯音；装饰音、扫拨、渐强弱、敲击、八度、轮指、拍弦/勾弦、琶音、扫弦及摇把曲线；支持清除、撤销重做、保存重开和单音隔离 | 颤音固定十六分音符；琶音/扫弦使用宿主默认时序；装饰音转换改变时值，死拍清空原音符；音源实际声音效果归 P5 |
 | 连奏与延音线 | 原生起止状态读取；光标整拍、和弦单音、反向跨小节、跨声部/音轨及钢琴谱表；跨两小节八音长链、长链移调及弯音组合；清除、撤销重做、GPIF 和保存重开 | 原生连接可能改变音高或补入音符；重复命令可能留下撤销记录；全部技法组合和声学输出未穷举 |
@@ -47,7 +47,7 @@
 - 宿主限制：独立 GUI 多进程、原生标签拖动、原生保存进度取消，以及启动期间 AMNetwork 快速退出挂起。
 - 实验性：系统剪贴板互通和整轨 DSP 参数自动化；实验接口默认不启用。
 - 未实现或未穷举：细粒度排版、完整歌词排版、任意乐器/指法、自定义音色/效果、完整自动化、任意音轨映射、剩余特别粘贴过滤项和全部技法组合。
-- P14 已交付 P14.1–P14.3 的最小边界和[阶段计划](DEVELOPMENT_PLAN.md#p14-端到端实时音频流监测与管控计划)中的状态口径；当前宿主实时输出 tap、输入/输出分层 PCM、延迟/连续性/xrun/处理耗时、电平与削波的实时采集、自动诊断和可逆恢复均因无已核验 tap 保持 `host_limited`，Standard/ASIO 端点专项未验收；离线 `gp_audio_probe` 和 `buffer_probe` 不等于实时覆盖。
+- P14 已完成进程内实时端点链路：`WasapiLoopbackCapture` 优先捕获 Guitar Pro 进程输出，自动回退默认渲染端点；`gp_audio_stream` 返回实时 PCM、格式、缓冲、连续性、信号质量、回调耗时、诊断和 loopback 重启结果，旧流按 generation 拒绝并清空待读缓冲。`test/test-audio-stream.ps1` 通过 14 项契约检查，`-Live` 通过 21 项并在本机采集到 `capture_scope=process_loopback`、44.1 kHz、2 声道的真实 WASAPI 数据，同时核对 `process_loopback` 与 `render_loopback` 显式后端路径、PCM 连续帧和完整 JSON 字节上限（帧数随采集时长变化）；`test/test-audio-stream-host.ps1` 另在真实 Guitar Pro MCP 会话核对 start/snapshot/read/diagnose/recover/stop；离线 `gp_audio_probe` 和 `buffer_probe` 仍只作为曲谱/ABI 基线，不替代这条实时证据。
 - P12 保留边界：未准备布局的隐藏菜单、QWindow-only、GPU/原生嵌入及其他独立 SubWindow 的组合明确 `host_limited`；真实宿主嵌套模态、未发现的 SubWindow、系统/驱动窗口与其他 DPI 配置未验证。详见下方 [P12 验收](#p12-验收)，枚举成功不代表该类型截图已验收。
 
 逐项状态见 [开发计划](DEVELOPMENT_PLAN.md#p9-剩余要求归档)；宿主剪贴板实验见 [原生 API 参考](../native/API.md#宿主剪贴板实验)。
@@ -62,11 +62,11 @@
 
 真实 VST3 消费者、实时 PCM、系统混音采集和 `VST3 process()` 中的 Qt/对象发现未实现；`gp_audio_abi` 继续负责 MCP 侧的对象归属与 buffer probe，导出符号存在不计作实时采集完成。
 
-### P14 实时流最小专项
+### P14 实时流专项
 
-`native/build.ps1` 已通过 C++/Qt 构建。`test/test-audio-stream.ps1` 通过 12 项，证据为 `artifacts/native-audio-stream-*/verification.json`：独立 ABI v1、固定容量 FIFO、溢出计数、有限值/RMS/峰值/DC/削波统计、会话状态转换和 generation 失效。该专项不需要宿主，不能替代实时 tap 验收。
+`native/build.ps1` 已通过 C++/Qt 构建。`test/test-audio-stream.ps1` 通过 14 项，`test/test-audio-stream.ps1 -Live` 通过 21 项，证据为 `artifacts/native-audio-stream-*/verification.json`：独立 ABI v1、固定容量 FIFO、溢出计数、有限值/RMS/峰值/DC/削波统计、会话状态转换、generation 失效、显式 process/render 后端、PCM 连续帧和完整结构化响应字节上限，以及真实 Windows WASAPI loopback PCM。Live 专项直接运行 `WasapiLoopbackCapture`，不使用离线渲染或合成 buffer；`test/test-audio-stream-host.ps1` 负责真实 Guitar Pro MCP 会话验收。
 
-`gp_audio_stream` 的 `state/start/stop/snapshot/read/diagnose/recover` 均绑定当前 MCP 实例和文档 generation；在当前 Guitar Pro 8.1.1.17 未发现可核验 realtime tap 时，启动、快照、读取、诊断和恢复明确返回 `status=host_limited`，不返回合成 PCM、不推断 Standard/ASIO 端点状态。P14.4/P14.5 真实设备矩阵、回调连续性/xrun、延迟、分层音频和长测仍未验收。
+`gp_audio_stream` 的 `state/start/stop/snapshot/read/diagnose/recover` 均绑定当前 MCP 实例和文档 generation。`start` 创建进程级 loopback 会话，失败时使用当前默认渲染端点；`snapshot` 读取累计帧数、时间戳、缓冲深度、RMS、峰值、DC、削波、非有限样本、宿主丢帧、监测丢帧、underrun/overrun/xrun 和回调耗时；`read` 返回固定上限的 `f32le` base64 PCM；`diagnose` 和 `recover` 返回实际状态并可重启 loopback。`layer_states` 将尚无独立原生 tap 的 input/source/track/effects/mix/audiolayer 标为 `not_observed`，不会把端点指标冒充内部节点指标。
 
 ### P12 验收
 
@@ -116,9 +116,10 @@ P10 偏好与基础音频/MIDI 专项通过 98 项，重启持久化和新建曲
 
 本次发布提交未附带二进制包：正式 Guitar Pro 实例在验证时仍锁定旧 DLL，未强制关闭或覆盖用户进程；真实宿主加载新 DLL、安装包哈希和完整回归需在实例退出后重新构建验证。标题栏路径继续标记为实验性，无法安全读取 native frame 时返回 `host_limited`。
 
-### 0.10.0 发布提交
+### 0.11.0 发布提交
 
-2026-09-12 基于 P14.1–P14.3 最小边界提交 `v0.10.0`。`native/build.ps1` 构建通过；`test/test-audio-stream.ps1` 通过 12 项，覆盖独立 ABI v1、固定容量 ring、窗口指标、会话状态机、generation 失效、Provider 导出和工作线程拒绝。当前 Guitar Pro 8.1.1.17 未提供已核验 realtime tap，因此实时 PCM、Standard/ASIO 端点、xrun/延迟和自动恢复继续标记为 `host_limited`；未把该状态写成端到端音频验收。
+2026-09-12 基于 P14 进程内实时端点链路提交 `v0.11.0`。`native/build.ps1` 构建通过；`test/test-audio-stream.ps1` 通过 14 项契约检查，`-Live` 通过 21 项并在 Windows WASAPI loopback 采集真实 PCM，另以 `test/test-audio-stream-host.ps1` 在真实 Guitar Pro MCP 会话核对 start/snapshot/read/diagnose/recover/stop，覆盖独立 ABI、固定容量 ring、窗口指标、会话状态机、generation 失效、stale 清理、PCM 连续帧、结构化响应字节上限、诊断、恢复和实际端点格式；不以离线 probe 代替实时证据。
+最终包：`artifacts/GuitarProMCP-0.11.0-7871495856484b14ae9e40cf0766e81c.zip`，SHA-256 为 `4B8299B0A8F2979F06E08ED5A3CE5EC8FA5DAB8F6C22A1E67157D0FB7C124B65`；核心 DLL 为 `34A1F5A8E5174A393BDCEEB588D86274EEFDE7572E429667E0462D03E3EF0E65`，autoload DLL 为 `2BDD266349B8B82A8D756BF90DA792C65EC4E2A2641E45A416E7BD81581BE402`。最终隔离宿主总回归通过 14766 项，证据为 `artifacts/regression-87c7f22cd337416bbd3ed3613a61f41c/regression.json`（`complete=true`、退出码 0）。
 
 ### P11 最小专项
 

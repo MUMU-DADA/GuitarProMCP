@@ -586,6 +586,8 @@ inline QJsonObject audioDevice(const QJsonObject &args, const QList<QPointer<QOb
             if (!value.isDouble() || std::floor(value.toDouble()) != value.toDouble()) return {{"error", "Enum audio properties require an integer choice"}};
             input = QVariant(value.toInt());
             if (!input.convert(property.userType())) return {{"error", "Audio property value has the wrong enum type"}};
+        } else if (!input.convert(property.userType())) {
+            return {{"error", "Audio property value has the wrong type"}};
         }
         if (before != input && (!property.write(model, input) || property.read(model) != input || !layer.isRunning())) {
             const bool restored = property.write(model, before) && property.read(model) == before;

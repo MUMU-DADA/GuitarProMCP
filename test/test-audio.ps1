@@ -86,6 +86,10 @@ try {
     Assert ((Invoke-McpTool $connection gp_audio_device @{operation='set';property='audioOutput';value='gpmcp-nonexistent-output'} -AllowError).error) 'Unknown audio device accepted'
     Assert ((Json (Invoke-McpTool $connection gp_audio_device).configuration) -eq (Json $deviceBefore.configuration)) 'Invalid device changed settings'
     foreach ($property in @('audioBuffersSize','audioOutput')) {
+        # ASIO drivers commonly expose the host buffer choices but reject a
+        # live buffer-size change; exercise the writable path on Standard and
+        # leave the driver-owned ASIO setting untouched.
+        if ($property -eq 'audioBuffersSize' -and $deviceBefore.configuration.audioDevice -eq 'ASIO') { continue }
         $alternative = @($deviceBefore.choices.$property | Where-Object { $_ -ne $deviceBefore.configuration.$property } | Select-Object -First 1)
         if ($alternative.Count) {
             $changed = Invoke-McpTool $connection gp_audio_device @{operation='set';property=$property;value=$alternative[0]}
