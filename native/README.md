@@ -13,6 +13,7 @@
 | `guitarpro_api.h` | 文档定位/切换、实时曲谱编辑、光标、撤销重做、保存和播放 |
 | `guitarpro_clipboard.h` | 原生曲谱快照、复制/剪切/粘贴及兼容性检查 |
 | `guitarpro_audio.h` | 速度自动化、音色效果、设备及开发音频验收 |
+| `guitarpro_audio_stream.h` / `audio_stream_api.h` | P14 实时流 ABI、固定容量 ring、窗口指标和 host-limited 会话边界 |
 | `guitarpro_semantics.h` / `guitarpro_spec.h` | 语义读回、JSON schema、批量原生构建、一次提交与观察恢复 |
 | `guitarpro_chords.h` / `guitarpro_page.h` | 和弦集合与指法、文档页面元数据 |
 | `guitarpro_chord_abi.h` / `ampainting.def` | 和弦及页面文本的已核验 ABI |
@@ -32,6 +33,7 @@ ABI 约束只保留已核验的最小范围：
 - MSVC 负责成员调用及返回值 ABI；代码不手写 `std::string` 或 `std::shared_ptr` 的返回约定。新增 Score、和弦、歌词和页面对象见 [P8 实现说明](P8.md)。
 - 音频边界另经 8.1.1.17 专项核对：`AMAudio::AudioBuffer`/`IAudioBuffer` 的对象大小、交错 PCM 读写、锁和 `GPRSE::EffectsChain::processDSP` 均通过运行时探针；`gp_audio_abi` 句柄不暴露 native 地址，每次使用重新校验文档和对象归属。`Conductor` 尚未构造 RSE 声音时，`chain_mapping_status` 明确返回 `host_limited`（整体状态为 `experimental`），不把导出符号当作绑定链证据。
 - P13 Provider 契约见 [`audio_bridge_api.h`](audio_bridge_api.h)：v1 使用 C ABI、显式结构体大小和稳定状态码，导出 `gpmcp_audio_bridge_get_info`/`gpmcp_audio_enumerate_v1` 供同进程原生消费者协商。枚举只允许 Qt 控制线程；回调元数据须立即复制，`chain` 和字符串不得跨回调保存。`test/build-audio-bridge-probe.ps1` 编译独立 fixture/probe 和原生 Qt 消费者；`test/test-audio-bridge.ps1` 检查无宿主契约及缺失 Provider，`test/test-audio-provider-host.ps1 -HostDirectory <.tools 中无已安装 MCP 的隔离宿主>` 验证真实导出回调、两种加载顺序、线程拒绝和句柄生命周期。VST3 消费者与实时 PCM 未实现。
+- P14 实时流契约见 [`audio_stream_api.h`](audio_stream_api.h) 和 [`guitarpro_audio_stream.h`](guitarpro_audio_stream.h)：v1 与 P13 ABI 分离，固定容量 SPSC ring、有限值和窗口指标不持有宿主裸指针。`test/build-audio-stream-probe.ps1` 与 `test/test-audio-stream.ps1` 验证无宿主契约、FIFO 和容量边界；当前 8.1.1.17 没有已核验 realtime tap，`gp_audio_stream` 保持 `host_limited`，Standard/ASIO 和实时 PCM 不宣称完成。
 
 ## 构建和加载
 
@@ -136,6 +138,10 @@ IDocumentsManager + 0x10 → 管理器实现对象
 
 # EffectsChain -> track 句柄和 IAudioBuffer/DSP 边界（开发模式）
 ./test/test-audio-abi.ps1 -SessionFile <isolated-session.json>
+
+# P14 实时流 ABI、ring、指标和 host-limited 状态机（无宿主）
+./test/build-audio-stream-probe.ps1
+./test/test-audio-stream.ps1
 
 # P11 窗口截图、PNG image content 和焦点保持
 ./test/test-p11.ps1 -SessionFile <session.json> -RequireCapture

@@ -27,6 +27,7 @@
 #include "discovery.h"
 #include "guitarpro_api.h"
 #include "guitarpro_audio.h"
+#include "guitarpro_audio_stream.h"
 #include "guitarpro_io.h"
 #include "guitarpro_clipboard.h"
 #include "guitarpro_semantics.h"
@@ -122,6 +123,7 @@ class Bridge : public QObject {
     WindowCapture windows{server.instanceId()};
     ObjectRegistry registry;
     guitarpro::ScoreClipboard clipboardBuffer;
+    guitarpro::AudioStreamRegistry audioStreams;
 
     QString sessionFile;
     QString snapshot;
@@ -179,6 +181,7 @@ class Bridge : public QObject {
         clipboardBuffer = {};
         pendingRecovery = {};
         guitarpro::clearAudioBindings();
+        audioStreams.clear();
         nativeObjects.clear(); observed.clear(); creationBefore.clear();
     }
 
@@ -656,6 +659,24 @@ class Bridge : public QObject {
         return state();
     }
 
+    QJsonObject audioStream(const QJsonObject &args) {
+        const QString operation = args.value("operation").toString("state");
+        QString document;
+        if (operation == "start") {
+            const auto target = guitarpro::choose(args);
+            if (!target.score || !target.view) return {{"status", "error"}, {"error", "Choose a document with a verified native score"}};
+            document = target.id();
+        }
+        gpmcp_audio_bridge_info providerInfo{};
+        providerInfo.struct_size = sizeof(providerInfo);
+        const uint32_t providerStatus = audioBridgeInfo(&providerInfo);
+        const QString providerState = providerStatus == GPMCP_AUDIO_OK ? QStringLiteral("ready") :
+            providerStatus == GPMCP_AUDIO_NOT_READY ? QStringLiteral("not_ready") : QStringLiteral("host_limited");
+        const QJsonObject provider{{"abi_version", int(providerInfo.abi_version)}, {"status", providerState},
+            {"generation", qint64(providerInfo.generation)}, {"host_build_sha256", QString::fromLatin1(providerInfo.host_build_sha256)}};
+        return audioStreams.handle(args, document, guitarpro::currentAudioGeneration(), provider);
+    }
+
     QJsonObject midiImport(const QJsonObject &args) {
         if (args.value("request") != opening.value("request") || !openingPoll.isActive() || !loadModal ||
             loadModal != QApplication::activeModalWidget() || QByteArray(loadModal->metaObject()->className()) != "gp::gui::MidiImportDialog")
@@ -878,6 +899,7 @@ class Bridge : public QObject {
         if (qEnvironmentVariableIsSet("GPMCP_DEVELOPMENT")) add("gp_audio_probe", "开发验收：原生渲染最多 30 秒测试曲谱，返回 PCM 帧数、能量和哈希。", {{"document", str}});
         add("gp_audio_abi", "读取当前文档的 RSE EffectsChain 到不透明 track_id/chain_id 映射；可在开发模式用 buffer_probe 验证可写 AMAudio IAudioBuffer 和 EffectsChain::processDSP。", {{"document", str}, {"operation", str}, {"track", integer}, {"sound", integer}, {"track_id", str}, {"chain_id", str}, {"frames", integer}});
         add("gp_audio_device", "原生全局音频设备：state/set。property/value 必须来自返回的 choices；修改前停止播放，不加入曲谱撤销栈。", {{"operation", str}, {"property", str}, {"value", QJsonObject{{"anyOf", QJsonArray{str, integer, anyObject}}}}});
+        add("gp_audio_stream", "P14 实时音频流会话：state/start/stop/snapshot/read/diagnose/recover。使用固定容量、端点无关的流模型；当前宿主没有核验 realtime tap 时明确返回 host_limited，不伪造 PCM 或设备输出。", {{"operation", str}, {"document", str}, {"stream_id", str}, {"layers", QJsonObject{{"type", "array"}, {"items", str}}}, {"max_frames", integer}, {"max_bytes", integer}});
         add("gp_p9_status", "读取 P9 编辑面板能力矩阵。每项明确返回已实现、已验证、实验性、未实现或宿主受限；只读，不改变曲谱。", {});
         add("gp_preferences", "读取或设置明确允许的全局原生偏好。scope 为 application，model 为 general/gui/score/user_info/midi。返回实际值、类型和宿主 choices；设置失败会恢复旧值。文档设置使用 gp_presentation。", {{"scope", str}, {"model", str}, {"operation", str}, {"property", str}, {"value", QJsonObject{{"anyOf", QJsonArray{boolean, str, QJsonObject{{"type", "number"}}, QJsonObject{{"type", "array"}}}}}}});
         add("gp_presentation", "读取或设置文档页面、页面元数据、缩放、编辑显示和谱表可见性。页面尺寸/边距使用毫米；一次只设置页面、page_metadata、视图或谱表一组。page_metadata 异步写入 title/author/composer/copyright，以及 even_header/odd_header、first_footer/even_footer/odd_footer、first_page_number/even_page_number/odd_page_number（对象含 text、visibility=0 可见/1 隐藏/2 折叠）。使用 gp_operation 查询终态，整组一次撤销。", {{"document", str}, {"operation", str}, {"width", QJsonObject{{"type", "number"}}}, {"height", QJsonObject{{"type", "number"}}}, {"left", QJsonObject{{"type", "number"}}}, {"top", QJsonObject{{"type", "number"}}}, {"right", QJsonObject{{"type", "number"}}}, {"bottom", QJsonObject{{"type", "number"}}}, {"orientation", str}, {"page_metadata", anyObject}, {"zoom", QJsonObject{{"type", "number"}}}, {"design_mode", boolean}, {"multivoice_edition", boolean}, {"track", integer}, {"standard_notation", boolean}, {"tablature", boolean}});
@@ -970,7 +992,7 @@ class Bridge : public QObject {
             if (pending(exporting) && (tool == "gp_close_window" || tool == "gp_window" || tool == "gp_trigger" || tool == "gp_set_property"))
                 return QJsonObject{{"error", "Export is active; cancel its request and observe completion first"}};
             const bool automationRead = tool == "gp_automation" && (args.value("operation").toString("types") == "types" || args.value("operation").toString("state") == "state");
-            static const QSet<QString> modalReads{"gp_capabilities", "gp_p9_status", "gp_audio_abi", "gp_screenshot", "gp_documents", "gp_score", "gp_read_bars", "gp_read_master_bars", "gp_templates", "gp_objects", "gp_actions", "gp_debug_objects", "gp_debug_resources", "gp_formats", "gp_export_json", "gp_export_tab", "gp_structure", "gp_read_chords", "gp_read_lyrics", "gp_read_sections"};
+            static const QSet<QString> modalReads{"gp_capabilities", "gp_p9_status", "gp_audio_abi", "gp_audio_stream", "gp_screenshot", "gp_documents", "gp_score", "gp_read_bars", "gp_read_master_bars", "gp_templates", "gp_objects", "gp_actions", "gp_debug_objects", "gp_debug_resources", "gp_formats", "gp_export_json", "gp_export_tab", "gp_structure", "gp_read_chords", "gp_read_lyrics", "gp_read_sections"};
             static const QSet<QString> dialogActions{"gp_trigger", "gp_set_property", "gp_close_window", "gp_window"};
             if (QApplication::activeModalWidget() && !modalReads.contains(tool) && !automationRead && !dialogActions.contains(tool))
                 return QJsonObject{{"error", "A modal dialog blocks native operations; inspect gp_dialogs"}, {"dialog", modalState()}};
@@ -991,6 +1013,7 @@ class Bridge : public QObject {
             if (tool == "gp_preferences") return preferences(args);
             if (tool == "gp_p9_status") return guitarpro::p9Status();
             if (tool == "gp_audio_abi") return guitarpro::audioAbi(args, services());
+            if (tool == "gp_audio_stream") return audioStream(args);
             if (tool == "gp_automation") return guitarpro::automationState(args);
             if (tool == "gp_presentation") return args.contains("page_metadata") && args.value("operation") == "set" ? scheduleSemantic(tool, args) : guitarpro::presentation(args);
             if (tool == "gp_export_json") return guitarpro::exportJson(args);
@@ -1309,6 +1332,8 @@ class Bridge : public QObject {
                     {"status", providerStatusName}, {"generation", qint64(provider.generation)},
                     {"capabilities", qint64(provider.capabilities)}, {"host_build_sha256", QString::fromLatin1(provider.host_build_sha256)},
                     {"consumer_contract", "audio_bridge_api.h; callback metadata is valid only during the call"}};
+                const QByteArray hostHash = guitarpro::hash(QCoreApplication::applicationFilePath());
+                result["audio_stream"] = audioStreams.info(guitarpro::currentAudioGeneration(), hostHash);
                 result["limitations"] = QJsonArray{"P9 status is exposed by gp_p9_status; unsupported engraving, arbitrary instrument/fingering and dynamics/volume automation remain explicitly host-limited. gp_automation DSP parameter writes are experimental and do not claim complete automation semantics.", "System clipboard interop remains experimental and disabled unless GPMCP_DEVELOPMENT=1 with an isolated validation environment.", "New/open/save/close workflows and playback can complete asynchronously; poll operation/document/playback state. Activate a document before playback control."};
                 return result;
             }
@@ -1515,6 +1540,69 @@ extern "C" GPMCP_AUDIO_EXPORT uint32_t GPMCP_AUDIO_CALL gpmcp_audio_enumerate_v1
         if (object && object->objectName() == QStringLiteral("GuitarProMCPBridge"))
             return static_cast<Bridge *>(object)->enumerateAudioBindingsV1(requestedAbi, visitor, user, result);
     } catch (...) { result->status = GPMCP_AUDIO_INTERNAL_ERROR; }
+    return result->status;
+}
+
+extern "C" GPMCP_AUDIO_STREAM_EXPORT unsigned GPMCP_AUDIO_STREAM_CALL gpmcp_audio_stream_version() noexcept {
+    return GPMCP_AUDIO_STREAM_ABI_VERSION;
+}
+
+extern "C" GPMCP_AUDIO_STREAM_EXPORT uint32_t GPMCP_AUDIO_STREAM_CALL gpmcp_audio_stream_get_info(
+    gpmcp_audio_stream_info *info) noexcept {
+    if (!info || info->struct_size < sizeof(*info)) return GPMCP_AUDIO_STREAM_ABI_MISMATCH;
+    std::memset(info, 0, sizeof(*info));
+    info->struct_size = sizeof(*info);
+    info->abi_version = GPMCP_AUDIO_STREAM_ABI_VERSION;
+    info->status = GPMCP_AUDIO_STREAM_HOST_LIMITED;
+    info->capabilities = GPMCP_AUDIO_STREAM_CAP_SESSION | GPMCP_AUDIO_STREAM_CAP_METRICS |
+        GPMCP_AUDIO_STREAM_CAP_DIAGNOSTICS | GPMCP_AUDIO_STREAM_CAP_RECOVERY;
+    if (!qApp) return info->status;
+    if (QThread::currentThread() != qApp->thread()) {
+        info->status = GPMCP_AUDIO_STREAM_WRONG_THREAD;
+        return info->status;
+    }
+    try {
+        info->generation = guitarpro::currentAudioGeneration();
+        const QByteArray hash = guitarpro::hash(QCoreApplication::applicationFilePath());
+        const size_t length = (std::min<size_t>)(hash.size(), sizeof(info->host_build_sha256) - 1);
+        if (length) std::memcpy(info->host_build_sha256, hash.constData(), length);
+        auto *object = qApp->property("gpmcpBridge").value<QObject *>();
+        if (object && object->objectName() == QStringLiteral("GuitarProMCPBridge")) {
+            // The MCP-facing registry owns sessions; the C ABI intentionally
+            // reports the same host-limited state until a verified callback is
+            // available, without exposing Qt or host pointers.
+            info->stream_count = 0;
+        }
+    } catch (...) { info->status = GPMCP_AUDIO_STREAM_INTERNAL_ERROR; }
+    return info->status;
+}
+
+extern "C" GPMCP_AUDIO_STREAM_EXPORT uint32_t GPMCP_AUDIO_STREAM_CALL gpmcp_audio_stream_enumerate_v1(
+    uint32_t requestedAbi, gpmcp_audio_stream_state_visitor visitor, void *user,
+    gpmcp_audio_stream_enumerate_result *result) noexcept {
+    if (!result || result->struct_size < sizeof(*result)) return GPMCP_AUDIO_STREAM_ABI_MISMATCH;
+    result->status = GPMCP_AUDIO_STREAM_NOT_READY;
+    result->generation = 0;
+    result->count = 0;
+    if (requestedAbi != GPMCP_AUDIO_STREAM_ABI_VERSION) {
+        result->status = GPMCP_AUDIO_STREAM_ABI_MISMATCH;
+        return result->status;
+    }
+    if (!visitor) {
+        result->status = GPMCP_AUDIO_STREAM_INVALID_ARGUMENT;
+        return result->status;
+    }
+    if (!qApp) return result->status;
+    if (QThread::currentThread() != qApp->thread()) {
+        result->status = GPMCP_AUDIO_STREAM_WRONG_THREAD;
+        return result->status;
+    }
+    result->generation = guitarpro::currentAudioGeneration();
+    // No verified host callback is available in 8.1.1.17.  Returning an empty
+    // enumeration is intentional and keeps consumers from mistaking a
+    // synthetic/offline buffer for live endpoint audio.
+    result->status = GPMCP_AUDIO_STREAM_HOST_LIMITED;
+    Q_UNUSED(user);
     return result->status;
 }
 #include "guitarpro_mcp.moc"
