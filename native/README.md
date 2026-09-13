@@ -21,6 +21,7 @@
 | `guitarpro_abi.h` / `gpcore.def` / `gprse.def` / `amaudio.def` | 已确认的原生导出声明及导入库定义 |
 | `object_registry.h` | Qt 对象生命周期观察和失效指针保护 |
 | `window_capture.h` | 实例内窗口身份、Qt 窗口枚举及指定目标的离屏截图 |
+| `window_performance.h` | P15 异步窗口性能会话、Qt Paint 观察、屏幕参考和可核验的已有 HWND DWM 显示计数 |
 | `discovery.h` | 只读指针与 RTTI 校验；开发模式下的对象关系探索 |
 | `build.ps1` | 使用项目内 Qt SDK 和已安装的 Visual Studio 构建 DLL |
 | `mcp-client.ps1` | 供开发验证使用的 PowerShell HTTP MCP 客户端 |
@@ -155,6 +156,11 @@ IDocumentsManager + 0x10 → 管理器实现对象
 ./test/test-p12-windows.ps1 -NativeFrame
 # P12 跨客户端、重连与宿主重启后的 ID 拒绝（同时回归既有实例行为）
 ./test/test-instances.ps1 -HostDirectory '<isolated .tools host>' -StartupSettlingMs 15000
+
+# P15 窗口 Qt Paint/DWM 性能采样、来源隔离和生命周期
+./test/test-p15-window-performance.ps1 -SessionFile <isolated-session.json>
+# 要求当前宿主能返回 DWM 窗口计数时再启用严格模式
+./test/test-p15-window-performance.ps1 -SessionFile <isolated-session.json> -RequireDwm
 ```
 
 失败时保留宿主和 `artifacts/` 证据；不要把 `scheduled`、菜单枚举或 DLL 加载成功当作原生能力已验证。真实宿主回归需要 Guitar Pro 8.1.1.17 及匹配的宿主文件哈希。

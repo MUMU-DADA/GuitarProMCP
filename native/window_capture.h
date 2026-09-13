@@ -225,7 +225,9 @@ class WindowCapture {
             type == Qt::SplashScreen ? "splash" : "window";
         const QPoint position = widget ? widget->mapToGlobal(QPoint()) : window->mapToGlobal(QPoint());
         const QSize size = widget ? widget->size() : window->size();
-        const auto screen = window ? window->screen() : nullptr;
+        const auto screen = window ? window->screen() :
+            (widget && widget->windowHandle() ? widget->windowHandle()->screen() :
+             (widget ? QGuiApplication::screenAt(widget->mapToGlobal(widget->rect().center())) : nullptr));
         const QString title = widget ? widget->windowTitle() : window->title();
         return {{"window_id", id(object)}, {"parent_window_id", optionalId(parentWindow(object))},
             {"kind", kind}, {"class", object->metaObject()->className()},
@@ -241,13 +243,58 @@ class WindowCapture {
             {"geometry", QJsonObject{{"x", position.x()}, {"y", position.y()}, {"width", size.width()}, {"height", size.height()}}},
             {"dpi", QJsonObject{{"x", widget ? double(widget->logicalDpiX()) : screen ? screen->logicalDotsPerInchX() : 0},
                                 {"y", widget ? double(widget->logicalDpiY()) : screen ? screen->logicalDotsPerInchY() : 0}}},
-            {"device_pixel_ratio", widget ? widget->devicePixelRatioF() : window->devicePixelRatio()}};
+            {"device_pixel_ratio", widget ? widget->devicePixelRatioF() : window->devicePixelRatio()},
+            {"screen_name", screen ? screen->name() : QString()},
+            {"screen_refresh_rate_hz", screen && screen->refreshRate() > 0.0 ? QJsonValue(screen->refreshRate()) : QJsonValue()}};
     }
     QJsonObject identity() const {
         return {{"instance_id", instance}, {"pid", double(QCoreApplication::applicationPid())}};
     }
 public:
     explicit WindowCapture(const QString &instanceId) : instance(instanceId) {}
+
+    // Resolve the same target selection used by gp_screenshot without
+    // creating native handles or changing focus. The returned pointer is only
+    // valid while the caller keeps a QPointer and revalidates it on use.
+    QObject *resolve(const QJsonObject &args, QString *status = nullptr, QString *reason = nullptr) {
+        discover();
+        auto fail = [&](const QString &s, const QString &r) {
+            if (status) *status = s;
+            if (reason) *reason = r;
+            return static_cast<QObject *>(nullptr);
+        };
+        QObject *selected = nullptr;
+        if (args.contains("window_id")) {
+            const QString requested = args.value("window_id").toString();
+            static const QRegularExpression pattern("\\A([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}):window:([1-9][0-9]{0,19})\\z");
+            const auto match = pattern.match(requested);
+            bool validSequence = false;
+            const auto number = match.captured(2).toULongLong(&validSequence);
+            if (!args.value("window_id").isString() || !match.hasMatch() || !validSequence)
+                return fail("error", "invalid_window_id");
+            if (match.captured(1) != instance) return fail("error", "foreign_instance");
+            selected = identities.value(number);
+            if (!selected) return fail("stale", "window_not_found");
+            if (!current.contains(selected)) return fail("stale", "window_not_available");
+        } else {
+            selected = QApplication::activeModalWidget();
+            if (!selected) for (auto object : current) {
+                const auto widget = qobject_cast<QWidget *>(object);
+                if (!widget || QByteArray(widget->metaObject()->className()) != "gp::gui::MainWindow") continue;
+                if (!selected || widget->isVisible()) selected = widget;
+                if (widget->isVisible()) break;
+            }
+            if (!selected) return fail("host_limited", "no_window");
+        }
+        if (status) *status = "ok";
+        if (reason) reason->clear();
+        return selected;
+    }
+
+    QJsonObject describe(QObject *object) {
+        if (!object) return {};
+        return state(object);
+    }
 
     QJsonObject enumerate(bool includeHidden = true) {
         discover();

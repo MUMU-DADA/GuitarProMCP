@@ -90,6 +90,7 @@ try {
 | `gp_audio_stream` | `operation=state/start/stop/snapshot/read/diagnose/recover`, `document?`, `stream_id?`, `layers?`, `backend?`, `max_frames?`, `max_bytes?` | P14 进程内实时 WASAPI loopback 会话、实际 PCM、快照、有限值/连续性指标、诊断和恢复 |
 | `gp_windows` | `include_hidden?` | 只读枚举当前实例 Qt 窗口，返回数量、稳定 `window_id`、父窗口关系和实际状态；默认包含隐藏窗口，过滤不改变统计总数 |
 | `gp_screenshot` | `window_id?`, `include_frame?` | 按 `gp_windows` 的 ID 读取单个窗口；省略参数仍优先活动模态，否则主窗口。默认通过 Qt `QWidget::render` 返回客户区；Windows 上传 `include_frame=true` 时额外用同进程 `WM_PRINT(PRF_NONCLIENT)` 补入系统标题栏和边框。无效 ID 拒绝且无图像，无法可靠渲染时返回 `status=host_limited` |
+| `gp_window_performance` | `operation=start/snapshot/stop`, `window_id?`, `monitor_id?`, `sample_ms=1000`, `source=auto/etw/dwm/qt_paint/screen` | 只读采样窗口 Qt 重绘、屏幕参考和现有 native HWND 的可核验 DWM 显示计数；返回刷新率参考、帧率、帧间隔分位数、丢帧/卡顿及可见性。提交帧没有可核验的逐窗口来源时保持 `null`；DWM/ETW 不可用时明确 `host_limited`/`not_observed`，不使用截图或外部 PresentMon |
 
 P8/P9 编辑请求通过 `gp_operation` 查询 `applied/unchanged/error`，新建为 `created`；`gp_documents.editing` 提供最近编辑状态。格式、默认值、上限、模板复用及恢复语义见 [P8 编曲与语义 JSON](P8.md)；P9 能力边界和专项证据见 [覆盖清单](../docs/COVERAGE.md#p9-验收)。PowerShell 客户端仅自动等待保存工具，P8/P9 请求需要显式查询终态。
 
@@ -439,7 +440,7 @@ generation 在观察到文档 Score、音轨指针或音轨集合变化时递增
 
 `GPMCP_AUDIO_HOST_LIMITED` 可以携带已核验的音轨上下文：未就绪链为 `chain=nullptr`、`sound_index=-1`、binding `status=GPMCP_AUDIO_HOST_LIMITED`。非活动文档可能没有 Conductor，此时不返回该文档绑定，枚举总状态为 `HOST_LIMITED`；切换回文档后重新发现。回调内不得编辑宿主、处理 Qt 事件、重新进入 Provider 或抛异常；消费者只复制元数据，DLL 卸载后不得调用旧函数地址。
 
-0.11.0 保留 MCP 协议 `2025-06-18`、`gp_audio_abi` 和 P13 Provider 参数/状态含义，新增 P14 `backend`、`capture_scope`、PCM 读取和诊断字段；客户端可忽略新增字段。`state`/`resolve` 和原生枚举均只观察现有对象，不再隐式调用 `Musician::updateAll()`；链未就绪时保留 `host_limited`。P14 实时流使用独立 `audio_stream_api.h` v1，进程级 WASAPI loopback 不改变 P13 ABI；旧消费者继续工作。偏好模型额外允许写入 `currentRow`，以支持列表选择控件的原生读回。
+0.12.0 保留 MCP 协议 `2025-06-18`、`gp_audio_abi` 和 P14 的 `backend`、`capture_scope`、PCM 读取及诊断字段；客户端可忽略新增字段。新增只读 `gp_window_performance`，通过 `window_id` 绑定 Qt 窗口并按 `start/snapshot/stop` 返回 Qt Paint、屏幕参考和可核验的 DWM 显示计数；逐窗口提交计数、ETW 或 DWM 不可用时对应字段保持未知并明确 `host_limited`/`not_observed`。旧消费者继续工作；P13/P14 ABI 不变。
 
 ### P14 实时音频流
 
@@ -472,6 +473,14 @@ PNG 通过标准 MCP `image` content 返回，结构化元数据同时作为 `st
 | `status=host_limited` | `frame_handle_unavailable`、`frame_geometry_unavailable`、`frame_geometry_invalid`、`frame_geometry_mismatch`、`frame_allocation_failed`、`frame_paint_failed`：请求 `include_frame=true` 时无法安全取得或绘制现有 Windows 非客户区，均无图像；`not_applicable` 表示无系统标题栏（无边框/弹出样式），仍返回客户区图像 |
 
 限制沿用 P11：单边不超过 4096 像素、总像素不超过 16 Mi、PNG 和 base64 各不超过 8 MiB。2000 ms 检查在绘制及编码返回后执行，不能中断阻塞中的 Qt 绘制。截图不会发送输入、激活窗口或改变文档及撤销历史；未准备好的隐藏菜单和没有可靠 QWidget 路径的窗口可以被枚举，但不代表可截图。
+
+## P15 窗口性能
+
+`gp_window_performance` 与截图独立。`operation=start` 按 `gp_windows` 的稳定 `window_id` 绑定窗口；省略 ID 时仍优先活动模态，否则主窗口。`sample_ms` 为 250..10000（默认 1000），最多四个并发会话；返回不透明 `monitor_id`。客户端通过 `snapshot` 读取累计结果，通过 `stop` 读取结果并释放会话。达到采样时长后状态为 `completed`，调用方仍应 `stop` 释放记录；旧或跨实例 monitor ID 明确拒绝，窗口销毁返回 `stale`。
+
+`source=auto` 优先尝试当前 QWidget 已有 native HWND 的 `DwmGetCompositionTimingInfo`，失败时使用 `qt_paint`，仅有 QWindow 时退为 `screen_refresh`。`source=dwm`、`qt_paint` 和 `screen` 显式请求对应来源；`source=etw` 当前返回 `host_limited/etw_not_available`，没有隐式启动外部 ETW/PresentMon 服务。Qt 和 DWM 读取均在宿主 Qt 控制线程执行，不创建 native handle，不激活窗口、不发送输入、不修改曲谱或播放。
+
+结果将 `refresh_rate_hz`（屏幕名义刷新率）、`paint_fps`（目标 QWidget 子树的 `QEvent::Paint` 次数）、`presented_fps` 和 `displayed_fps` 分开返回。当前 DWM 结构只使用按 HWND 可核验的 displayed 计数；没有逐窗口 submitted 事件时 `presented_frames`/`presented_fps` 保持 `null`。DWM 来源按 16 ms Qt 定时器读回最后显示 QPC 时间，只有相邻显示帧可确认时才加入 `frame_intervals`，跳过的采样计入 `skipped_samples`，不补造逐帧事件。未知计数和帧率使用 `null`。遮挡状态尚无可靠逐窗口观测，返回 `occluded=null`、`occlusion_status=not_observed`；隐藏/最小化状态读取实际 Qt 值。DWM 不可用时不能把 Qt 重绘或屏幕刷新率写成用户实际看到的显示 FPS。
 
 ## Qt 对象工具
 

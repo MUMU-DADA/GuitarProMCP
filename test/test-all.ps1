@@ -55,7 +55,7 @@ $exitHandle = [GpmcpRegressionProcess]::OpenProcess(0x1000, $false, $process.Id)
 if ($exitHandle -eq [IntPtr]::Zero) { throw 'Cannot retain a process handle for exit-code verification.' }
 $exitCode = $null
 Write-Output "Regression host PID $($process.Id). Session: $sessionFile"
-$suites = @('p6','mcp','native','editing','tracks','measures','effects','selection','saving','document-operations','document-tabs','lifecycle','session','structure','clipboard','tuplets','connections','notation','instruments','score-form','transfer','audio','audio-abi','audio-stream','audio-stream-host','p8','p9','p10','p11','p12')
+$suites = @('p6','mcp','native','editing','tracks','measures','effects','selection','saving','document-operations','document-tabs','lifecycle','session','structure','clipboard','tuplets','connections','notation','instruments','score-form','transfer','audio','audio-abi','audio-stream','audio-stream-host','p8','p9','p10','p11','p12','p15-window-performance')
 if (Test-Path -LiteralPath (Join-Path $root '.tools/audio-bridge-probe/audio-bridge-probe.exe')) { $suites += 'audio-bridge' }
 $results = @()
 $fixtureRestorations = @()
