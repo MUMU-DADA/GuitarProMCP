@@ -33,6 +33,7 @@
 #include "guitarpro_semantics.h"
 #include "object_registry.h"
 #include "window_capture.h"
+#include "window_performance.h"
 #include <QtCore/QEvent>
 #include <QtCore/QPointer>
 #include <QtCore/QSaveFile>
@@ -121,6 +122,7 @@ static bool samePreferenceValue(const QMetaProperty &property, const QVariant &l
 class Bridge : public QObject {
     McpServer server{this};
     WindowCapture windows{server.instanceId()};
+    WindowPerformance performance{windows, server.instanceId(), this};
     ObjectRegistry registry;
     guitarpro::ScoreClipboard clipboardBuffer;
     guitarpro::AudioStreamRegistry audioStreams;
@@ -182,6 +184,7 @@ class Bridge : public QObject {
         pendingRecovery = {};
         guitarpro::clearAudioBindings();
         audioStreams.clear();
+        performance.clear();
         nativeObjects.clear(); observed.clear(); creationBefore.clear();
     }
 
@@ -963,6 +966,7 @@ class Bridge : public QObject {
         add("gp_window", "通过 Qt 原生窗口方法隐藏、最小化或恢复主窗口；restore 会显示并请求激活窗口，hide 重新进入不抢焦点的后台模式。", {{"state", str}}, {"state"});
         add("gp_windows", "只读枚举当前实例的 Qt 窗口、稳定 ID、父窗口关系及实际状态。include_hidden 默认 true；过滤不改变总数。不包含桌面和其他进程。", {{"include_hidden", boolean}});
         add("gp_screenshot", "读取指定 window_id 的 PNG；省略时优先活动模态，否则主窗口。使用 Qt 离屏渲染，不激活窗口、不抢焦点、不发送输入；include_frame=true 时在 Windows 上补入同一窗口的系统标题栏和边框。无效 ID 明确拒绝，无法可靠渲染返回 host_limited。", {{"window_id", str}, {"include_frame", boolean}});
+        add("gp_window_performance", "只读采样指定窗口的 Qt 重绘、屏幕参考和可核验的 Windows DWM 显示计数；支持异步 start/snapshot/stop。DWM/ETW 不可用时严格返回 host_limited/not_observed，不把截图、音频或屏幕刷新率当作显示 FPS。", {{"operation", str}, {"window_id", str}, {"monitor_id", str}, {"sample_ms", integer}, {"source", str}}, {"operation"});
         add("gp_capabilities", "原生 C++ 插件身份、后台控制能力及尚未覆盖的范围。", {});
         add("gp_dialogs", "Read the active modal dialog, its message labels and available buttons. Native score mutations are blocked until it is resolved.", {});
         add("gp_objects", "读取宿主 Qt 对象、属性和可调用方法；无需窗口可见或前台。", {{"query", str}, {"offset", integer}, {"limit", integer}, {"include_hidden", boolean}});
@@ -979,6 +983,7 @@ class Bridge : public QObject {
             if (tool == "gp_dialogs") return modalState();
             if (tool == "gp_windows") return windows.enumerate(args.value("include_hidden").toBool(true));
             if (tool == "gp_screenshot") return windows.screenshot(args);
+            if (tool == "gp_window_performance") return performance.call(args);
             if (tool == "gp_formats") return guitarpro::fileFormats();
             if (tool == "gp_midi_import") return midiImport(args);
             if (tool == "gp_operation") {
@@ -992,7 +997,7 @@ class Bridge : public QObject {
             if (pending(exporting) && (tool == "gp_close_window" || tool == "gp_window" || tool == "gp_trigger" || tool == "gp_set_property"))
                 return QJsonObject{{"error", "Export is active; cancel its request and observe completion first"}};
             const bool automationRead = tool == "gp_automation" && (args.value("operation").toString("types") == "types" || args.value("operation").toString("state") == "state");
-            static const QSet<QString> modalReads{"gp_capabilities", "gp_p9_status", "gp_audio_abi", "gp_audio_stream", "gp_screenshot", "gp_documents", "gp_score", "gp_read_bars", "gp_read_master_bars", "gp_templates", "gp_objects", "gp_actions", "gp_debug_objects", "gp_debug_resources", "gp_formats", "gp_export_json", "gp_export_tab", "gp_structure", "gp_read_chords", "gp_read_lyrics", "gp_read_sections"};
+            static const QSet<QString> modalReads{"gp_capabilities", "gp_p9_status", "gp_audio_abi", "gp_audio_stream", "gp_screenshot", "gp_window_performance", "gp_documents", "gp_score", "gp_read_bars", "gp_read_master_bars", "gp_templates", "gp_objects", "gp_actions", "gp_debug_objects", "gp_debug_resources", "gp_formats", "gp_export_json", "gp_export_tab", "gp_structure", "gp_read_chords", "gp_read_lyrics", "gp_read_sections"};
             static const QSet<QString> dialogActions{"gp_trigger", "gp_set_property", "gp_close_window", "gp_window"};
             if (QApplication::activeModalWidget() && !modalReads.contains(tool) && !automationRead && !dialogActions.contains(tool))
                 return QJsonObject{{"error", "A modal dialog blocks native operations; inspect gp_dialogs"}, {"dialog", modalState()}};
@@ -1334,7 +1339,7 @@ class Bridge : public QObject {
                     {"consumer_contract", "audio_bridge_api.h; callback metadata is valid only during the call"}};
                 const QByteArray hostHash = guitarpro::hash(QCoreApplication::applicationFilePath());
                 result["audio_stream"] = audioStreams.info(guitarpro::currentAudioGeneration(), hostHash);
-                result["limitations"] = QJsonArray{"P9 status is exposed by gp_p9_status; unsupported engraving, arbitrary instrument/fingering and dynamics/volume automation remain explicitly host-limited. gp_automation DSP parameter writes are experimental and do not claim complete automation semantics.", "System clipboard interop remains experimental and disabled unless GPMCP_DEVELOPMENT=1 with an isolated validation environment.", "New/open/save/close workflows and playback can complete asynchronously; poll operation/document/playback state. Activate a document before playback control."};
+                result["limitations"] = QJsonArray{"P9 status is exposed by gp_p9_status; unsupported engraving, arbitrary instrument/fingering and dynamics/volume automation remain explicitly host-limited. gp_automation DSP parameter writes are experimental and do not claim complete automation semantics.", "System clipboard interop remains experimental and disabled unless GPMCP_DEVELOPMENT=1 with an isolated validation environment.", "P15 gp_window_performance separates Qt Paint, screen refresh and DWM timing; when per-window DWM/ETW is unavailable, presented/displayed FPS and occlusion remain unknown or host-limited.", "New/open/save/close workflows and playback can complete asynchronously; poll operation/document/playback state. Activate a document before playback control."};
                 return result;
             }
             const QHash<QString, QString> operations{{"gp_objects", "native_objects"}, {"gp_actions", "native_actions"}, {"gp_trigger", "native_trigger"}, {"gp_set_property", "native_set_property"}, {"gp_close_window", "native_close_window"}};
@@ -1351,6 +1356,7 @@ class Bridge : public QObject {
 
 protected:
     bool eventFilter(QObject *object, QEvent *event) override {
+        performance.observePaint(object, event);
         if (event->type() == QEvent::ThreadChange) { registry.forget(object); nativeObjects.remove(object); return false; }
         const QByteArray name = object->metaObject()->className();
         if (savingOperation && event->type() == QEvent::Show) {

@@ -37,7 +37,7 @@ MCP 客户端 -> 本机 HTTP /mcp -> GuitarPro.exe 内的 C++ 插件 -> Qt/GPCor
 
 ## 阶段目标
 
-P0-P10 已按下表声明的范围完成。P9 已验收可核验的节拍文本、力度标记、符干方向、谱号、沿用的 P8 能力和只读能力矩阵；截图中尚未具备可靠原生写入路径的剩余编辑要求统一归入 P9 的保留清单，并明确标记为宿主受限、实验性或未实现。P10 复用 Qt 偏好模型完成已确认可读写的全局偏好及基础音频/MIDI 状态，已验证重启持久化和新建曲谱默认资讯继承。P11 已交付最小 Qt 离屏截图路径，真实宿主全矩阵仍标记为实验性或宿主受限。P12 已完成窗口枚举与指定截图的核心实现和真实宿主专项：窗口数量、稳定身份、状态、模态下显式选择及只读性有证据；未构造的特殊窗口组合仍保留为实验性、宿主受限或未验证。P13 已完成最小音频 Provider 契约和消费者专项；P14 已完成进程内实时端点监测、PCM、指标、诊断、恢复和 generation 生命周期，使用 Windows 进程级 WASAPI loopback 并保留实际端点 scope。验收记录及剩余要求见 [docs/DEVELOPMENT_PLAN.md](docs/DEVELOPMENT_PLAN.md)；阶段状态和具名证据见 [docs/COVERAGE.md](docs/COVERAGE.md)。
+P0-P10 已按下表声明的范围完成。P9 已验收可核验的节拍文本、力度标记、符干方向、谱号、沿用的 P8 能力和只读能力矩阵；截图中尚未具备可靠原生写入路径的剩余编辑要求统一归入 P9 的保留清单，并明确标记为宿主受限、实验性或未实现。P10 复用 Qt 偏好模型完成已确认可读写的全局偏好及基础音频/MIDI 状态，已验证重启持久化和新建曲谱默认资讯继承。P11 已交付最小 Qt 离屏截图路径，真实宿主全矩阵仍标记为实验性或宿主受限。P12 已完成窗口枚举与指定截图的核心实现和真实宿主专项：窗口数量、稳定身份、状态、模态下显式选择及只读性有证据；未构造的特殊窗口组合仍保留为实验性、宿主受限或未验证。P13 已完成最小音频 Provider 契约和消费者专项；P14 已完成进程内实时端点监测、PCM、指标、诊断、恢复和 generation 生命周期，使用 Windows 进程级 WASAPI loopback 并保留实际端点 scope。P15 已完成最小进程内窗口性能采样：`gp_window_performance` 支持 Qt Paint、屏幕参考、DWM 尝试、异步会话和生命周期失效；真实环境 DWM 逐窗口 timing 不可用时结果明确降级为 `host_limited`/`not_observed`，不声称显示 FPS。验收记录及剩余要求见 [docs/DEVELOPMENT_PLAN.md](docs/DEVELOPMENT_PLAN.md)；阶段状态和具名证据见 [docs/COVERAGE.md](docs/COVERAGE.md)。
 
 | 阶段 | 目标与当前范围 | 明确保留的边界 |
 | --- | --- | --- |
@@ -56,6 +56,7 @@ P0-P10 已按下表声明的范围完成。P9 已验收可核验的节拍文本�
 | P12 多窗口枚举与指定窗口截图 | 已实现并通过核心真实宿主专项：只读 `gp_windows` 返回数量、稳定 ID、父关系与状态；`gp_screenshot(window_id)` 在多窗口和活动模态存在时保留显式目标；主窗口、非模态偏好、键盘/指板浮动窗口与关闭确认已有证据，截图保持实验性 | 范围见下方约定；默认截图保留 P11 行为；失效或跨实例 ID 明确拒绝，不回退到其他窗口；各类窗口渲染须分别核验，枚举成功不代表截图已验证 |
 | P13 音频 Provider 与多插件接口设计 | 已完成最小进程内 Provider 契约、MCP 适配、generation 失效和独立原生消费者专项；VST3 消费者未实现 | `audio_bridge_api.h` v1 明确结构体大小、宿主哈希、能力位、状态码、generation 和 Qt 控制线程；实时 PCM 获取、系统混音采集和跨线程保存宿主裸指针不因桥接交付自动纳入范围 |
 | P14 端到端实时音频流监测与管控 | 已完成进程内实时端点链路 | Windows 进程级 WASAPI loopback 优先捕获 Guitar Pro 实际输出，失败时回退当前渲染端点；固定容量 ring、实时 PCM、格式/连续性/信号/耗时指标、诊断、恢复和 generation 失效已实现；`backend` 与 `capture_scope` 区分请求和实际端点，内部层无独立采样点时返回 `not_observed`，不得把端点指标冒充独立音轨/效果链 tap |
+| P15 窗口性能与显示流畅度监测 | 已完成最小进程内采样与专项（2026-09-13） | `gp_window_performance` 按稳定 `window_id` 异步采集 Qt Paint、屏幕刷新率和可用的 DWM 计数；返回采样时长、帧率、间隔分位数、可见性、丢帧/卡顿字段及来源。当前 Windows 环境逐窗口 DWM timing 不可用，`presented_fps`/`displayed_fps` 保持未知并明确降级；不截图、不激活窗口、不发送输入 |
 
 ### P12 范围约定
 
@@ -68,6 +69,8 @@ P0-P10 已按下表声明的范围完成。P9 已验收可核验的节拍文本�
 P13 的实现归属保持可替换：MCP 插件可以先作为首个 Provider 实现，后续也可以迁移到独立插件；实时宿主对象图必须有明确的权威绑定来源，消费者不得复制一套 `Score`/`Track`/`Musician`/`Sound`/`EffectsChain` 解析。P13 仍使用进程内 Qt/GPCore 链路，但允许在明确版本和迁移说明后调整 MCP 工具、字段和数据模型；详细计划、阶段交付物和验收矩阵见 [docs/DEVELOPMENT_PLAN.md](docs/DEVELOPMENT_PLAN.md#p13音频-provider-与多插件接口设计计划)。
 
 P14 的范围约定：实时端点通过 Windows 进程级 WASAPI loopback 优先采集 GuitarPro.exe 进程树，进程 loopback 不可用时回退默认渲染端点；PCM、采样率、声道、格式、时间戳、缓冲深度、RMS、峰值、DC、削波、NaN/Inf、回调耗时、宿主丢帧、监测丢帧和 xrun 均来自独立采集线程。实时监测使用独立流 ID、generation、固定容量缓冲和控制线程状态机；Standard 与 ASIO 请求分别保留 `backend`，结果以 `capture_scope` 报告实际端点来源，不能按名称假设两者等价。内部输入、音轨、效果链和混音层没有独立采样点时由 `layer_states=not_observed` 明确标记，不把端点 PCM 冒充分层 tap；系统混音、单独的操作系统麦克风采集、其他进程和驱动控制面板不属于默认采集对象。详细阶段计划见 [docs/DEVELOPMENT_PLAN.md](docs/DEVELOPMENT_PLAN.md#p14-端到端实时音频流监测与管控计划)。
+
+P15 的范围约定：窗口性能监测与截图完全独立，目标通过 `gp_windows` 返回的稳定 `window_id` 绑定当前 MCP 实例和 QObject 生命周期；省略 ID 时沿用活动模态优先、否则主窗口的选择规则，验证报告必须写明实际目标。`refresh_rate_hz` 仅表示窗口所在屏幕的名义刷新率；`paint_fps` 仅表示 Qt 重绘事件频率；`presented_fps`/`displayed_fps` 和帧间隔统计只有在 Windows Graphics ETW/DWM 能按当前 PID 与现有 native HWND 可靠观测时才返回。采样使用异步 `start`/`snapshot`/`stop` 状态机，采集线程不调用 Qt、不做截图、不创建 native handle、不保存宿主裸指针；控制线程返回采样时长、观测帧数、帧间隔平均值/P50/P95/P99/最大值、卡顿阈值与计数、dropped/missed 帧和 `measurement_source`。隐藏、最小化、遮挡、无 native HWND、DWM/ETW 不可用、GPU/原生嵌入或窗口销毁时返回 `not_observed`、`host_limited` 或 `stale`，不得回退到其他窗口，也不得把 `paint_fps` 或屏幕刷新率写成用户实际看到的显示帧率；外部 PresentMon 常驻进程、桌面截图、输入模拟和前台窗口依赖不属于交付路径。详细阶段计划见 [docs/DEVELOPMENT_PLAN.md](docs/DEVELOPMENT_PLAN.md#p15-窗口性能与显示流畅度监测计划)。
 
 ## 质量门槛
 
@@ -83,5 +86,5 @@ P14 的范围约定：实时端点通过 Windows 进程级 WASAPI loopback 优�
 - [docs/INSTALL.md](docs/INSTALL.md)：安装包使用、更新/卸载和故障恢复。
 - [docs/COVERAGE.md](docs/COVERAGE.md)：已验证能力、保留边界和证据索引。
 - [native/README.md](native/README.md)：C++/Qt 构建、加载、ABI 和测试命令；协议与工具行为见 [native/API.md](native/API.md)，P8 格式与调用细节见 [native/P8.md](native/P8.md)。
-- [docs/DEVELOPMENT_PLAN.md](docs/DEVELOPMENT_PLAN.md)：P0-P14 阶段总览、P9 保留边界、P10 验收、P11 实验性记录、P12 验收记录、P13 音频 Provider 接口设计计划与 P14 实时音频流监测管控计划；历史记录见文末归档，当前目标以本文件为准。
+- [docs/DEVELOPMENT_PLAN.md](docs/DEVELOPMENT_PLAN.md)：P0-P15 阶段总览、P9 保留边界、P10 验收、P11 实验性记录、P12 验收记录、P13 音频 Provider 接口设计计划、P14 实时音频流监测管控计划与 P15 窗口性能监测计划；历史记录见文末归档，当前目标以本文件为准。
 - [docs/README.md](docs/README.md)：面向用户和开发者的文档导航。

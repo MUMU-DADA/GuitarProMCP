@@ -1,6 +1,6 @@
 # GuitarProMCP 阶段计划与当前验收
 
-更新日期：2026-09-12。本文件记录 P0-P14 阶段计划、当前验收标准、P9 实施边界、P10 验收、RSE/音频 ABI 边界、P11 实验性记录、P12 多窗口枚举与指定窗口截图的验收记录、P13 音频 Provider 与多插件接口设计计划以及 P14 端到端实时音频流监测与管控计划。当前协作规范、开发目标、产品要求、范围决策和质量门槛统一见 [AGENTS.md](../AGENTS.md)；历史执行记录见文末归档。
+更新日期：2026-09-13。本文件记录 P0-P15 阶段计划、当前验收标准、P9 实施边界、P10 验收、RSE/音频 ABI 边界、P11 实验性记录、P12 多窗口枚举与指定窗口截图的验收记录、P13 音频 Provider 与多插件接口设计计划、P14 端到端实时音频流监测与管控计划以及 P15 窗口性能与显示流畅度监测计划。当前协作规范、开发目标、产品要求、范围决策和质量门槛统一见 [AGENTS.md](../AGENTS.md)；历史执行记录见文末归档。
 
 > 文档分工遵循 [AGENTS.md](../AGENTS.md#文档分工)：阶段记录见本文件，当前能力及具名证据见 [COVERAGE.md](COVERAGE.md)，接口细节见 [native/API.md](../native/API.md) 和 [native/P8.md](../native/P8.md)。
 
@@ -25,6 +25,7 @@
 | P12 多窗口枚举与指定窗口截图 | 已完成核心实现与真实宿主专项，截图保持实验性 | `gp_windows` 提供稳定身份、数量与状态，`gp_screenshot(window_id)` 保留显式目标；核心多窗口、模态并存、只读性和失效拒绝有证据；剩余矩阵逐项保留，见下文与 [P12 范围约定](../AGENTS.md#p12-范围约定) |
 | P13 音频 Provider 与多插件接口设计 | 已完成最小 Provider 契约、MCP 适配和真实宿主原生消费者专项；VST3 消费者未实现 | 抽象进程内音频 Provider；MCP、VST3 和其他插件通过版本化 ABI 使用；允许按真实需求重新设计 MCP 工具和数据模型；实时 PCM 获取仍需单独设计和验证 |
 | P14 端到端实时音频流监测与管控 | 已完成进程内实时端点链路（2026-09-12） | 已交付独立 `audio_stream_api.h`、Windows 进程级 WASAPI loopback、固定容量 ring、真实 PCM/指标、`gp_audio_stream` 状态/诊断/恢复、generation 失效和 C ABI 枚举；`backend` 与 `capture_scope` 返回实际端点来源，内部层没有独立 tap 时明确为 `not_observed` |
+| P15 窗口性能与显示流畅度监测 | 已完成最小进程内采样与隔离宿主专项（2026-09-13） | `gp_window_performance` 按稳定 `window_id` 采集 Qt Paint、屏幕刷新率并尝试已有 HWND 的 DWM 计数；异步 start/snapshot/stop、帧间隔统计字段、状态和生命周期失效已交付。逐窗口 DWM timing 在本机不可用时保留 `host_limited`/`not_observed`，不把 Paint 或刷新率当作显示 FPS |
 
 P0、P1、P2 为 P3–P6 提供基础，随后由 P7 对完整安装包进行发布验收。P1 已完成真实安装集成验收；可靠性检查继续贯穿后续阶段。
 
@@ -348,6 +349,85 @@ P13 最小契约与原生消费者接入已完成：`test/test-audio-provider-ho
 - P13 v1 的既有消费者继续工作；实时 Provider 不复制 `Score`/`Track`/`Musician`/`Sound`/`EffectsChain` 解析，不跨线程保存宿主裸指针，不改变普通 Guitar Pro 的播放、编辑、退出和恢复可用性。
 
 P14 当前交付包含进程级实时 PCM、端点格式与连续性指标、诊断、恢复和 generation 生命周期。物理声压、独立 ASIO 驱动 callback 以及没有独立采样点的内部层仍由结果字段如实区分，不影响已交付的端点监测链路。
+
+## P15：窗口性能与显示流畅度监测计划
+
+状态：已完成最小进程内采样与隔离宿主专项（2026-09-13）。P15 面向窗口显示流畅度验证，和 P11/P12 的截图采集完全分离。当前交付取得窗口 Qt 重绘频率、屏幕参考及可用时的 DWM 计数；逐窗口 DWM timing 在本机不可用时如实降级，单独的屏幕刷新率或 Qt 重绘次数不会代替显示帧率。
+
+### P15.1 目标、范围与状态口径
+
+- 监测目标通过 `gp_windows` 返回的稳定 `window_id` 绑定当前 MCP 实例和 QObject 生命周期。显式传入 ID 时只监测该窗口；省略 ID 时沿用活动模态优先、否则主窗口的选择规则。窗口销毁、宿主重启或实例不匹配时返回 `stale`/`foreign_instance`，不改选其他窗口。
+- P15 不调用 `gp_screenshot`，不读取 PNG，不截取桌面，不激活窗口，不抢焦点，不发送输入，不修改文档、播放状态或撤销历史。监测器只读取窗口状态和系统呈现事件。
+- 首要观测对象是 Windows DWM/Graphics Present 侧的窗口呈现时间。Qt `QEvent::Paint` 只用于记录应用侧重绘频率，`QScreen::refreshRate()` 只用于记录名义显示器刷新率；三者在结果中必须区分。
+- 采样结果至少区分 `refresh_rate_hz`、`paint_fps`、`presented_fps` 和可确认的 `displayed_fps`。只有在当前 PID 与现有 native HWND 的事件归属、时间戳和窗口状态均可核验时，才填充 `presented_fps`/`displayed_fps`；否则返回 `not_observed` 或 `host_limited`。
+- 隐藏、最小化或被遮挡窗口没有可确认的用户可见帧，结果必须报告实际状态和观测边界。窗口跨多个显示器时记录选用的屏幕和刷新率来源；无法唯一确定时不合并猜测成单一刷新率。
+
+### P15.2 指标与数据模型
+
+每次采样返回目标身份、`sample_started_at`、`sample_duration_ms`、`measurement_source` 和状态，并按能力返回以下字段：
+
+1. **显示环境**：`refresh_rate_hz`、屏幕标识/选择原因、`visible`、`minimized`、`occluded`、`fullscreen` 和 native HWND 可用性。刷新率是显示器参考值，不是应用实际 FPS。
+2. **呈现计数**：`presented_frames`、`displayed_frames`、`paint_count`、`dropped_frames`、`missed_frames`、`jank_frames`。来源不支持的计数使用 `null` 并给出 `not_observed` 原因，不用零代替未知。
+3. **帧率**：`presented_fps`、`displayed_fps`、`paint_fps`，均由独立计数和真实采样时长计算；不能从一次截图的 `capture_ms` 推导。
+4. **帧间隔**：首末时间戳、平均值、P50、P95、P99、最大值和可选标准差；同时返回使用的期望刷新间隔和卡顿阈值，便于复核 `jank_frames` 的判定。
+5. **诊断**：时间戳不连续、DWM/ETW 事件归属不完整、窗口状态变化、采样权限失败、DWM 不可用、无 native HWND、GPU/原生嵌入以及采集线程溢出等原因，均使用稳定的 `reason` 值记录。
+
+结果状态沿用 `ready`、`running`、`completed`、`not_observed`、`host_limited`、`stale` 和 `error`。`measurement_source` 至少区分 `windows_graphics_etw`、`dwm_timing`、`qt_paint` 和 `screen_refresh`；不同来源不能合并成一个没有来源的 FPS 字段。
+
+### P15.3 采集架构
+
+- 逐窗口 ETW/Graphics Present 需要宿主和系统事件字段能同时核验 PID、HWND 与时间戳；当前版本不启用无法证明归属的 ETW 解析，显式 `source=etw` 返回 `host_limited`，也不启动外部 PresentMon 常驻进程或转接服务。
+- 使用 Windows `DwmGetCompositionTimingInfo` 读取现有顶层 native HWND 的累计计数作为较低成本回退。不得通过 `winId()` 为隐藏或非原生窗口创建句柄；没有现成句柄时明确降低观测级别。
+- 对 QWidget 目标安装临时、只读的 Qt 事件过滤器，统计目标窗口及其可确认子树的 `QEvent::Paint`，用于 `paint_fps` 和应用侧重绘诊断。事件过滤器的开销、子窗口边界和 GPU/Qt Quick 内容须在专项中量化。
+- `QScreen::refreshRate()` 只在控制线程读取显示器参考值。窗口中心屏幕、跨屏和屏幕变化必须记录选择结果；不把刷新率写成实际显示 FPS。
+- `start`/`snapshot`/`stop` 使用异步状态机，避免在 MCP 请求中睡眠或阻塞 Qt 主线程。当前 DWM/Qt 采样由控制线程的短周期定时器完成；不保存宿主裸指针，固定容量样本由控制线程聚合并在窗口销毁时清理。
+
+### P15.4 MCP 工具草案
+
+新增独立只读工具 `gp_window_performance`，候选参数如下：
+
+```text
+operation: start | snapshot | stop
+window_id?: string
+monitor_id?: string
+sample_ms?: integer   // 250..10000；start 可选
+source?: auto | etw | dwm | qt_paint | screen
+```
+
+`start` 返回不透明 `monitor_id`、目标窗口和实际启用的来源；`snapshot` 返回当前累计快照；`stop` 返回最终聚合结果并释放采样资源。监测会话绑定实例和窗口生命周期，旧 ID 不得回退到其他窗口。若 ETW/DWM 不可用，`source=auto` 可以返回 Qt 重绘或屏幕参考数据，但必须在 `measurement_source` 和 `status` 中明确数据等级。
+
+### P15.5 验收矩阵
+
+| 验收面 | 必须核对的内容 | 通过口径 |
+| --- | --- | --- |
+| Qt 离屏夹具 | 空闲窗口、固定定时动画、窗口销毁、无 native HWND 和 Qt Paint 事件计数 | `paint_fps`、帧间隔和状态读回正确；空闲时不把刷新率写成绘制 FPS |
+| Windows 原生呈现 | 已有顶层 HWND、DWM/ETW 事件归属、累计计数差分和时间戳单调性 | `presented_fps`/`displayed_fps` 只来自可核验事件；权限或 DWM 不可用时明确受限 |
+| 真实 Guitar Pro | 主窗口、虚拟键盘/指板、偏好窗口、活动模态；空闲、播放、滚动/缩放和窗口状态变化 | 目标 ID、PID、HWND、可见/最小化/遮挡状态一致；不改变焦点、文档、播放和撤销状态 |
+| 流畅度统计 | 250 ms、1 s、5 s 和长测窗口；60/不同显示器刷新率；帧间隔分位数、卡顿、丢帧和状态变化 | 统计可重复，P95/P99/最大帧间隔和卡顿阈值有证据；不以平均 FPS 掩盖长尾停顿 |
+| 生命周期与隔离 | 多客户端、窗口销毁、宿主重启、跨实例/过期 ID、采样并发上限和资源回收 | 旧会话返回 `stale`/明确错误；无跨实例串线、句柄泄漏、线程泄漏或持续 CPU/内存异常 |
+
+### P15.6 交付物与实施顺序
+
+1. **P15.0 可行性探针**：在 Qt 5.15.3 和 Guitar Pro 8.1.1.17 支持环境确认 ETW/DWM 可用性、事件字段、权限、HWND 归属和 DWM 关闭/远程桌面行为；记录不支持场景。
+2. **P15.1 指标模型**：固定状态、来源、帧计数、帧间隔分位数、卡顿阈值、窗口状态和未知值语义；不扩展现有截图响应字段。
+3. **P15.2 进程内采集器**：已实现 DWM timing 尝试、Qt Paint 诊断、屏幕刷新率读取、固定容量样本和线程/窗口生命周期清理；ETW 在当前宿主字段不可核验时明确受限。
+4. **P15.3 MCP 适配**：实现 `gp_window_performance` 的异步 `start`/`snapshot`/`stop`、参数边界、实例/窗口绑定、来源读回和 `host_limited`/`not_observed` 语义。
+5. **P15.4 专项验证**：已增加 `test/test-p15-window-performance.ps1`，在真实隔离宿主覆盖空闲、来源降级、隐藏、短停止、四会话上限、过期/跨实例 ID 和长于最小采样窗口；最小化、播放、滚动/缩放、多屏和逐窗口呈现事件因当前专项条件或宿主/DWM 不可观测而保留受限记录。
+6. **P15.5 发布检查**：已更新 `native/API.md`、`native/README.md`、`docs/COVERAGE.md`、测试入口和版本说明；C++/Qt 构建、PowerShell 语法、P15 专项和 `git diff --check` 已运行。多客户端/多文档隔离及实时采集沿用 P2/P14 已有证据，不在本次 P15 专项重复运行。
+
+### P15 当前交付记录（2026-09-13）
+
+- `native/window_performance.h` 提供四会话上限的异步会话、稳定 `window_id` 绑定、Qt Paint 事件统计、屏幕刷新率参考、已有 HWND 的 DWM timing 尝试、帧间隔分位数字段和 stale/host-limited/not-observed 状态；采样不截图、不激活窗口、不创建句柄。
+- `test/test-p15-window-performance.ps1` 在隔离 Guitar Pro 宿主通过 49 项检查，证据为 `artifacts/native-p15-1a4491747e104fceba4bc853f644abab/verification.json`，核对工具注册、目标与实例身份、250..10000 ms 边界、start/snapshot/stop、短停止终态、四会话上限、过期/跨实例拒绝、ETW/DWM 来源受限、屏幕来源不冒充显示 FPS、隐藏窗口状态和焦点保持。本机真实结果为 Qt Paint + 240 Hz 屏幕参考，`DwmGetCompositionTimingInfo(HWND)` 逐窗口计数不可用，故显示 FPS 和呈现帧间隔保持未知。
+
+### P15.7 完成门槛与明确排除
+
+- 只有真实 Guitar Pro 8.1.1.17 上按 PID/HWND 核对过的呈现事件和帧间隔，才可把 `displayed_fps` 或显示卡顿写成已验证；Qt Paint、屏幕刷新率、截图吞吐和音频帧数不能替代这条证据。
+- 统计必须同时报告采样窗口、事件来源、可见性和观测完整性；事件缺失、DWM/ETW 权限不足、窗口没有 native HWND、GPU/原生嵌入或目标被遮挡时保留未知或宿主受限，不把缺失计数填成零。
+- P15 不承诺物理显示器电子学、显卡驱动内部队列、远程桌面压缩链路或所有 Qt Quick/OpenGL/原生嵌入内容的逐帧呈现；这些情况需在结果中标记实际边界。
+- 不使用输入模拟、前台窗口、桌面截图、外部常驻 PresentMon 服务或系统级驱动控制面板完成交付。采集器故障、线程退出、窗口销毁和宿主重启必须释放资源并返回可解释终态。
+
+P15 当前交付提供窗口性能会话和来源隔离字段。真实环境逐窗口 DWM/ETW 不可用时，`presented_fps`、`displayed_fps`、呈现帧间隔和遮挡保持未知或宿主受限；`test/test-p15-window-performance.ps1` 的 49 项隔离宿主结果只证明接口、状态机、Qt Paint/屏幕参考和失败语义，不把它写成真实显示 FPS 验收。
 
 ## 历史记录
 
